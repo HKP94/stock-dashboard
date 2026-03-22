@@ -65,10 +65,10 @@ for ticker in tickers:
         if df.empty:
             continue
             
-        df.ta.sma(length=20, append=True)
-        df.ta.sma(length=50, append=True)
-        df.ta.sma(length=200, append=True)
-        df.ta.rsi(length=14, append=True)
+        df['SMA_20'] = ta.sma(df['Close'], length=20)
+        df['SMA_50'] = ta.sma(df['Close'], length=50)
+        df['SMA_200'] = ta.sma(df['Close'], length=200)
+        df['RSI_14'] = ta.rsi(df['Close'], length=14)
         
         latest = df.iloc[-1]
         current_price = latest['Close']
