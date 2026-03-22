@@ -46,8 +46,7 @@ except Exception as e:
 # 2. 분석 대상 종목 세팅
 # ==========================================
 tickers = [
-    'AAPL', 'MSFT', 'NVDA', 'TSM', 'ALB', 'XOM', 'SLB','CELH', 'BBW', 'SMR', 'ASML', 'HSY', 'RCL', 'GOOG', 'WM', 'VRT', 'CRDO', 'META', 'TSLA', 'LITE', 'BE',
-    '035420.KS', '021240.KS', '033780.KS', '213420.KS', '034220.KS', '059090.KS', '338220.KS', 'BA', 'FUTU', 'ELV', '373220.KS'
+    'NVDA', 'XOM'
 ]
 
 ticker_to_name = {
@@ -62,6 +61,7 @@ ticker_to_name = {
 def get_news_analysis(ticker, company_name):
     combined = []
     ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
+    print(f"  -> [{ticker}] 야후 뉴스 수집 시도...")
     try:
         stock = yf.Ticker(ticker)
         news_list = stock.news
@@ -74,20 +74,35 @@ def get_news_analysis(ticker, company_name):
                         pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
                         if pub_date >= ten_days_ago:
                             combined.append(f"[야후/핵심팩트] {pub_date.strftime('%Y-%m-%d')} | {content.get('title')} - {content.get('summary')}")
-                    except: pass
-    except: pass
+                    except ValueError as ve:
+                        print(f"    -> [{ticker}] 야후 뉴스 날짜 파싱 오류: {ve}")
+        else:
+            print(f"    -> [{ticker}] 야후 파이낸스에서 뉴스를 찾지 못했습니다.")
+    except Exception as e:
+        print(f"    -> [{ticker}] 야후 뉴스 수집 중 오류 발생: {e}")
+
+    print(f"  -> [{ticker}] 덕덕고 뉴스 수집 시도...")
     try:
         ddgs = DDGS()
         kw = f"{company_name} 주식" if '.KS' in ticker else f"{ticker} stock"
-        ddg_results = ddgs.news(keywords=kw, timelimit='w', max_results=10)
+        # max_results를 20으로 늘려 더 많은 뉴스 수집 시도
+        ddg_results = ddgs.news(keywords=kw, timelimit='w', max_results=20)
         if ddg_results:
             for news in ddg_results:
+                title = news.get('title', '')
+                summary = news.get('body', '요약 없음')
                 date_str = news.get('date', '')[:10]
-                combined.append(f"[외부/시장트렌드] {date_str} | {news.get('title')} - {news.get('body')}")
-    except: pass
+                if title and summary: # 제목과 요약이 있는 경우에만 추가
+                    combined.append(f"[외부/시장트렌드] {date_str} | {title} - {summary}")
+        else:
+            print(f"    -> [{ticker}] 덕덕고에서 뉴스를 찾지 못했습니다.")
+    except Exception as e:
+        print(f"    -> [{ticker}] 덕덕고 뉴스 수집 중 오류 발생: {e}")
 
-    if not combined: return {'Ticker': ticker, 'AI 심층 분석': '최근 10일간 뉴스 없음'}
-    
+    if not combined:
+        print(f"  -> [{ticker}] 최근 10일간 뉴스 없음. AI 분석 생략.")
+        return {'Ticker': ticker, 'AI 심층 분석': '최근 10일간 뉴스 없음', '분석뉴스건수': 0, '시장센티멘트': '중립'}
+
     news_text = "\n".join(combined)
     prompt = f"""
     너는 월스트리트의 수석 주식 애널리스트야.
@@ -112,12 +127,14 @@ def get_news_analysis(ticker, company_name):
     [분석할 뉴스 헤드라인 및 요약본 리스트]
     {news_text}
     """
-    
+
     # 재시도 로직 포함
     for attempt in range(3):
         try:
+            print(f"  -> [{ticker}] AI 분석 시도 (시도 {attempt+1}/3)...")
             res = model.generate_content(prompt)
             data = json.loads(res.text)
+            print(f"  -> [{ticker}] AI 분석 성공.")
             return {
                 'Ticker': ticker,
                 '분석뉴스건수': len(combined),
@@ -125,11 +142,13 @@ def get_news_analysis(ticker, company_name):
                 'AI 심층 분석': data.get('detailed_summary', '요약 실패')
             }
         except Exception as e:
+            print(f"  -> [{ticker}] AI 분석 중 오류 발생: {e}")
             if attempt < 2:
                 time.sleep(5) # 에러 시 대기 시간 증가
                 continue
-            return {'Ticker': ticker, 'AI 심층 분석': f'분석 실패 (에러: {str(e)[:50]})'}
-    return {'Ticker': ticker, 'AI 심층 분석': '분석 실패'}
+            print(f"  -> [{ticker}] AI 분석 최종 실패.")
+            return {'Ticker': ticker, 'AI 심층 분석': f'분석 실패 (에러: {str(e)[:50]})', '분석뉴스건수': len(combined), '시장센티멘트': '중립'}
+    return {'Ticker': ticker, 'AI 심층 분석': '분석 실패', '분석뉴스건수': len(combined), '시장센티멘트': '중립'}
 
 # ... (나머지 get_momentum_data, get_fundamental_data 등은 기존과 동일하되 loop 내 sleep 조절) ...
 
@@ -141,10 +160,10 @@ print("\n📊 전 종목 데이터 수집 및 분석 시작...")
 for ticker in tickers:
     print(f"[{ticker}] 분석 중...")
     c_name = ticker_to_name.get(ticker, ticker)
-    
+
     # API 호출 간격 조절 (Rate Limit 방지)
-    time.sleep(4) 
-    
+    time.sleep(4)
+
     # ... (데이터 수집 호출 부분 생략, n_data = get_news_analysis(ticker, c_name) 포함) ...
     n_data = get_news_analysis(ticker, c_name)
     # (예시용 병합 코드 생략 - 실제 파일에서는 전체 지표 수집 코드가 들어가야 함)
