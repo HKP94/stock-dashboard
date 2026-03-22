@@ -15,7 +15,7 @@ jobs:
     - name: 2. 파이썬 환경 세팅하기
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10' # 안정적인 3.10 버전 사용
+        python-version: '3.12' 
 
     - name: 3. 필요한 라이브러리 설치하기
       run: |
