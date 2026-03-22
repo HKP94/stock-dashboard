@@ -1,9 +1,11 @@
-name: 주식 분석 파이프라인 수동 테스트
+name: 주식 분석 파이프라인 정기 실행
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch: # 언제든 수동으로도 돌릴 수 있게 유지
   schedule:
-    - cron: '0 23 * * *' 
+    # 한국 시간(KST) 오전 6시 = 영국 시간(UTC) 전날 밤 9시(21시)
+    # 분 시 일 월 요일 순서입니다.
+    - cron: '0 21 * * *' 
 
 jobs:
   build:
@@ -16,7 +18,7 @@ jobs:
     - name: 2. 파이썬 환경 세팅하기
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12' 
+        python-version: '3.12'
 
     - name: 3. 필요한 라이브러리 설치하기
       run: |
