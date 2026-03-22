@@ -10,7 +10,6 @@ import pandas_ta as ta
 import google.generativeai as genai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from google.colab import userdata # Import userdata to access secrets
 
 # 덕덕고 검색 라이브러리
 try:
@@ -21,16 +20,19 @@ except ImportError:
 # 시스템 경고 숨기기
 warnings.filterwarnings('ignore')
 
-print("🚀 주식 분석 자동화 파이프라인 시작...\n")
+print("ጃ2 ᄀ주ᄒ식 ᄇ분ᄉ석 ᄉ자ᄃ동ᄒ화 ᄑ파ᄋ이ᄑ프ᄅ라ᄋ인 ᄉ시ᄌ작...\n")
 
 # ==========================================
-# 1. 환경 변수 및 API 설정 (GitHub Secrets 연동)
+# 1. 환경 변수 및 API 설정 (Standard Environment Variables)
 # ==========================================
-gemini_api_key = userdata.get('GEMINI_API_KEY') # Use userdata.get()
-gcp_json_str = userdata.get('GCP_SERVICE_ACCOUNT') # Use userdata.get()
+gemini_api_key = os.environ.get('GEMINI_API_KEY')
+gcp_json_str = os.environ.get('GCP_SERVICE_ACCOUNT')
 
-if not gemini_api_key or not gcp_json_str:
-    raise ValueError("❌ 환경 변수(API 키 또는 GCP JSON)가 설정되지 않았습니다. Colab Secrets를 확인하세요.")
+if not gemini_api_key:
+    raise ValueError("❌ GEMINI_API_KEY가 환경 변수 또는 GitHub Secrets에 설정되지 않았습니다. 해당 키를 설정해주세요.")
+if not gcp_json_str:
+    raise ValueError("❌ GCP_SERVICE_ACCOUNT가 환경 변수 또는 GitHub Secrets에 설정되지 않았습니다. 서비스 계정 JSON 문자열을 설정해주세요.")
+
 
 genai.configure(api_key=gemini_api_key)
 
@@ -47,7 +49,7 @@ except Exception as e:
 # 2. 분석 대상 종목 세팅
 # ==========================================
 tickers = [
-    'NVDA', 'XOM','373220.KS'
+    'NVDA', 'XOM', '373220.KS'
 ]
 
 ticker_to_name = {
@@ -181,7 +183,7 @@ def get_analyst_data(ticker):
     upside = "N/A"
     if current_price and target_mean and current_price != 0:
         upside = round(((target_mean / current_price) - 1) * 100, 2)
-    
+
     return {
         'Ticker': ticker,
         '애널리스트 종합 의견': str(info.get('recommendationKey', 'N/A')).upper(),
@@ -287,7 +289,7 @@ def get_news_analysis(ticker, company_name):
 # 4. 전체 파이프라인 실행
 # ==========================================
 all_stock_data = []
-print("\n📊 전 종목 데이터 수집 및 분석 시작...")
+print("\nጥ3 전 종목 데이터 수집 및 분석 시작...")
 for ticker in tickers:
     print(f"\n[{ticker}] 분석 중...")
     company_name = ticker_to_name.get(ticker, ticker)
@@ -308,7 +310,7 @@ for ticker in tickers:
         combined_data.update(analyst_data)
         combined_data.update(news_analysis_data)
         combined_data['종목명'] = company_name
-        
+
         all_stock_data.append(combined_data)
 
     except Exception as e:
