@@ -1,12 +1,13 @@
 name: 주식 분석 파이프라인 수동 테스트
 
-# 수동으로 버튼을 눌러서 실행할 수 있게 해주는 옵션
 on:
   workflow_dispatch: 
+  schedule:
+    - cron: '0 23 * * *' 
 
 jobs:
   build:
-    runs-on: ubuntu-latest # 깃허브가 제공하는 무료 리눅스 서버 대여
+    runs-on: ubuntu-latest
 
     steps:
     - name: 1. 내 코드 저장소 가져오기
@@ -24,7 +25,6 @@ jobs:
 
     - name: 4. 파이썬 코드(main.py) 실행하기
       env:
-        # 우리가 아까 Secrets에 숨겨둔 열쇠를 꺼내서 서버 환경 변수로 주입합니다.
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       run: python main.py
