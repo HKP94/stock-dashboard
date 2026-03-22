@@ -11,7 +11,7 @@ import google.generativeai as genai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# 덕덕고 라이브러리 (버전 호환성)
+# 덕덕고 검색 라이브러리
 try:
     from ddgs import DDGS
 except ImportError:
@@ -33,7 +33,6 @@ if not gemini_api_key or not gcp_json_str:
 
 genai.configure(api_key=gemini_api_key)
 
-# Gemini 모델 설정
 try:
     available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     target_model = next((m for m in available_models if '3.1-flash-lite' in m.lower()),
@@ -46,13 +45,11 @@ except Exception as e:
 # ==========================================
 # 2. 분석 대상 종목 세팅
 # ==========================================
-# 분석할 티커 리스트 (한국 주식은 .KS 접미사 추가)
 tickers = [
     'AAPL', 'MSFT', 'NVDA', 'TSM', 'ALB', 'XOM', 'SLB','CELH', 'BBW', 'SMR', 'ASML', 'HSY', 'RCL', 'GOOG', 'WM', 'VRT', 'CRDO', 'META', 'TSLA', 'LITE', 'BE',
     '035420.KS', '021240.KS', '033780.KS', '213420.KS', '034220.KS', '059090.KS', '338220.KS', 'BA', 'FUTU', 'ELV', '373220.KS'
 ]
 
-# 티커를 기업 이름으로 변환하기 위한 매핑 사전
 ticker_to_name = {
     'AAPL': '애플', 'MSFT': '마이크로소프트', 'NVDA': '엔비디아', 'TSM': 'TSMC', 'ALB': '앨버말',
     'XOM': '엑슨모빌', 'SLB': '슐럼버거', 'CELH': '셀시어스', 'BBW': '빌드어베어', 'SMR': '뉴스케일파워',
@@ -63,149 +60,192 @@ ticker_to_name = {
 }
 
 # ==========================================
-# 3. 파트 A: 기술적 분석 및 모멘텀 지표 (final_df)
+# 3. 데이터 수집 함수들
 # ==========================================
-print("\n📊 [1단계] 모멘텀 및 기술적 지표 추출 중...")
-momentum_results = []
 
-for ticker in tickers:
+def get_momentum_data(ticker):
     try:
         stock = yf.Ticker(ticker)
         df = stock.history(period="1y")
-        if df.empty:
-            continue
-            
+        if df.empty: return None
+
         df['SMA_20'] = ta.sma(df['Close'], length=20)
         df['SMA_50'] = ta.sma(df['Close'], length=50)
         df['SMA_200'] = ta.sma(df['Close'], length=200)
         df['RSI_14'] = ta.rsi(df['Close'], length=14)
-        
+
         latest = df.iloc[-1]
         current_price = latest['Close']
-        sma20 = latest['SMA_20']
-        sma50 = latest['SMA_50']
-        sma200 = latest['SMA_200']
-        rsi14 = latest['RSI_14']
-        
+        sma20, sma50, sma200, rsi14 = latest['SMA_20'], latest['SMA_50'], latest['SMA_200'], latest['RSI_14']
+
         disparity = (current_price / sma20) * 100 if pd.notna(sma20) and sma20 != 0 else np.nan
         is_aligned = 'O' if pd.notna(sma50) and pd.notna(sma200) and (sma50 > sma200) else 'X'
         is_rsi_good = 'O' if pd.notna(rsi14) and (50 <= rsi14 <= 70) else 'X'
-        
-        momentum_results.append({
+
+        return {
             'Ticker': ticker,
-            '현재가': round(current_price, 2),
+            '현재가($)': round(current_price, 2),
             '50일 이평선': round(sma50, 2) if pd.notna(sma50) else np.nan,
             '200일 이평선': round(sma200, 2) if pd.notna(sma200) else np.nan,
             'RSI (14일)': round(rsi14, 2) if pd.notna(rsi14) else np.nan,
             '이격도(%)': round(disparity, 2) if pd.notna(disparity) else np.nan,
             '정배열 (50>200)': is_aligned,
             'RSI 모멘텀 (50~70)': is_rsi_good
-        })
+        }
     except Exception as e:
-        print(f"[{ticker}] 모멘텀 분석 오류: {e}")
+        print(f"[{ticker}] 모멘텀 수집 오류: {e}")
+        return None
 
-final_df = pd.DataFrame(momentum_results)
-
-# ==========================================
-# 4. 파트 B: AI 하이브리드 뉴스 분석 (news_df)
-# ==========================================
-print("\n🧠 [2단계] 하이브리드 AI 뉴스 심층 분석 중...")
-news_results = []
-ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
-
-for ticker in tickers:
-    company_name = ticker_to_name.get(ticker, ticker)
-    combined_news_texts = []
-    
-    # 야후 파이낸스
+def get_fundamental_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        news_list = stock.news
-        if news_list:
-            for news in news_list:
-                content = news.get('content', news)
-                pub_date_str = content.get('pubDate')
-                if pub_date_str:
-                    try:
-                        pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
-                        if pub_date >= ten_days_ago:
-                            title = content.get('title', '제목 없음')
-                            summary = content.get('summary', '요약 없음')
-                            date_only = pub_date.strftime('%Y-%m-%d')
-                            combined_news_texts.append(f"[야후/핵심팩트] {date_only} | {title} - {summary}")
-                    except ValueError:
-                        pass
-    except Exception:
-        pass
+        ann_fin = stock.financials
+        qtr_fin = stock.quarterly_financials
+        data = {'Ticker': ticker}
 
-    # 덕덕고 검색
+        if not ann_fin.empty:
+            rev_label = next((idx for idx in ann_fin.index if idx in ['Total Revenue', 'Operating Revenue']), None)
+            op_inc_label = next((idx for idx in ann_fin.index if 'Operating Income' in idx), None)
+            for i in range(3):
+                if i < len(ann_fin.columns):
+                    rev = ann_fin.iloc[ann_fin.index.get_loc(rev_label), i] if rev_label else np.nan
+                    op_inc = ann_fin.iloc[ann_fin.index.get_loc(op_inc_label), i] if op_inc_label else np.nan
+                    margin = (op_inc / rev) * 100 if pd.notnull(rev) and rev != 0 else np.nan
+                    data[f'최근 {i+1}년 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else None
+                    data[f'최근 {i+1}년 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else None
+
+        if not qtr_fin.empty:
+            rev_label_q = next((idx for idx in qtr_fin.index if idx in ['Total Revenue', 'Operating Revenue']), None)
+            op_inc_label_q = next((idx for idx in qtr_fin.index if 'Operating Income' in idx), None)
+            for i in range(3):
+                if i < len(qtr_fin.columns):
+                    rev = qtr_fin.iloc[qtr_fin.index.get_loc(rev_label_q), i] if rev_label_q else np.nan
+                    op_inc = qtr_fin.iloc[qtr_fin.index.get_loc(op_inc_label_q), i] if op_inc_label_q else np.nan
+                    margin = (op_inc / rev) * 100 if pd.notnull(rev) and rev != 0 else np.nan
+                    data[f'최근 {i+1}분기 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else None
+                    data[f'최근 {i+1}분기 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else None
+        return data
+    except Exception as e:
+        print(f"[{ticker}] 펀더멘털 오류: {e}")
+        return {'Ticker': ticker}
+
+def get_valuation_data(ticker):
+    def get_val(info, key, multiplier=1, decimal=2, suffix=''):
+        val = info.get(key)
+        return f"{round(val * multiplier, decimal)}{suffix}" if val is not None else "N/A"
     try:
-        ddgs = DDGS()
-        search_keyword = f"{company_name} 주식" if '.KS' in ticker else f"{ticker} stock"
-        ddg_results = ddgs.news(keywords=search_keyword, timelimit='w', max_results=15)
-        if ddg_results:
-            for news in ddg_results:
-                title = news.get('title', '')
-                summary = news.get('body', '요약 없음')
-                date_str = news.get('date', '')[:10]
-                if title:
-                    combined_news_texts.append(f"[외부/시장트렌드] {date_str} | {title} - {summary}")
+        info = yf.Ticker(ticker).info
+        return {
+            'Ticker': ticker,
+            'Trailing PER': get_val(info, 'trailingPE'),
+            'Forward PER': get_val(info, 'forwardPE'),
+            'PBR': get_val(info, 'priceToBook'),
+            'EV/EBITDA': get_val(info, 'enterpriseToEbitda'),
+            'ROE': get_val(info, 'returnOnEquity', 100, 2, '%'),
+            '영업이익률': get_val(info, 'operatingMargins', 100, 2, '%'),
+            '부채비율': get_val(info, 'debtToEquity', 1, 2, '%'),
+            '매출성장률': get_val(info, 'revenueGrowth', 100, 2, '%')
+        }
+    except Exception as e:
+        print(f"[{ticker}] 가치평가 수집 오류: {e}")
+        return {'Ticker': ticker}
+
+def get_analyst_data(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        curr = info.get('currentPrice')
+        target = info.get('targetMeanPrice')
+        upside = round(((target / curr) - 1) * 100, 2) if curr and target else "N/A"
+        return {
+            'Ticker': ticker,
+            '의견': str(info.get('recommendationKey', 'N/A')).upper(),
+            '목표가($)': target if target else 'N/A',
+            '상승여력(%)': upside
+        }
     except Exception:
-        pass
+        return {'Ticker': ticker}
 
-    if not combined_news_texts:
-        continue
-
-    # Gemini API 호출
-    news_text = "\n".join(combined_news_texts)
-    prompt = f"""
-    월스트리트 수석 주식 애널리스트로서 [{company_name}({ticker})]에 관한 최근 뉴스 {len(combined_news_texts)}건을 심층 분석해.
-    - [야후/핵심팩트]: 주가에 직접적인 영향을 미치는 주요 언론의 핵심 뉴스 (가중치 높음)
-    - [외부/시장트렌드]: 시장 참여자들의 전반적인 심리 흐름
-    다음 JSON 스키마에 맞춰 답변해:
-    {{
-        "sentiment": "긍정/중립/부정 중 택1",
-        "detailed_summary": "- 핵심내용1\\n- 핵심내용2\\n- 향후전망"
-    }}
-    [뉴스 데이터]
-    {news_text}
-    """
+def get_news_analysis(ticker, company_name):
+    combined = []
+    ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
     
     try:
-        response = model.generate_content(prompt)
-        ai_analysis = json.loads(response.text)
-        news_results.append({
+        stock = yf.Ticker(ticker)
+        for news in stock.news or []:
+            content = news.get('content', news)
+            pub_date_str = content.get('pubDate')
+            if pub_date_str:
+                try:
+                    pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
+                    if pub_date >= ten_days_ago:
+                        combined.append(f"[야후] {content.get('title')} - {content.get('summary')}")
+                except ValueError:
+                    pass
+    except Exception: pass
+
+    try:
+        ddgs = DDGS()
+        kw = f"{company_name} 주식" if '.KS' in ticker else f"{ticker} stock"
+        for news in ddgs.news(keywords=kw, timelimit='w', max_results=10) or []:
+            if news.get('title'):
+                combined.append(f"[웹] {news.get('title')} - {news.get('body')}")
+    except Exception: pass
+
+    if not combined: return {'Ticker': ticker, 'AI 심층 분석': '뉴스 없음'}
+
+    prompt = f"""
+    [{company_name}({ticker})] 최신 뉴스 분석.
+    다음 JSON 포맷으로 답해:
+    {{"sentiment": "긍정/중립/부정", "detailed_summary": "- 핵심내용 요약"}}
+    뉴스:
+    {' / '.join(combined)}
+    """
+    try:
+        res = model.generate_content(prompt)
+        data = json.loads(res.text)
+        time.sleep(2)
+        return {
             'Ticker': ticker,
-            '분석된 뉴스(건)': len(combined_news_texts),
-            '시장 센티멘탈': ai_analysis.get('sentiment', '중립'),
-            'AI 심층 분석': ai_analysis.get('detailed_summary', '요약 불가')
-        })
-        time.sleep(2) # Rate limit 방지
+            '분석뉴스건수': len(combined),
+            '시장센티멘트': data.get('sentiment', '중립'),
+            'AI 심층 분석': data.get('detailed_summary', '')
+        }
     except Exception as e:
-        print(f"[{ticker}] AI 오류: {e}")
-
-news_df = pd.DataFrame(news_results)
+        return {'Ticker': ticker, 'AI 심층 분석': '분석 실패'}
 
 # ==========================================
-# 5. 파트 C: 데이터 병합 및 정제
+# 4. 전체 파이프라인 실행
 # ==========================================
-print("\n🔗 [3단계] 데이터 병합 및 정제 중...")
-master_df = final_df.copy()
+results = []
+print("\n📊 전 종목 데이터 수집 및 분석 시작...")
+for ticker in tickers:
+    print(f"[{ticker}] 분석 중...")
+    c_name = ticker_to_name.get(ticker, ticker)
+    
+    # 각 지표 수집
+    m_data = get_momentum_data(ticker) or {'Ticker': ticker}
+    f_data = get_fundamental_data(ticker)
+    v_data = get_valuation_data(ticker)
+    a_data = get_analyst_data(ticker)
+    n_data = get_news_analysis(ticker, c_name)
+    
+    # 병합
+    merged = {**m_data, **f_data, **v_data, **a_data, **n_data}
+    merged['종목명'] = c_name
+    results.append(merged)
 
-if not news_df.empty:
-    master_df = master_df.merge(news_df, on='Ticker', how='left')
+master_df = pd.DataFrame(results)
 
-# 종목명 삽입
-master_df.insert(0, '종목명', master_df['Ticker'].map(ticker_to_name).fillna(master_df['Ticker']))
-
-# 결측치 정제 (구글 시트 에러 방지)
-master_df_cleaned = master_df.replace([np.inf, -np.inf], np.nan).fillna('')
+# 컬럼 순서 정리 및 결측치 처리
+cols = ['종목명', 'Ticker'] + [c for c in master_df.columns if c not in ['종목명', 'Ticker']]
+master_df = master_df[cols]
+master_df_cleaned = master_df.replace([np.inf, -np.inf], np.nan).fillna('N/A')
 master_df_cleaned.columns = [str(col).replace('\n', ' ').strip() for col in master_df_cleaned.columns]
 
 # ==========================================
-# 6. 파트 D: 구글 시트 무인(자동) 업로드
+# 5. 구글 시트 업로드
 # ==========================================
-print("\n☁️ [4단계] 구글 시트 업로드 중...")
+print("\n☁️ 구글 시트 업로드 중...")
 try:
     gcp_credentials = json.loads(gcp_json_str)
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -224,7 +264,7 @@ try:
     worksheet.clear()
     data_to_upload = [master_df_cleaned.columns.values.tolist()] + master_df_cleaned.values.tolist()
     worksheet.update(range_name='A1', values=data_to_upload)
-    
+
     print(f"🎉 성공: '{SHEET_NAME}' 시트의 '{TAB_NAME}' 탭으로 데이터 자동 전송 완료!")
 
 except Exception as e:
