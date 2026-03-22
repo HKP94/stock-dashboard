@@ -193,12 +193,27 @@ def get_news_analysis(ticker, company_name):
 
     if not combined: return {'Ticker': ticker, 'AI 심층 분석': '뉴스 없음'}
 
-    prompt = f"""
-    [{company_name}({ticker})] 최신 뉴스 분석.
-    다음 JSON 포맷으로 답해:
-    {{"sentiment": "긍정/중립/부정", "detailed_summary": "- 핵심내용 요약"}}
-    뉴스:
-    {' / '.join(combined)}
+prompt = f"""
+    너는 월스트리트의 수석 주식 애널리스트야.
+    아래 제공된 [{company_name}({ticker})]에 관한 최근 10일간의 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
+
+    제공된 데이터는 두 종류야:
+    - [야후/핵심팩트]: 주가에 직접적인 영향을 미치는 주요 언론의 핵심 뉴스야. 가장 큰 가중치를 두어 분석해.
+    - [외부/시장트렌드]: 최근 10일간 시장 참여자들 사이에서 논의된 전반적인 이슈와 심리 흐름이야.
+
+    모든 기사의 맥락을 파악하여 최종적인 시장 심리를 결정하고,
+    주가 흐름에 영향을 줄 핵심 내용들을 '개괄식(bullet point)'으로 아주 상세하게 정리해.
+
+    특히 가장 최근 날짜의 뉴스에 더 큰 가중치를 두어 시장 심리를 해석해.
+
+    다음 JSON 스키마에 맞춰서 답변해.
+    {{
+        "sentiment": "긍정/중립/부정 중 택1",
+        "detailed_summary": "- 핵심내용1\\n- 핵심내용2\\n- 향후전망 등 상세 작성"
+    }}
+
+    [분석할 뉴스 헤드라인 및 요약본 리스트]
+    {news_text}
     """
     try:
         res = model.generate_content(prompt)
