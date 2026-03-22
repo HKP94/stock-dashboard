@@ -1,0 +1,6 @@
+pandas
+yfinance
+duckduckgo-search
+google-generativeai
+gspread
+oauth2client
