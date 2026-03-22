@@ -1,5 +1,7 @@
 pandas
+numpy
 yfinance
+pandas-ta
 duckduckgo-search
 google-generativeai
 gspread
