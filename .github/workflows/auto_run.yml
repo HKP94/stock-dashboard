@@ -1,0 +1,30 @@
+name: 주식 분석 파이프라인 수동 테스트
+
+# 수동으로 버튼을 눌러서 실행할 수 있게 해주는 옵션
+on:
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # 깃허브가 제공하는 무료 리눅스 서버 대여
+
+    steps:
+    - name: 1. 내 코드 저장소 가져오기
+      uses: actions/checkout@v4
+
+    - name: 2. 파이썬 환경 세팅하기
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10' # 안정적인 3.10 버전 사용
+
+    - name: 3. 필요한 라이브러리 설치하기
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 4. 파이썬 코드(main.py) 실행하기
+      env:
+        # 우리가 아까 Secrets에 숨겨둔 열쇠를 꺼내서 서버 환경 변수로 주입합니다.
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      run: python main.py
