@@ -180,7 +180,7 @@ def get_news_analysis(ticker, company_name):
     try:
         with DDGS() as ddgs:
             kw = f"{company_name} 주식" if '.KS' in ticker else f"{ticker} stock"
-            ddg_results = ddgs.news(keywords=kw, timelimit='w', max_results=10) or []
+            ddg_results = ddgs.news(keywords=kw, timelimit='w', max_results=30) or []
             for news in ddg_results:
                 if news.get('title'):
                     # 덕덕고 뉴스는 보통 최근 7일 이내이므로 현재 날짜로 라벨링 (또는 제공되는 날짜 사용)
