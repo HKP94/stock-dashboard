@@ -7,11 +7,11 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import pandas_ta as ta
-from google import genai  # 최신 google-genai 패키지
+from google import genai
 from google.genai import types
 import gspread
-from google.oauth2.service_account import Credentials # 최신 인증 방식
-from ddgs import DDGS # 최신 패키지명
+from google.oauth2.service_account import Credentials
+from ddgs import DDGS
 
 # 시스템 경고 숨기기
 warnings.filterwarnings('ignore')
@@ -37,7 +37,7 @@ print(f"✅ AI 모델 세팅 완료: {target_model}")
 # 2. 분석 대상 종목 세팅
 # ==========================================
 tickers = [
-    'NVDA', 'XOM', '373220.KS'
+    'AAPL'
 ]
 
 ticker_to_name = {
@@ -88,7 +88,10 @@ def get_fundamental_data(ticker):
     try:
         stock = yf.Ticker(ticker)
         ann_fin = stock.financials
+        qtr_fin = stock.quarterly_financials
         data = {}
+
+        # 연간 데이터 추출
         if not ann_fin.empty:
             rev_label = next((idx for idx in ann_fin.index if idx in ['Total Revenue', 'Operating Revenue']), None)
             op_inc_label = next((idx for idx in ann_fin.index if 'Operating Income' in idx), None)
@@ -99,6 +102,18 @@ def get_fundamental_data(ticker):
                     margin = (op_inc / rev) * 100 if pd.notnull(rev) and rev != 0 else np.nan
                     data[f'최근 {i+1}년 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else None
                     data[f'최근 {i+1}년 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else None
+
+        # 분기 데이터 추출 (복구됨)
+        if not qtr_fin.empty:
+            rev_label_q = next((idx for idx in qtr_fin.index if idx in ['Total Revenue', 'Operating Revenue']), None)
+            op_inc_label_q = next((idx for idx in qtr_fin.index if 'Operating Income' in idx), None)
+            for i in range(3):
+                if i < len(qtr_fin.columns):
+                    rev = qtr_fin.iloc[qtr_fin.index.get_loc(rev_label_q), i] if rev_label_q else np.nan
+                    op_inc = qtr_fin.iloc[qtr_fin.index.get_loc(op_inc_label_q), i] if op_inc_label_q else np.nan
+                    margin = (op_inc / rev) * 100 if pd.notnull(rev) and rev != 0 else np.nan
+                    data[f'최근 {i+1}분기 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else None
+                    data[f'최근 {i+1}분기 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else None
         return data
     except Exception: return {}
 
@@ -238,7 +253,7 @@ try:
     worksheet.clear()
     upload_data = [master_df_cleaned.columns.values.tolist()] + master_df_cleaned.values.tolist()
     worksheet.update(range_name='A1', values=upload_data)
-    print("🎉 모든 분석 결과가 구글 시트에 성공적으로 업데이트되었습니다!")
+    print("🎉 분기 데이터 복구 및 모든 분석 결과 업로드 성공!")
 
 except Exception as e:
     print(f"❌ 시트 업로드 실패 원인: {e}")
