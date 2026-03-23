@@ -121,11 +121,14 @@ def get_valuation_data(ticker):
     try:
         info = yf.Ticker(ticker).info
         return {
-            'Trailing PER': round(info.get('trailingPE', 0), 2) if info.get('trailingPE') else 'N/A',
-            'Forward PER': round(info.get('forwardPE', 0), 2) if info.get('forwardPE') else 'N/A',
-            'PBR': round(info.get('priceToBook', 0), 2) if info.get('priceToBook') else 'N/A',
-            'ROE': f"{round(info.get('returnOnEquity', 0)*100, 2)}%" if info.get('returnOnEquity') else 'N/A',
-            '매출성장률': f"{round(info.get('revenueGrowth', 0)*100, 2)}%" if info.get('revenueGrowth') else 'N/A'
+            'Trailing PER': fmt('trailingPE'),
+            'Forward PER': fmt('forwardPE'),
+            'PBR': fmt('priceToBook'),
+            'EV/EBITDA': fmt('enterpriseToEbitda'), # 추가됨
+            'ROE': fmt('returnOnEquity', 100, '%'),
+            '영업이익률': fmt('operatingMargins', 100, '%'),
+            '부채비율': fmt('debtToEquity', 1, '%'), # 추가됨
+            '매출성장률': fmt('revenueGrowth', 100, '%')
         }
     except Exception: return {}
 
