@@ -16,7 +16,7 @@ from ddgs import DDGS
 # 시스템 경고 숨기기
 warnings.filterwarnings('ignore')
 
-print("🚀 주식 분석 자동화 파이프라인 시작 (뉴스 날짜 표기 및 정렬 로직 강화)...\n")
+print("🚀 주식 분석 자동화 파이프라인 시작 (추세 기울기 포함 정배열 로직 적용)...\n")
 
 # ==========================================
 # 1. 환경 변수 및 API 설정
@@ -37,8 +37,7 @@ print(f"✅ AI 모델 세팅 완료: {target_model}")
 # 2. 분석 대상 종목 세팅
 # ==========================================
 tickers = [
-    'AAPL', 'MSFT', 'NVDA', 'TSM', 'ALB', 'XOM', 'SLB','CELH', 'BBW', 'SMR', 'ASML', 'HSY', 'RCL', 'GOOG', 'WM', 'VRT', 'CRDO', 'META', 'TSLA', 'LITE', 'BE',
-    '035420.KS', '021240.KS', '033780.KS', '213420.KS', '034220.KS', '059090.KS', '338220.KS', 'BA', 'FUTU', 'ELV', '373220.KS'
+    'AAPL', 'XOM'
 ]
 
 ticker_to_name = {
@@ -58,24 +57,40 @@ ticker_to_name = {
 def get_momentum_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        df = stock.history(period="1y")
-        if df.empty: return {}
+        df = stock.history(period="2y") # 이평선 계산을 위해 2년 데이터
+        if df.empty or len(df) < 205: return {}
+
+        # 이평선 및 지표 계산
         df['SMA_20'] = ta.sma(df['Close'], length=20)
         df['SMA_50'] = ta.sma(df['Close'], length=50)
         df['SMA_200'] = ta.sma(df['Close'], length=200)
         df['RSI_14'] = ta.rsi(df['Close'], length=14)
+
         latest = df.iloc[-1]
+        prev_5d = df.iloc[-6] # 5거래일 전
+
         current_price = latest['Close']
-        sma20, sma50, sma200, rsi14 = latest['SMA_20'], latest['SMA_50'], latest['SMA_200'], latest['RSI_14']
+        sma20 = latest['SMA_20']
+        sma50 = latest['SMA_50']
+        sma200 = latest['SMA_200']
+        rsi14 = latest['RSI_14']
+
+        # 기울기(상승 추세) 판단
+        is_50_up = (sma50 > prev_5d['SMA_50'])
+        is_200_up = (sma200 > prev_5d['SMA_200'])
+
+        # 기획자님 요청 정배열 정의: 50일선 > 200일선 AND 둘 다 상승 추세
+        is_aligned = 'O' if (pd.notna(sma50) and pd.notna(sma200) and sma50 > sma200 and is_50_up and is_200_up) else 'X'
+        
         disparity = (current_price / sma20) * 100 if pd.notna(sma20) and sma20 != 0 else np.nan
-        is_aligned = 'O' if pd.notna(sma50) and pd.notna(sma200) and (sma50 > sma200) else 'X'
         is_rsi_good = 'O' if pd.notna(rsi14) and (50 <= rsi14 <= 70) else 'X'
+
         return {
             '현재가($)': round(current_price, 2),
-            '50일 이평선': round(sma50, 2) if pd.notna(sma50) else np.nan,
-            '200일 이평선': round(sma200, 2) if pd.notna(sma200) else np.nan,
-            'RSI (14일)': round(rsi14, 2) if pd.notna(rsi14) else np.nan,
-            '이격도(%)': round(disparity, 2) if pd.notna(disparity) else np.nan,
+            '50일 이평선': round(sma50, 2) if pd.notna(sma50) else 'N/A',
+            '200일 이평선': round(sma200, 2) if pd.notna(sma200) else 'N/A',
+            'RSI (14일)': round(rsi14, 2) if pd.notna(rsi14) else 'N/A',
+            '이격도(%)': round(disparity, 2) if pd.notna(disparity) else 'N/A',
             '정배열 (50>200)': is_aligned,
             'RSI 모멘텀 (50~70)': is_rsi_good
         }
@@ -95,8 +110,8 @@ def get_fundamental_data(ticker):
                     rev = ann_fin.iloc[ann_fin.index.get_loc(rev_label), i] if rev_label else np.nan
                     op_inc = ann_fin.iloc[ann_fin.index.get_loc(op_inc_label), i] if op_inc_label else np.nan
                     margin = (op_inc / rev) * 100 if pd.notnull(rev) and rev != 0 else np.nan
-                    data[f'최근 {i+1}년 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else None
-                    data[f'최근 {i+1}년 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else None
+                    data[f'최근 {i+1}년 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else 'N/A'
+                    data[f'최근 {i+1}년 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else 'N/A'
         if not qtr_fin.empty:
             rev_label_q = next((idx for idx in qtr_fin.index if idx in ['Total Revenue', 'Operating Revenue']), None)
             op_inc_label_q = next((idx for idx in qtr_fin.index if 'Operating Income' in idx), None)
@@ -105,8 +120,8 @@ def get_fundamental_data(ticker):
                     rev = qtr_fin.iloc[qtr_fin.index.get_loc(rev_label_q), i] if rev_label_q else np.nan
                     op_inc = qtr_fin.iloc[qtr_fin.index.get_loc(op_inc_label_q), i] if op_inc_label_q else np.nan
                     margin = (op_inc / rev) * 100 if pd.notnull(rev) and rev != 0 else np.nan
-                    data[f'최근 {i+1}분기 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else None
-                    data[f'최근 {i+1}분기 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else None
+                    data[f'최근 {i+1}분기 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else 'N/A'
+                    data[f'최근 {i+1}분기 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else 'N/A'
         return data
     except Exception: return {}
 
@@ -144,63 +159,38 @@ def get_analyst_data(ticker):
     except Exception: return {}
 
 def get_news_analysis(ticker, company_name):
-    all_news_list = [] # (date, text) 형태의 튜플 리스트
+    combined_news_texts = []
     ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
     
-    # --- 1. 야후 파이낸스 뉴스 수집 ---
     try:
         stock = yf.Ticker(ticker)
-        yahoo_news_raw = stock.news or []
-        temp_yahoo_list = []
-        
-        for news in yahoo_news_raw:
+        for news in stock.news or []:
             content = news.get('content', news)
             pub_date_str = content.get('pubDate')
             if pub_date_str:
                 try:
                     pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
-                    date_label = pub_date.strftime('%Y-%m-%d')
-                    text = f"[{date_label}] [야후/핵심팩트] {content.get('title')} - {content.get('summary')}"
-                    temp_yahoo_list.append((pub_date, text))
+                    if pub_date >= ten_days_ago:
+                        combined_news_texts.append(f"[야후/핵심팩트] {content.get('title')} - {content.get('summary')}")
                 except ValueError: pass
+    except Exception: pass
 
-        # 최근 10일 이내 뉴스 필터링
-        recent_yahoo = [n for n in temp_yahoo_list if n[0] >= ten_days_ago]
-        
-        if not recent_yahoo:
-            # 10일 이내 뉴스가 없으면 무조건 최신 10개 가져오기
-            all_news_list.extend(temp_yahoo_list[:10])
-        else:
-            all_news_list.extend(recent_yahoo)
-            
-    except Exception as e:
-        print(f"[{ticker}] 야후 뉴스 수집 오류: {e}")
-
-    # --- 2. 덕덕고 뉴스 보완 수집 ---
     try:
         with DDGS() as ddgs:
             kw = f"{company_name} 주식" if '.KS' in ticker else f"{ticker} stock"
-            ddg_results = ddgs.news(keywords=kw, timelimit='w', max_results=30) or []
-            for news in ddg_results:
+            for news in ddgs.news(keywords=kw, timelimit='w', max_results=10) or []:
                 if news.get('title'):
-                    # 덕덕고 뉴스는 보통 최근 7일 이내이므로 현재 날짜로 라벨링 (또는 제공되는 날짜 사용)
-                    date_label = datetime.now().strftime('%Y-%m-%d')
-                    text = f"[{date_label}] [외부/시장트렌드] {news.get('title')} - {news.get('body')}"
-                    all_news_list.append((datetime.now(timezone.utc), text))
-    except Exception as e:
-        print(f"[{ticker}] 덕덕고 뉴스 수집 오류: {e}")
+                    combined_news_texts.append(f"[외부/시장트렌드] {news.get('title')} - {news.get('body')}")
+    except Exception: pass
 
-    if not all_news_list:
-        return {'시장센티멘트': '중립', 'AI 심층 분석': '최근 뉴스 없음'}
+    if not combined_news_texts:
+        return {'시장센티멘트': '중립', 'AI 심층 분석': '최근 10일간 뉴스 없음', '분석뉴스건수': 0}
 
-    # --- 3. 전체 뉴스 날짜순 정렬 (최신순) ---
-    all_news_list.sort(key=lambda x: x[0], reverse=True)
-    news_text = "\n".join([item[1] for item in all_news_list])
+    news_text = "\n".join(combined_news_texts)
     
-    # --- 4. AI 분석 프롬프트 실행 ---
     prompt = f"""
     너는 월스트리트의 수석 주식 애널리스트야.
-    아래 제공된 [{company_name}({ticker})]에 관한 최근 10일간의 뉴스 데이터 {len(all_news_list)}건을 모두 읽고 심층 분석해줘.
+    아래 제공된 [{company_name}({ticker})]에 관한 최근 10일간의 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
 
     제공된 데이터는 두 종류야:
     - [야후/핵심팩트]: 주가에 직접적인 영향을 미치는 주요 언론의 핵심 뉴스야. 가장 큰 가중치를 두어 분석해.
@@ -231,32 +221,49 @@ def get_news_analysis(ticker, company_name):
         data = json.loads(response.text)
         time.sleep(1.5)
         return {
-            '분석뉴스건수': len(all_news_list),
+            '분석뉴스건수': len(combined_news_texts),
             '시장센티멘트': data.get('sentiment', '중립'),
             'AI 심층 분석': data.get('detailed_summary', '')
         }
-    except Exception:
-        return {'시장센티멘트': '오류', 'AI 심층 분석': '분석 실패'}
+    except Exception: return {'시장센티멘트': '오류', 'AI 심층 분석': '분석 실패', '분석뉴스건수': len(combined_news_texts)}
 
 # ==========================================
-# 4. 실행 루프 및 5. 구글 시트 업로드
+# 4. 전체 파이프라인 실행 및 컬럼 고정
 # ==========================================
 results = []
-print(f"📊 {len(tickers)}개 종목 분석 시작...")
+print(f"📊 총 {len(tickers)}개 종목 분석 시작...")
+
 for ticker in tickers:
     print(f"[{ticker}] 진행 중...")
     name = ticker_to_name.get(ticker, ticker)
+    
     row = {'종목명': name, 'Ticker': ticker}
     row.update(get_momentum_data(ticker))
     row.update(get_fundamental_data(ticker))
     row.update(get_valuation_data(ticker))
     row.update(get_analyst_data(ticker))
     row.update(get_news_analysis(ticker, name))
+    
     results.append(row)
 
 master_df = pd.DataFrame(results)
-master_df_cleaned = master_df.replace([np.inf, -np.inf], np.nan).fillna('N/A')
 
+# 기획자님이 요청하신 최종 열 순서 고정 (36개 컬럼)
+ordered_cols = [
+    '종목명', 'Ticker', '현재가($)', '50일 이평선', '200일 이평선', 'RSI (14일)', '이격도(%)', 
+    '정배열 (50>200)', 'RSI 모멘텀 (50~70)', '최근 1년 매출($B)', '최근 1년 영업이익률(%)', 
+    '최근 2년 매출($B)', '최근 2년 영업이익률(%)', '최근 3년 매출($B)', '최근 3년 영업이익률(%)', 
+    '최근 1분기 매출($B)', '최근 1분기 영업이익률(%)', '최근 2분기 매출($B)', '최근 2분기 영업이익률(%)', 
+    '최근 3분기 매출($B)', '최근 3분기 영업이익률(%)', 'Trailing PER', 'Forward PER', 'PBR', 
+    'EV/EBITDA', 'ROE', 'ROA', '영업이익률', '부채비율', '매출성장률', '의견', '목표가($)', 
+    '상승여력(%)', '분석뉴스건수', '시장센티멘트', 'AI 심층 분석'
+]
+
+master_df_final = master_df.reindex(columns=ordered_cols).fillna('N/A')
+
+# ==========================================
+# 5. 구글 시트 업로드
+# ==========================================
 print("\n☁️ 구글 시트 업로드 중...")
 try:
     service_account_info = json.loads(gcp_json_str)
@@ -264,12 +271,14 @@ try:
     creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
     gc = gspread.authorize(creds)
     sh = gc.open("주식_실시간데이터")
-    worksheet = sh.worksheet("주식 데이터")
+    worksheet = sh.worksheet("주식 데이터 테스트")
+    
     worksheet.clear()
-    upload_data = [master_df_cleaned.columns.values.tolist()] + master_df_cleaned.values.tolist()
+    upload_data = [master_df_final.columns.values.tolist()] + master_df_final.values.tolist()
     worksheet.update(range_name='A1', values=upload_data)
-    print("🎉 날짜별 정렬 뉴스 및 모든 지표 업로드 성공!")
-except Exception as e:
-    print(f"❌ 시트 업로드 실패: {e}")
+    print("🎉 기울기 조건까지 포함된 정밀 정배열 로직이 적용되었습니다!")
 
-print("\n✅ 파이프라인 종료.")
+except Exception as e:
+    print(f"❌ 시트 업로드 실패 원인: {e}")
+
+print("\n✅ 모든 파이프라인이 종료되었습니다.")
