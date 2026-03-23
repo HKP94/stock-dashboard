@@ -16,7 +16,7 @@ from ddgs import DDGS
 # 시스템 경고 숨기기
 warnings.filterwarnings('ignore')
 
-print("🚀 주식 분석 자동화 파이프라인 시작 (요청하신 프롬프트 반영 완료)...\n")
+print("🚀 주식 분석 자동화 파이프라인 시작 (ROA 지표 추가 완료)...\n")
 
 # ==========================================
 # 1. 환경 변수 및 API 설정
@@ -122,6 +122,7 @@ def get_valuation_data(ticker):
             'PBR': fmt('priceToBook'),
             'EV/EBITDA': fmt('enterpriseToEbitda'),
             'ROE': fmt('returnOnEquity', 100, '%'),
+            'ROA': fmt('returnOnAssets', 100, '%'), # ROA 추가됨
             '영업이익률': fmt('operatingMargins', 100, '%'),
             '부채비율': fmt('debtToEquity', 1, '%'),
             '매출성장률': fmt('revenueGrowth', 100, '%')
@@ -171,7 +172,7 @@ def get_news_analysis(ticker, company_name):
 
     news_text = "\n".join(combined_news_texts)
     
-    # 기획자님이 요청하신 프롬프트로 완벽 교체
+    # 기획자님이 요청하신 프롬프트 유지
     prompt = f"""
     너는 월스트리트의 수석 주식 애널리스트야.
     아래 제공된 [{company_name}({ticker})]에 관한 최근 10일간의 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
@@ -247,7 +248,7 @@ try:
     worksheet.clear()
     upload_data = [master_df_cleaned.columns.values.tolist()] + master_df_cleaned.values.tolist()
     worksheet.update(range_name='A1', values=upload_data)
-    print("🎉 요청하신 프롬프트가 반영된 분석 보고서가 구글 시트에 업데이트되었습니다!")
+    print("🎉 ROA 지표를 포함한 모든 분석 결과가 성공적으로 업데이트되었습니다!")
 except Exception as e:
     print(f"❌ 시트 업로드 실패 원인: {e}")
 
