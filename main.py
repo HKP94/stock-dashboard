@@ -37,8 +37,7 @@ print(f"✅ AI 모델 세팅 완료: {target_model}")
 # 2. 분석 대상 종목 세팅
 # ==========================================
 tickers = [
-    'AAPL', 'MSFT', 'NVDA', 'TSM', 'ALB', 'XOM', 'SLB','CELH', 'BBW', 'SMR', 'ASML', 'HSY', 'RCL', 'GOOG', 'WM', 'VRT', 'CRDO', 'META', 'TSLA', 'LITE', 'BE',
-    '035420.KS', '021240.KS', '033780.KS', '213420.KS', '034220.KS', '059090.KS', '338220.KS', 'BA', 'FUTU', 'ELV', '373220.KS'
+    'BBW', 
 ]
 
 ticker_to_name = {
