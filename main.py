@@ -16,7 +16,7 @@ from ddgs import DDGS
 # 시스템 경고 숨기기
 warnings.filterwarnings('ignore')
 
-print("🚀 주식 분석 자동화 파이프라인 시작 (ROA 지표 추가 완료)...\n")
+print("🚀 주식 분석 자동화 파이프라인 시작 (뉴스 날짜 표기 및 정렬 로직 강화)...\n")
 
 # ==========================================
 # 1. 환경 변수 및 API 설정
@@ -123,7 +123,7 @@ def get_valuation_data(ticker):
             'PBR': fmt('priceToBook'),
             'EV/EBITDA': fmt('enterpriseToEbitda'),
             'ROE': fmt('returnOnEquity', 100, '%'),
-            'ROA': fmt('returnOnAssets', 100, '%'), # ROA 추가됨
+            'ROA': fmt('returnOnAssets', 100, '%'),
             '영업이익률': fmt('operatingMargins', 100, '%'),
             '부채비율': fmt('debtToEquity', 1, '%'),
             '매출성장률': fmt('revenueGrowth', 100, '%')
@@ -144,39 +144,63 @@ def get_analyst_data(ticker):
     except Exception: return {}
 
 def get_news_analysis(ticker, company_name):
-    combined_news_texts = []
+    all_news_list = [] # (date, text) 형태의 튜플 리스트
     ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
     
+    # --- 1. 야후 파이낸스 뉴스 수집 ---
     try:
         stock = yf.Ticker(ticker)
-        for news in stock.news or []:
+        yahoo_news_raw = stock.news or []
+        temp_yahoo_list = []
+        
+        for news in yahoo_news_raw:
             content = news.get('content', news)
             pub_date_str = content.get('pubDate')
             if pub_date_str:
                 try:
                     pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
-                    if pub_date >= ten_days_ago:
-                        combined_news_texts.append(f"[야후/핵심팩트] {content.get('title')} - {content.get('summary')}")
+                    date_label = pub_date.strftime('%Y-%m-%d')
+                    text = f"[{date_label}] [야후/핵심팩트] {content.get('title')} - {content.get('summary')}"
+                    temp_yahoo_list.append((pub_date, text))
                 except ValueError: pass
-    except Exception: pass
 
+        # 최근 10일 이내 뉴스 필터링
+        recent_yahoo = [n for n in temp_yahoo_list if n[0] >= ten_days_ago]
+        
+        if not recent_yahoo:
+            # 10일 이내 뉴스가 없으면 무조건 최신 10개 가져오기
+            all_news_list.extend(temp_yahoo_list[:10])
+        else:
+            all_news_list.extend(recent_yahoo)
+            
+    except Exception as e:
+        print(f"[{ticker}] 야후 뉴스 수집 오류: {e}")
+
+    # --- 2. 덕덕고 뉴스 보완 수집 ---
     try:
         with DDGS() as ddgs:
             kw = f"{company_name} 주식" if '.KS' in ticker else f"{ticker} stock"
-            for news in ddgs.news(keywords=kw, timelimit='w', max_results=10) or []:
+            ddg_results = ddgs.news(keywords=kw, timelimit='w', max_results=10) or []
+            for news in ddg_results:
                 if news.get('title'):
-                    combined_news_texts.append(f"[외부/시장트렌드] {news.get('title')} - {news.get('body')}")
-    except Exception: pass
+                    # 덕덕고 뉴스는 보통 최근 7일 이내이므로 현재 날짜로 라벨링 (또는 제공되는 날짜 사용)
+                    date_label = datetime.now().strftime('%Y-%m-%d')
+                    text = f"[{date_label}] [외부/시장트렌드] {news.get('title')} - {news.get('body')}"
+                    all_news_list.append((datetime.now(timezone.utc), text))
+    except Exception as e:
+        print(f"[{ticker}] 덕덕고 뉴스 수집 오류: {e}")
 
-    if not combined_news_texts:
-        return {'시장센티멘트': '중립', 'AI 심층 분석': '최근 10일간 뉴스 없음'}
+    if not all_news_list:
+        return {'시장센티멘트': '중립', 'AI 심층 분석': '최근 뉴스 없음'}
 
-    news_text = "\n".join(combined_news_texts)
+    # --- 3. 전체 뉴스 날짜순 정렬 (최신순) ---
+    all_news_list.sort(key=lambda x: x[0], reverse=True)
+    news_text = "\n".join([item[1] for item in all_news_list])
     
-    # 기획자님이 요청하신 프롬프트 유지
+    # --- 4. AI 분석 프롬프트 실행 ---
     prompt = f"""
     너는 월스트리트의 수석 주식 애널리스트야.
-    아래 제공된 [{company_name}({ticker})]에 관한 최근 10일간의 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
+    아래 제공된 [{company_name}({ticker})]에 관한 최근 10일간의 뉴스 데이터 {len(all_news_list)}건을 모두 읽고 심층 분석해줘.
 
     제공된 데이터는 두 종류야:
     - [야후/핵심팩트]: 주가에 직접적인 영향을 미치는 주요 언론의 핵심 뉴스야. 가장 큰 가중치를 두어 분석해.
@@ -207,20 +231,18 @@ def get_news_analysis(ticker, company_name):
         data = json.loads(response.text)
         time.sleep(1.5)
         return {
-            '분석뉴스건수': len(combined_news_texts),
+            '분석뉴스건수': len(all_news_list),
             '시장센티멘트': data.get('sentiment', '중립'),
             'AI 심층 분석': data.get('detailed_summary', '')
         }
-    except Exception as e:
-        print(f"[{ticker}] AI 뉴스 분석 오류: {e}")
+    except Exception:
         return {'시장센티멘트': '오류', 'AI 심층 분석': '분석 실패'}
 
 # ==========================================
-# 4. 메인 실행 루프
+# 4. 실행 루프 및 5. 구글 시트 업로드
 # ==========================================
 results = []
-print(f"📊 총 {len(tickers)}개 종목 분석 시작...")
-
+print(f"📊 {len(tickers)}개 종목 분석 시작...")
 for ticker in tickers:
     print(f"[{ticker}] 진행 중...")
     name = ticker_to_name.get(ticker, ticker)
@@ -235,9 +257,6 @@ for ticker in tickers:
 master_df = pd.DataFrame(results)
 master_df_cleaned = master_df.replace([np.inf, -np.inf], np.nan).fillna('N/A')
 
-# ==========================================
-# 5. 구글 시트 업로드
-# ==========================================
 print("\n☁️ 구글 시트 업로드 중...")
 try:
     service_account_info = json.loads(gcp_json_str)
@@ -249,8 +268,8 @@ try:
     worksheet.clear()
     upload_data = [master_df_cleaned.columns.values.tolist()] + master_df_cleaned.values.tolist()
     worksheet.update(range_name='A1', values=upload_data)
-    print("🎉 ROA 지표를 포함한 모든 분석 결과가 성공적으로 업데이트되었습니다!")
+    print("🎉 날짜별 정렬 뉴스 및 모든 지표 업로드 성공!")
 except Exception as e:
-    print(f"❌ 시트 업로드 실패 원인: {e}")
+    print(f"❌ 시트 업로드 실패: {e}")
 
-print("\n✅ 모든 파이프라인이 성공적으로 종료되었습니다.")
+print("\n✅ 파이프라인 종료.")
