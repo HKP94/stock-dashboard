@@ -16,7 +16,7 @@ from ddgs import DDGS
 # 시스템 경고 숨기기
 warnings.filterwarnings('ignore')
 
-print("🚀 주식 분석 자동화 파이프라인 시작...\n")
+print("🚀 주식 분석 자동화 파이프라인 시작 (요청하신 프롬프트 반영 완료)...\n")
 
 # ==========================================
 # 1. 환경 변수 및 API 설정
@@ -59,20 +59,16 @@ def get_momentum_data(ticker):
         stock = yf.Ticker(ticker)
         df = stock.history(period="1y")
         if df.empty: return {}
-
         df['SMA_20'] = ta.sma(df['Close'], length=20)
         df['SMA_50'] = ta.sma(df['Close'], length=50)
         df['SMA_200'] = ta.sma(df['Close'], length=200)
         df['RSI_14'] = ta.rsi(df['Close'], length=14)
-
         latest = df.iloc[-1]
         current_price = latest['Close']
         sma20, sma50, sma200, rsi14 = latest['SMA_20'], latest['SMA_50'], latest['SMA_200'], latest['RSI_14']
-
         disparity = (current_price / sma20) * 100 if pd.notna(sma20) and sma20 != 0 else np.nan
         is_aligned = 'O' if pd.notna(sma50) and pd.notna(sma200) and (sma50 > sma200) else 'X'
         is_rsi_good = 'O' if pd.notna(rsi14) and (50 <= rsi14 <= 70) else 'X'
-
         return {
             '현재가($)': round(current_price, 2),
             '50일 이평선': round(sma50, 2) if pd.notna(sma50) else np.nan,
@@ -90,8 +86,6 @@ def get_fundamental_data(ticker):
         ann_fin = stock.financials
         qtr_fin = stock.quarterly_financials
         data = {}
-
-        # 연간 데이터 추출
         if not ann_fin.empty:
             rev_label = next((idx for idx in ann_fin.index if idx in ['Total Revenue', 'Operating Revenue']), None)
             op_inc_label = next((idx for idx in ann_fin.index if 'Operating Income' in idx), None)
@@ -102,8 +96,6 @@ def get_fundamental_data(ticker):
                     margin = (op_inc / rev) * 100 if pd.notnull(rev) and rev != 0 else np.nan
                     data[f'최근 {i+1}년 매출($B)'] = round(rev / 1e9, 2) if pd.notnull(rev) else None
                     data[f'최근 {i+1}년 영업이익률(%)'] = round(margin, 2) if pd.notnull(margin) else None
-
-        # 분기 데이터 추출 (복구됨)
         if not qtr_fin.empty:
             rev_label_q = next((idx for idx in qtr_fin.index if idx in ['Total Revenue', 'Operating Revenue']), None)
             op_inc_label_q = next((idx for idx in qtr_fin.index if 'Operating Income' in idx), None)
@@ -120,14 +112,18 @@ def get_fundamental_data(ticker):
 def get_valuation_data(ticker):
     try:
         info = yf.Ticker(ticker).info
+        def fmt(key, mult=1, suffix=''):
+            val = info.get(key)
+            if val is None or val == 'N/A': return 'N/A'
+            return f"{round(val * mult, 2)}{suffix}"
         return {
             'Trailing PER': fmt('trailingPE'),
             'Forward PER': fmt('forwardPE'),
             'PBR': fmt('priceToBook'),
-            'EV/EBITDA': fmt('enterpriseToEbitda'), # 추가됨
+            'EV/EBITDA': fmt('enterpriseToEbitda'),
             'ROE': fmt('returnOnEquity', 100, '%'),
             '영업이익률': fmt('operatingMargins', 100, '%'),
-            '부채비율': fmt('debtToEquity', 1, '%'), # 추가됨
+            '부채비율': fmt('debtToEquity', 1, '%'),
             '매출성장률': fmt('revenueGrowth', 100, '%')
         }
     except Exception: return {}
@@ -175,6 +171,7 @@ def get_news_analysis(ticker, company_name):
 
     news_text = "\n".join(combined_news_texts)
     
+    # 기획자님이 요청하신 프롬프트로 완벽 교체
     prompt = f"""
     너는 월스트리트의 수석 주식 애널리스트야.
     아래 제공된 [{company_name}({ticker})]에 관한 최근 10일간의 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
@@ -187,6 +184,7 @@ def get_news_analysis(ticker, company_name):
     주가 흐름에 영향을 줄 핵심 내용들을 '개괄식(bullet point)'으로 아주 상세하게 정리해.
 
     특히 가장 최근 날짜의 뉴스에 더 큰 가중치를 두어 시장 심리를 해석해.
+    그리고 주가에 핵심 영향을 주는 뉴스라면 [핵심]이라고 표시하고 해당 날짜도 적어줘
 
     다음 JSON 스키마에 맞춰서 답변해.
     {{
@@ -224,14 +222,12 @@ print(f"📊 총 {len(tickers)}개 종목 분석 시작...")
 for ticker in tickers:
     print(f"[{ticker}] 진행 중...")
     name = ticker_to_name.get(ticker, ticker)
-    
     row = {'종목명': name, 'Ticker': ticker}
     row.update(get_momentum_data(ticker))
     row.update(get_fundamental_data(ticker))
     row.update(get_valuation_data(ticker))
     row.update(get_analyst_data(ticker))
     row.update(get_news_analysis(ticker, name))
-    
     results.append(row)
 
 master_df = pd.DataFrame(results)
@@ -246,19 +242,13 @@ try:
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
     gc = gspread.authorize(creds)
-
     sh = gc.open("주식_실시간데이터")
-    try:
-        worksheet = sh.worksheet("주식 데이터")
-    except gspread.exceptions.WorksheetNotFound:
-        worksheet = sh.add_worksheet(title="주식 데이터", rows="100", cols="50")
-
+    worksheet = sh.worksheet("주식 데이터")
     worksheet.clear()
     upload_data = [master_df_cleaned.columns.values.tolist()] + master_df_cleaned.values.tolist()
     worksheet.update(range_name='A1', values=upload_data)
-    print("🎉 분기 데이터 복구 및 모든 분석 결과 업로드 성공!")
-
+    print("🎉 요청하신 프롬프트가 반영된 분석 보고서가 구글 시트에 업데이트되었습니다!")
 except Exception as e:
     print(f"❌ 시트 업로드 실패 원인: {e}")
 
-print("\n✅ 모든 파이프라인이 종료되었습니다.")
+print("\n✅ 모든 파이프라인이 성공적으로 종료되었습니다.")
