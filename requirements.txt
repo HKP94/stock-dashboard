@@ -1,8 +1,7 @@
+google-genai
 pandas
-numpy
 yfinance
-pandas-ta
-duckduckgo-search
-google-generativeai
+pandas_ta
 gspread
-oauth2client
+google-auth
+ddgs
