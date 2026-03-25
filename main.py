@@ -27,7 +27,6 @@ gcp_json_str = os.environ.get('GCP_SERVICE_ACCOUNT')
 if not gemini_api_key or not gcp_json_str:
     raise ValueError("❌ 환경 변수(GEMINI_API_KEY 또는 GCP_SERVICE_ACCOUNT)가 설정되지 않았습니다.")
 
-# 최신 SDK 클라이언트 설정
 client = genai.Client(api_key=gemini_api_key)
 target_model = 'gemini-3.1-flash-lite-preview'
 
@@ -37,8 +36,7 @@ print(f"✅ AI 모델 세팅 완료: {target_model}")
 # 2. 분석 대상 종목 세팅
 # ==========================================
 tickers = [
-    'AAPL', 'MSFT', 'NVDA', 'TSM', 'ALB', 'XOM', 'SLB','CELH', 'BBW', 'SMR', 'ASML', 'HSY', 'RCL', 'GOOG', 'WM', 'VRT', 'CRDO', 'META', 'TSLA', 'LITE', 'BE',
-    '035420.KS', '021240.KS', '033780.KS', '213420.KS', '034220.KS', '059090.KS', '338220.KS', 'BA', 'FUTU', 'ELV', '373220.KS'
+    '373220.KS'
 ]
 
 ticker_to_name = {
@@ -47,8 +45,8 @@ ticker_to_name = {
     'ASML': 'ASML', 'HSY': '허쉬', 'RCL': '로열캐리비안', 'GOOG': '알파벳(구글)', 'WM': '웨이스트매니지먼트',
     'VRT': '버티브', 'CRDO': '크레도테크', 'META': '메타', 'TSLA': '테슬라', 'LITE': '루멘텀', 'BE': '블룸에너지',
     '035420.KS': '네이버', '021240.KS': '코웨이', '033780.KS': 'KT&G',
-    '213420.KS': '덕산네오룩스', '034220.KS': 'LG디스플레이', '059090.KS': '미코', '338220.KS': '뷰노', 
-    'BA' : '보잉', 'FUTU' : '푸투', 'ELV' : '앤섬', '373220.KS' : 'LG에너지솔루션'
+    '213420.KS': '덕산네오룩스', '034220.KS': 'LG디스플레이', '059090.KS': '미코', '338220.KS': '뷰노',
+    'BA': '보잉', 'FUTU': '푸투', 'ELV': '앤섬', '373220.KS': 'LG에너지솔루션'
 }
 
 # ==========================================
@@ -58,17 +56,16 @@ ticker_to_name = {
 def get_momentum_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        df = stock.history(period="2y") # 이평선 계산을 위해 2년 데이터
+        df = stock.history(period="2y")
         if df.empty or len(df) < 205: return {}
 
-        # 이평선 및 지표 계산
         df['SMA_20'] = ta.sma(df['Close'], length=20)
         df['SMA_50'] = ta.sma(df['Close'], length=50)
         df['SMA_200'] = ta.sma(df['Close'], length=200)
         df['RSI_14'] = ta.rsi(df['Close'], length=14)
 
         latest = df.iloc[-1]
-        prev_5d = df.iloc[-6] # 5거래일 전
+        prev_5d = df.iloc[-6]
 
         current_price = latest['Close']
         sma20 = latest['SMA_20']
@@ -76,13 +73,10 @@ def get_momentum_data(ticker):
         sma200 = latest['SMA_200']
         rsi14 = latest['RSI_14']
 
-        # 기울기(상승 추세) 판단
         is_50_up = (sma50 > prev_5d['SMA_50'])
         is_200_up = (sma200 > prev_5d['SMA_200'])
-
-        # 기획자님 요청 정배열 정의: 50일선 > 200일선 AND 둘 다 상승 추세
         is_aligned = 'O' if (pd.notna(sma50) and pd.notna(sma200) and sma50 > sma200 and is_50_up and is_200_up) else 'X'
-        
+
         disparity = (current_price / sma20) * 100 if pd.notna(sma20) and sma20 != 0 else np.nan
         is_rsi_good = 'O' if pd.notna(rsi14) and (50 <= rsi14 <= 70) else 'X'
 
@@ -159,12 +153,17 @@ def get_analyst_data(ticker):
         }
     except Exception: return {}
 
+# ==========================================
+# ✅ 수정된 함수: get_news_analysis
+# ==========================================
 def get_news_analysis(ticker, company_name):
     combined_news_texts = []
     ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
-    
+
+    # ── 1. 야후 파이낸스 뉴스 ──────────────────────────
     try:
         stock = yf.Ticker(ticker)
+        yahoo_count = 0
         for news in stock.news or []:
             content = news.get('content', news)
             pub_date_str = content.get('pubDate')
@@ -172,36 +171,66 @@ def get_news_analysis(ticker, company_name):
                 try:
                     pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
                     if pub_date >= ten_days_ago:
-                        combined_news_texts.append(f"[야후/핵심팩트] {content.get('title')} - {content.get('summary')}")
-                except ValueError: pass
-    except Exception: pass
+                        combined_news_texts.append(
+                            f"[야후/핵심팩트] {pub_date.strftime('%Y-%m-%d')} | "
+                            f"{content.get('title')} - {content.get('summary')}"
+                        )
+                        yahoo_count += 1
+                except Exception as e:
+                    print(f"  ⚠️ [{ticker}] 야후 날짜 파싱 오류: {e}")
+        print(f"  ℹ️ [{ticker}] 야후 뉴스: {yahoo_count}건")
+    except Exception as e:
+        print(f"  ⚠️ [{ticker}] 야후 뉴스 수집 실패: {type(e).__name__}: {e}")
 
-    try:
-        with DDGS() as ddgs:
-            kw = f"{company_name} 주식" if '.KS' in ticker else f"{ticker} stock"
-            for news in ddgs.news(keywords=kw, timelimit='w', max_results=10) or []:
-                if news.get('title'):
-                    combined_news_texts.append(f"[외부/시장트렌드] {news.get('title')} - {news.get('body')}")
-    except Exception: pass
+    # ── 2. DuckDuckGo 뉴스 ────────────────────────────
+    # 한국 종목은 검색어·기간을 다르게 설정
+    if '.KS' in ticker:
+        kw = f"{company_name} 주가 실적 뉴스"
+        timelimit = 'm'   # 최근 1개월 (한국 뉴스 인덱싱이 느려서 범위 확장)
+    else:
+        kw = f"{ticker} {company_name} stock news"
+        timelimit = 'w'   # 최근 1주일
 
+    ddg_results = []
+    for attempt in range(3):
+        try:
+            with DDGS() as ddgs:
+                ddg_results = ddgs.news(keywords=kw, timelimit=timelimit, max_results=10) or []
+            print(f"  ℹ️ [{ticker}] DDG 뉴스: {len(ddg_results)}건 (키워드: '{kw}')")
+            break
+        except Exception as e:
+            print(f"  ⚠️ [{ticker}] DDG 오류 (시도 {attempt+1}/3): {type(e).__name__}: {e}")
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))  # 5초 → 10초 → 포기
+
+    for news in ddg_results:
+        if news.get('title'):
+            date_str = news.get('date', '')[:10]
+            combined_news_texts.append(
+                f"[외부/시장트렌드] {date_str} | "
+                f"{news.get('title')} - {news.get('body')}"
+            )
+
+    # ── 3. 뉴스 없으면 조기 반환 ──────────────────────
     if not combined_news_texts:
+        print(f"  ❌ [{ticker}] 최종 뉴스 0건 — AI 분석 스킵")
         return {'시장센티멘트': '중립', 'AI 심층 분석': '최근 10일간 뉴스 없음', '분석뉴스건수': 0}
 
+    # ── 4. Gemini AI 분석 ─────────────────────────────
     news_text = "\n".join(combined_news_texts)
-    
     prompt = f"""
     너는 월스트리트의 수석 주식 애널리스트야.
-    아래 제공된 [{company_name}({ticker})]에 관한 최근 10일간의 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
+    아래 제공된 [{company_name}({ticker})]에 관한 최근 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
 
     제공된 데이터는 두 종류야:
     - [야후/핵심팩트]: 주가에 직접적인 영향을 미치는 주요 언론의 핵심 뉴스야. 가장 큰 가중치를 두어 분석해.
-    - [외부/시장트렌드]: 최근 10일간 시장 참여자들 사이에서 논의된 전반적인 이슈와 심리 흐름이야.
+    - [외부/시장트렌드]: 최근 시장 참여자들 사이에서 논의된 전반적인 이슈와 심리 흐름이야.
 
     모든 기사의 맥락을 파악하여 최종적인 시장 심리를 결정하고,
     주가 흐름에 영향을 줄 핵심 내용들을 '개괄식(bullet point)'으로 아주 상세하게 정리해.
 
     특히 가장 최근 날짜의 뉴스에 더 큰 가중치를 두어 시장 심리를 해석해.
-    그리고 주가에 핵심 영향을 주는 뉴스라면 [핵심]이라고 표시하고 해당 날짜도 적어줘
+    그리고 주가에 핵심 영향을 주는 뉴스라면 [핵심]이라고 표시하고 해당 날짜도 적어줘.
 
     다음 JSON 스키마에 맞춰서 답변해.
     {{
@@ -212,21 +241,27 @@ def get_news_analysis(ticker, company_name):
     [분석할 뉴스 헤드라인 및 요약본 리스트]
     {news_text}
     """
-    
-    try:
-        response = client.models.generate_content(
-            model=target_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type='application/json')
-        )
-        data = json.loads(response.text)
-        time.sleep(1.5)
-        return {
-            '분석뉴스건수': len(combined_news_texts),
-            '시장센티멘트': data.get('sentiment', '중립'),
-            'AI 심층 분석': data.get('detailed_summary', '')
-        }
-    except Exception: return {'시장센티멘트': '오류', 'AI 심층 분석': '분석 실패', '분석뉴스건수': len(combined_news_texts)}
+
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model=target_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type='application/json')
+            )
+            data = json.loads(response.text)
+            time.sleep(1.5)
+            return {
+                '분석뉴스건수': len(combined_news_texts),
+                '시장센티멘트': data.get('sentiment', '중립'),
+                'AI 심층 분석': data.get('detailed_summary', '')
+            }
+        except Exception as e:
+            print(f"  ⚠️ [{ticker}] Gemini 분석 오류 (시도 {attempt+1}/3): {type(e).__name__}: {e}")
+            if attempt < 2:
+                time.sleep(5)
+
+    return {'시장센티멘트': '오류', 'AI 심층 분석': '분석 실패', '분석뉴스건수': len(combined_news_texts)}
 
 # ==========================================
 # 4. 전체 파이프라인 실행 및 컬럼 고정
@@ -237,26 +272,25 @@ print(f"📊 총 {len(tickers)}개 종목 분석 시작...")
 for ticker in tickers:
     print(f"[{ticker}] 진행 중...")
     name = ticker_to_name.get(ticker, ticker)
-    
+
     row = {'종목명': name, 'Ticker': ticker}
     row.update(get_momentum_data(ticker))
     row.update(get_fundamental_data(ticker))
     row.update(get_valuation_data(ticker))
     row.update(get_analyst_data(ticker))
     row.update(get_news_analysis(ticker, name))
-    
+
     results.append(row)
 
 master_df = pd.DataFrame(results)
 
-# 기획자님이 요청하신 최종 열 순서 고정 (36개 컬럼)
 ordered_cols = [
-    '종목명', 'Ticker', '현재가($)', '50일 이평선', '200일 이평선', 'RSI (14일)', '이격도(%)', 
-    '정배열 (50>200)', 'RSI 모멘텀 (50~70)', '최근 1년 매출($B)', '최근 1년 영업이익률(%)', 
-    '최근 2년 매출($B)', '최근 2년 영업이익률(%)', '최근 3년 매출($B)', '최근 3년 영업이익률(%)', 
-    '최근 1분기 매출($B)', '최근 1분기 영업이익률(%)', '최근 2분기 매출($B)', '최근 2분기 영업이익률(%)', 
-    '최근 3분기 매출($B)', '최근 3분기 영업이익률(%)', 'Trailing PER', 'Forward PER', 'PBR', 
-    'EV/EBITDA', 'ROE', 'ROA', '영업이익률', '부채비율', '매출성장률', '의견', '목표가($)', 
+    '종목명', 'Ticker', '현재가($)', '50일 이평선', '200일 이평선', 'RSI (14일)', '이격도(%)',
+    '정배열 (50>200)', 'RSI 모멘텀 (50~70)', '최근 1년 매출($B)', '최근 1년 영업이익률(%)',
+    '최근 2년 매출($B)', '최근 2년 영업이익률(%)', '최근 3년 매출($B)', '최근 3년 영업이익률(%)',
+    '최근 1분기 매출($B)', '최근 1분기 영업이익률(%)', '최근 2분기 매출($B)', '최근 2분기 영업이익률(%)',
+    '최근 3분기 매출($B)', '최근 3분기 영업이익률(%)', 'Trailing PER', 'Forward PER', 'PBR',
+    'EV/EBITDA', 'ROE', 'ROA', '영업이익률', '부채비율', '매출성장률', '의견', '목표가($)',
     '상승여력(%)', '분석뉴스건수', '시장센티멘트', 'AI 심층 분석'
 ]
 
@@ -273,7 +307,7 @@ try:
     gc = gspread.authorize(creds)
     sh = gc.open("주식_실시간데이터")
     worksheet = sh.worksheet("주식 데이터")
-    
+
     worksheet.clear()
     upload_data = [master_df_final.columns.values.tolist()] + master_df_final.values.tolist()
     worksheet.update(range_name='A1', values=upload_data)
