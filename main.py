@@ -157,9 +157,27 @@ def get_analyst_data(ticker):
 # ==========================================
 # ✅ 수정된 함수: get_news_analysis
 # ==========================================
+def _ddg_search(kw, timelimit, max_results=10):
+    """DuckDuckGo 뉴스 검색 (재시도 포함). 성공 시 결과 리스트 반환."""
+    for attempt in range(3):
+        try:
+            with DDGS() as ddgs:
+                results = ddgs.news(keywords=kw, timelimit=timelimit, max_results=max_results) or []
+            print(f"  ℹ️ DDG 검색 완료: {len(results)}건 (키워드: '{kw}', 기간: {timelimit})")
+            return results
+        except Exception as e:
+            print(f"  ⚠️ DDG 오류 (시도 {attempt+1}/3): {type(e).__name__}: {e}")
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))
+    return []
+
+
 def get_news_analysis(ticker, company_name):
-    combined_news_texts = []
     ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
+    is_korean = '.KS' in ticker
+
+    recent_news_texts = []   # 최근 10일 이내 뉴스
+    yahoo_old_texts = []     # 야후에서 수집한 10일 이전 뉴스 (폴백용)
 
     # ── 1. 야후 파이낸스 뉴스 ──────────────────────────
     try:
@@ -171,67 +189,110 @@ def get_news_analysis(ticker, company_name):
             if pub_date_str:
                 try:
                     pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
+                    entry = (
+                        f"[야후/핵심팩트] {pub_date.strftime('%Y-%m-%d')} | "
+                        f"{content.get('title')} - {content.get('summary')}"
+                    )
                     if pub_date >= ten_days_ago:
-                        combined_news_texts.append(
-                            f"[야후/핵심팩트] {pub_date.strftime('%Y-%m-%d')} | "
-                            f"{content.get('title')} - {content.get('summary')}"
-                        )
+                        recent_news_texts.append(entry)
                         yahoo_count += 1
+                    else:
+                        yahoo_old_texts.append((pub_date, entry))
                 except Exception as e:
                     print(f"  ⚠️ [{ticker}] 야후 날짜 파싱 오류: {e}")
-        print(f"  ℹ️ [{ticker}] 야후 뉴스: {yahoo_count}건")
+        print(f"  ℹ️ [{ticker}] 야후 최근 뉴스: {yahoo_count}건 / 이전 뉴스 백업: {len(yahoo_old_texts)}건")
     except Exception as e:
         print(f"  ⚠️ [{ticker}] 야후 뉴스 수집 실패: {type(e).__name__}: {e}")
 
-    # ── 2. DuckDuckGo 뉴스 ────────────────────────────
-    # 한국 종목은 검색어·기간을 다르게 설정
-    if '.KS' in ticker:
-        kw = f"{company_name} 주가 실적 뉴스"
-        timelimit = 'm'   # 최근 1개월 (한국 뉴스 인덱싱이 느려서 범위 확장)
+    # ── 2. DuckDuckGo 뉴스 (최근) ─────────────────────
+    # 한국 종목: 복수 검색어로 넓게 검색
+    if is_korean:
+        ddg_queries = [
+            f"{company_name} 주가 뉴스",
+            f"{company_name} 실적 공시",
+            f"{company_name} 주식",
+        ]
+        timelimit = 'm'  # 최근 1개월 (한국 뉴스 인덱싱이 느려서 범위 확장)
     else:
-        kw = f"{ticker} {company_name} stock news"
-        timelimit = 'w'   # 최근 1주일
+        ddg_queries = [f"{ticker} {company_name} stock news"]
+        timelimit = 'w'  # 최근 1주일
 
-    ddg_results = []
-    for attempt in range(3):
-        try:
-            with DDGS() as ddgs:
-                ddg_results = ddgs.news(keywords=kw, timelimit=timelimit, max_results=10) or []
-            print(f"  ℹ️ [{ticker}] DDG 뉴스: {len(ddg_results)}건 (키워드: '{kw}')")
+    seen_titles = set()
+    for kw in ddg_queries:
+        if len(recent_news_texts) >= 15:
             break
-        except Exception as e:
-            print(f"  ⚠️ [{ticker}] DDG 오류 (시도 {attempt+1}/3): {type(e).__name__}: {e}")
-            if attempt < 2:
-                time.sleep(5 * (attempt + 1))  # 5초 → 10초 → 포기
+        for news in _ddg_search(kw, timelimit):
+            title = news.get('title')
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                date_str = news.get('date', '')[:10]
+                recent_news_texts.append(
+                    f"[외부/시장트렌드] {date_str} | {title} - {news.get('body')}"
+                )
 
-    for news in ddg_results:
-        if news.get('title'):
-            date_str = news.get('date', '')[:10]
-            combined_news_texts.append(
-                f"[외부/시장트렌드] {date_str} | "
-                f"{news.get('title')} - {news.get('body')}"
-            )
+    # ── 3. 최근 뉴스가 없으면 폴백: 이전 주요 이슈 수집 ──
+    has_recent_news = bool(recent_news_texts)
+    combined_news_texts = list(recent_news_texts)
 
-    # ── 3. 뉴스 없으면 조기 반환 ──────────────────────
+    if not has_recent_news:
+        print(f"  ⚠️ [{ticker}] 최근 뉴스 없음 — 이전 주요 이슈 검색 중...")
+
+        # 야후 이전 뉴스: 최신순 최대 5건
+        if yahoo_old_texts:
+            yahoo_old_texts.sort(key=lambda x: x[0], reverse=True)
+            for _, entry in yahoo_old_texts[:5]:
+                combined_news_texts.append(entry)
+
+        # DDG 폴백: timelimit 없이(또는 1년) 더 광범위하게 검색
+        if is_korean:
+            fallback_queries = [
+                f"{company_name} 주요 이슈",
+                f"{company_name} 실적 전망",
+            ]
+        else:
+            fallback_queries = [f"{ticker} {company_name} major news issues"]
+
+        fallback_seen = seen_titles.copy()
+        for kw in fallback_queries:
+            if len(combined_news_texts) >= 8:
+                break
+            for news in _ddg_search(kw, timelimit='y', max_results=8):
+                title = news.get('title')
+                if title and title not in fallback_seen:
+                    fallback_seen.add(title)
+                    date_str = news.get('date', '')[:10]
+                    combined_news_texts.append(
+                        f"[이전이슈/참고] {date_str} | {title} - {news.get('body')}"
+                    )
+
     if not combined_news_texts:
         print(f"  ❌ [{ticker}] 최종 뉴스 0건 — AI 분석 스킵")
-        return {'시장센티멘트': '중립', 'AI 심층 분석': '최근 10일간 뉴스 없음', '분석뉴스건수': 0}
+        return {'시장센티멘트': '중립', 'AI 심층 분석': '수집된 뉴스 없음', '분석뉴스건수': 0}
 
     # ── 4. Gemini AI 분석 ─────────────────────────────
     news_text = "\n".join(combined_news_texts)
+    period_note = (
+        "최근 10일 이내 뉴스 기반"
+        if has_recent_news
+        else "최근 10일 내 뉴스 없음 — 이전 주요 이슈 기반 분석 (참고용)"
+    )
+
     prompt = f"""
     너는 월스트리트의 수석 주식 애널리스트야.
-    아래 제공된 [{company_name}({ticker})]에 관한 최근 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
+    아래 제공된 [{company_name}({ticker})]에 관한 뉴스 데이터 {len(combined_news_texts)}건을 모두 읽고 심층 분석해줘.
+    (분석 기간 기준: {period_note})
 
-    제공된 데이터는 두 종류야:
+    제공된 데이터는 세 종류야:
     - [야후/핵심팩트]: 주가에 직접적인 영향을 미치는 주요 언론의 핵심 뉴스야. 가장 큰 가중치를 두어 분석해.
     - [외부/시장트렌드]: 최근 시장 참여자들 사이에서 논의된 전반적인 이슈와 심리 흐름이야.
+    - [이전이슈/참고]: 최근 10일 이내 뉴스가 없어 이전 중요 이슈를 참고용으로 제공함. 현재 상황에 여전히 유효할 수 있는 핵심 이슈를 파악해.
 
     모든 기사의 맥락을 파악하여 최종적인 시장 심리를 결정하고,
     주가 흐름에 영향을 줄 핵심 내용들을 '개괄식(bullet point)'으로 아주 상세하게 정리해.
 
     특히 가장 최근 날짜의 뉴스에 더 큰 가중치를 두어 시장 심리를 해석해.
-    그리고 주가에 핵심 영향을 주는 뉴스라면 [핵심]이라고 표시하고 해당 날짜도 적어줘.
+    주가에 핵심 영향을 주는 뉴스라면 [핵심]이라고 표시하고 해당 날짜도 적어줘.
+    만약 [이전이슈/참고] 기반 분석이라면 sentiment 앞에 "(과거기준)"을 붙여줘.
 
     다음 JSON 스키마에 맞춰서 답변해.
     {{
