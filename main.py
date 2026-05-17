@@ -28,7 +28,7 @@ if not gemini_api_key or not gcp_json_str:
     raise ValueError("❌ 환경 변수(GEMINI_API_KEY 또는 GCP_SERVICE_ACCOUNT)가 설정되지 않았습니다.")
 
 client = genai.Client(api_key=gemini_api_key)
-target_model = 'gemini-3.1-flash-lite-preview'
+target_model = 'gemini-3.1-flash-lite'
 
 print(f"✅ AI 모델 세팅 완료: {target_model}")
 
