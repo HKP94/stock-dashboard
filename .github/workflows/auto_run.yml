@@ -13,10 +13,10 @@ jobs:
 
     steps:
     - name: 1. 내 코드 저장소 가져오기
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: 2. 파이썬 환경 세팅하기
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.12'
 
