@@ -1,7 +1,31 @@
-google-genai
-pandas
-yfinance
-pandas_ta
-gspread
-google-auth
-ddgs
+# ── 핵심 프레임워크 ──────────────────────────────────────────
+pydantic>=2.0,<3.0
+python-dotenv>=1.0
+
+# ── DB ───────────────────────────────────────────────────────
+psycopg[binary]>=3.1          # Postgres 드라이버 (psycopg v3)
+psycopg-pool>=3.1
+
+# ── 데이터 수집: US ───────────────────────────────────────────
+yfinance>=0.2                 # US 가격 폴백
+requests>=2.31
+
+# ── 데이터 수집: KR ───────────────────────────────────────────
+pykrx>=1.0.45                 # KRX 가격/거래량
+dart-fss>=0.4                 # DART OpenAPI 재무공시
+
+# ── 연산 ─────────────────────────────────────────────────────
+pandas>=2.0
+numpy>=1.26
+pandas-ta>=0.3.14b            # 기술적 지표 (SMA/RSI 등)
+scipy>=1.11                   # 추세기울기 linregress
+
+# ── LLM (Gemini) ─────────────────────────────────────────────
+google-genai>=1.0             # google-generativeai 후속
+
+# ── Google Sheets 미러 (Phase 3) ─────────────────────────────
+gspread>=6.0
+google-auth>=2.0
+
+# ── 유틸리티 ─────────────────────────────────────────────────
+tenacity>=8.2                 # 지수 백오프 재시도
