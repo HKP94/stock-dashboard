@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v1.0 (초안) |
+| 버전 | v1.1 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -325,19 +325,94 @@ LLM은 **반드시 아래 JSON만** 반환한다. 상세 프롬프트는 `prompt
 **서술**: Gemini가 §5.3-B 스키마로 "오늘의 레짐 + 드라이버 + 한·미 온도차 + 체크포인트"를 1회 생성.
 
 ### F4 — 퀀트 팩터 스코어링 (투명·규칙기반, 결정론)
-**LLM 아님. Python으로 계산.** 각 팩터를 *관심종목 유니버스 내 백분위* 또는 z-score로 정규화 → 0~100. 가중합으로 composite.
+**LLM 아님. `src/compute_quant.py`에서 순수 Python/pandas/numpy로 계산.** 유니버스 전체 백분위(0~100) 정규화 후 레짐 가중합으로 composite. **점수는 설명용이며 매수/매도 신호가 아님.**
 
-| 팩터 | 입력 | 방향 |
+---
+
+#### F4-1. 레짐 감지 (`compute_regime`)
+
+yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 504일(2년) 일봉 수집 후 아래 3개 신호로 레짐 판정:
+
+| 신호 | 조건 | 상수 |
 |---|---|---|
-| **Momentum** | 정배열, RSI(50~70 가점), 추세기울기, 이격도(과열 감점) | 높을수록↑ |
-| **Value** | PER_f, PBR, EV/EBITDA (낮을수록 가점, 섹터/자기이력 대비) | 낮을수록↑ |
-| **Quality** | ROE, 영업이익률, 부채비율(낮을수록↑), 이익 변동성 | 높을수록↑ |
-| **Growth** | 매출/이익 YoY, 컨센서스 상·하향 추세 | 높을수록↑ |
-| **Sentiment** | 뉴스 sentiment_score, 목표가 상승여력 | 높을수록↑ |
+| `sma200_bull` | KOSPI > KOSPI SMA(200) **AND** S&P500 > SP500 SMA(200) | — |
+| `bear_24m` | ln(KOSPI_t / KOSPI_t-504) < 0 | 504 영업일 |
+| `vix_spike` | VIX_t > VIX SMA(20) × 1.15 | `VIX_SPIKE_MULT = 1.15` |
 
-**기본 가중치(설정값, 조정 가능)**: Momentum 0.25 / Value 0.20 / Quality 0.20 / Growth 0.20 / Sentiment 0.15.
-**출력**: 종목별 `composite` + 팩터별 점수 + `flags`(예: "RSI 과열(>70)", "데드크로스 임박", "밸류에이션 부담", "컨센서스 상향"). **점수는 설명용이며 매수/매도 신호가 아님**을 명시.
-**검증**: 결측 시 해당 팩터는 중립(50)으로 처리하고 `flags`에 "데이터 부족" 표기 → 기존 N/A 전파 문제 차단.
+판정 우선순위:
+1. `bear_24m OR vix_spike` → **bear**
+2. `sma200_bull AND NOT bear_24m AND NOT vix_spike` → **bull**
+3. 그 외 (데이터 부족 포함) → **neutral**
+
+> `krw_spike` (USD/KRW > SMA(20) × 1.03) 도 계산하나, 현재 레짐 판정 조건에는 직접 반영하지 않음.
+
+---
+
+#### F4-2. 사전 필터 (`is_filtered`)
+
+아래 조건 중 하나라도 해당하면 `composite = None` 저장, "사전필터 제외" flag 추가:
+- **Piotroski F-Score ≤ 3** (부실 기업 제외)
+- **KR 종목 AND 고유변동성 > 유니버스 P80** (급등락 노이즈 제외)
+
+**Piotroski F-Score** (최대 7점 실질, 0~9 표기): 수익성(op_income>0, ROA>0, op_margin>0, op_margin개선) + 재무건전성(debt_ratio감소, rev_growth>0, 발행주식수는 데이터 없어 0점) + 운영효율(revenue성장, gross_margin은 데이터 없어 0점). 데이터 없으면 중간값 4 + flag.
+
+**고유변동성**: 60일 일별 수익률과 KOSPI 수익률의 OLS 잔차 표준편차(순수 numpy). KOSPI 정렬 불가 시 단순 표준편차 사용.
+
+---
+
+#### F4-3. 레짐별 동적 가중치
+
+| 레짐 | Momentum | Value | Quality | Growth | Sentiment |
+|---|---|---|---|---|---|
+| **bull** | **0.45** | 0.20 | 0.20 | 0.10 | 0.05 |
+| **neutral** | 0.35 | 0.25 | 0.25 | 0.10 | 0.05 |
+| **bear** | 0.10 | 0.35 | **0.45** | 0.05 | 0.05 |
+
+모든 가중치 합계 = 1.00. `composite = Σ(weight_k × score_k)`.
+
+---
+
+#### F4-4. 팩터 계산 요약
+
+**Momentum (0~100)**
+
+다중 시계열 로그수익률 Z-score 가중합 `F_mom`:
+
+| 구간 | 계산 | Z-score 가중치 |
+|---|---|---|
+| 1개월 | ln(P_t / P_t-21) | 0.10 |
+| 3개월 | ln(P_t-5 / P_t-63) | 0.20 |
+| 6개월 | ln(P_t-21 / P_t-126) | 0.30 |
+| **12-1M** | ln(P_t-21 / P_t-252) | **0.40** |
+
+> 12-1 모멘텀(최근 1개월 skip): 단기 되돌림 효과 제거. 가격 데이터 252일 미만 시 있는 만큼 사용 + "데이터 부족" flag.
+
+거래량 확인 모멘텀(VCM): 높은 모멘텀이지만 거래량이 낮은 종목을 선호(군집 매매 회피).
+`VCM = rank(M_12M) × (1 − rank(turnover_126d))`
+
+최종: `pct_rank(0.7 × F_mom + 0.3 × VCM)` → 0~100.
+
+**Value (0~100)**
+
+`v1 = pct_rank(1/PER_f)`, `v2 = pct_rank(1/PBR)`, `v3 = pct_rank(1/EV_EBITDA)`. PER_f 없으면 PER_t 폴백. 결측 항목 → 50 + flag. `Value = (v1 + v2 + v3) / 3`.
+
+**Quality (0~100)**
+
+`q = (pct_rank(ROE) + pct_rank(ROA) + pct_rank(op_margin) + (100 - pct_rank(debt_ratio))) / 4`. `Quality = 0.6 × q + 0.4 × pct_rank(F-Score)`.
+
+**Growth (0~100)**
+
+`g1 = pct_rank(rev_growth)`, `g2 = pct_rank(op_income YoY 변화율)`. 컨센서스 방향 `g3`: 목표가 21일 전 대비 상향이면 100, 하향이면 0, 레코드 없으면 upside > 10% → 70, 그 외 40. `Growth = 0.4×g1 + 0.4×g2 + 0.2×g3`.
+
+**Sentiment (0~100)**
+
+`news_analysis.sentiment_score`의 유니버스 내 백분위. 데이터 없으면 50.
+
+---
+
+#### F4-5. 결측 처리
+
+데이터 없는 종목·팩터 → **50(중립)** + `flags`에 "데이터 부족" 기록 → N/A 전파 차단. 필터 제외 종목은 `composite = None` 저장.
 
 ### F5 — 매일 아침 텔레그램 브리핑
 **생성·발송 주체: Hermes Agent**(텔레그램 네이티브). DB에서 당일 `portfolio_snapshot`·`quant_scores`·`news_analysis`·`market_daily`를 읽고, Hermes 메모리(보유 이력·관심 변화·이전 브리핑)와 결합해 종합. 템플릿·페르소나는 `prompts/HERMES_PROMPT.md`.
@@ -425,20 +500,26 @@ LLM은 **반드시 아래 JSON만** 반환한다. 상세 프롬프트는 `prompt
 
 ### Phase 0 — 기반 (1주)
 - [ ] §12 미해결 질문 확정(특히 F1 옵션, n8n 호스팅, Postgres vs SQLite)
-- [ ] DB 생성 + 스키마 적용(§5.1)
-- [ ] 리포지토리 재구성 + `CLAUDE.md` 반영 → **Claude Code**
+- [x] DB 생성 + 스키마 적용(§5.1) — `db/schema.sql` 완료
+- [x] 리포지토리 재구성 + `CLAUDE.md` 반영 → **Claude Code**
 - [ ] KIS/Gemini/텔레그램/DART 키 발급 + n8n Credentials 등록
 
-### Phase 1 — 데이터 백본 (1~2주)
-- [ ] `ingest_us/kr/news/market` + `db.py` + `schemas.py` 구현 → **Claude Code**
-- [ ] `compute_indicators` (기존 로직 이식) → **Claude Code**
+### Phase 1 — 데이터 백본 ✅ 완료
+- [x] `schemas.py` + `db.py` — pydantic v2 계약 모델, upsert 헬퍼, log_run
+- [x] `ingest_us.py` — yfinance 가격·재무·밸류에이션·애널리스트
+- [x] `ingest_kr.py` — pykrx(가격) + dart-fss(DART 재무)
+- [x] `ingest_news.py` — 네이버 HTML 스크래핑(KR) + yfinance.news(US), DDGS 제거, url_hash dedupe
+- [x] `ingest_market.py` — ^KS11·^KQ11·^GSPC·^IXIC·^VIX·KRW=X·^TNX
+- [x] `compute_indicators.py` — SMA20/50/200·RSI14·이격도·추세기울기·정배열 + 단위 테스트 20개
 - [ ] n8n 수집 워크플로(05:30/06:00/15:40) → **Claude Code(JSON) + 사용자 임포트**
 - [ ] 검수: KR 결측률·이력 누적 확인 → **PM**
 
-### Phase 2 — 인텔리전스 (1~2주)
-- [ ] `compute_quant`(F4) + `rules.py`(F6-1) → **Claude Code**
-- [ ] Gemini 뉴스 요약/시황 종합 노드 + `GEMINI_PROMPT` 적용 → **Gemini/Claude Code**
-- [ ] F1 포트폴리오 스냅샷(선택 옵션 구현) → **Claude Code**
+### Phase 2 — 인텔리전스 (핵심 완료)
+- [x] `compute_quant.py` — F4 팩터 스코어링(레짐감지·사전필터·5팩터) + 단위 테스트 35개
+- [x] `rules.py` — 8개 룰 기반 알림 엔진 + 단위 테스트 64개
+- [x] `enrich_gemini.py` — Gemini 뉴스 요약·시황 종합, 증분 처리, pydantic 검증 + 단위 테스트 46개
+- [x] `assemble.py` — §5.2 StockDailyRecord 조립 뷰 + 단위 테스트 26개
+- [ ] `ingest_portfolio.py` — F1 포트폴리오 스냅샷(F1 옵션 확정 후)
 - [ ] 검수: 스키마 준수·증분 처리·토큰 사용량 → **PM**
 
 ### Phase 3 — 전달 & 확장
@@ -459,4 +540,6 @@ LLM은 **반드시 아래 JSON만** 반환한다. 상세 프롬프트는 `prompt
 7. **알림 채널**: 텔레그램 단일? 장중 알림(P2)도 원하는가?
 
 ---
-*변경 이력: v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
+*변경 이력:*
+- *v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
+- *v1.1 (2026-06-09) §F4 실제 구현 내용으로 전면 교체(레짐감지·사전필터·동적가중치·VCM·12-1M), §11 로드맵 Phase 1·2 완료 항목 표시 — PM(Claude).*
