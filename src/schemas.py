@@ -92,7 +92,7 @@ class AnalystRow(BaseModel):
 class NewsRawRow(BaseModel):
     ticker: str
     source: str
-    published_at: datetime
+    published_at: Optional[datetime] = None  # DB TIMESTAMPTZ nullable 반영
     title: str
     body: Optional[str] = None
     url: str
