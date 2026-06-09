@@ -1,32 +1,42 @@
-name: 주식 분석 파이프라인 정기 실행
+name: ATLAS 일일 파이프라인 (06:00 KST)
 
 on:
-  workflow_dispatch: # 언제든 수동으로도 돌릴 수 있게 유지
+  workflow_dispatch:   # 수동 실행 유지
   schedule:
-    # 한국 시간(KST) 오전 6시 = 영국 시간(UTC) 전날 밤 9시(21시)
-    # 분 시 일 월 요일 순서입니다.
-    - cron: '0 21 * * *' 
+    # KST 06:00 = UTC 21:00 (전날)
+    - cron: '0 21 * * *'
 
 jobs:
-  build:
+  pipeline:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 1. 내 코드 저장소 가져오기
-      uses: actions/checkout@v5
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
 
-    - name: 2. 파이썬 환경 세팅하기
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
+      - name: Python 3.12 세팅
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
 
-    - name: 3. 필요한 라이브러리 설치하기
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: 4. 파이썬 코드(main.py) 실행하기
-      env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      run: python main.py
+      - name: 파이프라인 실행 (수집 → 연산 → LLM → 조립)
+        env:
+          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          DART_API_KEY:       ${{ secrets.DART_API_KEY }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_BULK_MODEL:  gemini-2.5-flash-lite
+          GEMINI_SYNTH_MODEL: gemini-3.5-flash
+        run: python -m src.run_pipeline
+
+      - name: 텔레그램 브리핑 발송
+        env:
+          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m src.send_telegram
