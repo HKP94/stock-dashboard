@@ -54,24 +54,25 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 ## 4. 우선 작업 (Phase 순서대로, 각 PR 단위)
 > PR마다 ‘무엇을/왜/검증방법’을 PR 본문에 적고 PM 검수 요청.
 
-**Phase 1 — 데이터 백본**
-1. `schemas.py`: PRD §5.2/§5.3을 pydantic 모델로. (먼저 만든다 — 모든 모듈의 계약 기준)
-2. `db.py`: 연결 + `upsert_*` 헬퍼 + `log_run()`.
-3. `ingest_us.py` / `ingest_kr.py`: **KR은 pykrx+DART+KIS, US는 FMP/Finnhub+yfinance 폴백**. 기존 `main.py`의 `get_*` 로직을 참고하되 소스를 교체. 결측은 `None`으로 명확히(문자열 'N/A' 금지).
-4. `ingest_news.py`: 네이버/RSS/검색 → `news_raw`, `url_hash`로 dedupe. (기존 DDGS 제거)
-5. `compute_indicators.py`: 기존 SMA/RSI/이격도/정배열 로직 이식 + 추세기울기. **단위 테스트 포함**.
-6. `n8n/workflows/ingest.json`: 05:30/06:00/15:40 스케줄로 위 모듈 호출(Execute Command 또는 HTTP).
+**Phase 1 — 데이터 백본 ✅ 완료**
+1. ✅ `schemas.py`: PRD §5.2/§5.3을 pydantic 모델로. (먼저 만든다 — 모든 모듈의 계약 기준)
+2. ✅ `db.py`: 연결 + `upsert_*` 헬퍼 + `log_run()`.
+3. ✅ `ingest_us.py` / `ingest_kr.py`: **KR은 pykrx+DART+KIS, US는 FMP/Finnhub+yfinance 폴백**. 기존 `main.py`의 `get_*` 로직을 참고하되 소스를 교체. 결측은 `None`으로 명확히(문자열 'N/A' 금지).
+4. ✅ `ingest_news.py`: 네이버 HTML 스크래핑(KR) + yfinance.news(US) → `news_raw`, `url_hash`로 dedupe. (DDGS 완전 제거)
+5. ✅ `ingest_market.py`: ^KS11·^KQ11·^GSPC·^IXIC·^VIX·KRW=X·^TNX → `market_daily`.
+6. ✅ `compute_indicators.py`: 기존 SMA/RSI/이격도/정배열 로직 이식 + 추세기울기. **단위 테스트 20개**.
+7. `n8n/workflows/ingest.json`: 05:30/06:00/15:40 스케줄로 위 모듈 호출(Execute Command 또는 HTTP).
 
-**Phase 2 — 인텔리전스**
-7. `compute_quant.py`: PRD §F4 팩터 스코어. 유니버스 내 백분위/zscore 정규화, 결측 팩터=중립(50)+flag. **테스트로 점수 단조성 검증**.
-8. `rules.py`: RSI 과열/침체, 골든·데드크로스 임박, 목표가 괴리, 급등락.
-9. `enrich_gemini.py`: `prompts/GEMINI_PROMPT.md` 스키마로 호출, 출력 `pydantic` 검증 실패 시 1회 재시도 후 중립값. **증분**: 새 뉴스 있는 종목만.
-10. `ingest_portfolio.py`: 확정된 F1 옵션 구현.
+**Phase 2 — 인텔리전스 (핵심 완료)**
+8. ✅ `compute_quant.py`: PRD §F4 팩터 스코어. 레짐 감지·사전필터(F-Score·고유변동성)·5팩터·동적가중치. **단위 테스트 35개 (단조성·레짐·결측 검증)**.
+9. ✅ `rules.py`: RSI 과열/침체, 골든·데드크로스 임박, 목표가 근접, 급등락, 이격도 과열 (8개 룰). **단위 테스트 64개**.
+10. ✅ `enrich_gemini.py`: `prompts/GEMINI_PROMPT.md` 스키마로 호출, 출력 `pydantic` 검증 실패 시 1회 재시도 후 중립값. **증분**: 새 뉴스 있는 종목만. **단위 테스트 46개**.
+11. `ingest_portfolio.py`: 확정된 F1 옵션 구현.
 
 **Phase 3 — 전달**
-11. `assemble.py`: 종목 일일 레코드 뷰 조립.
-12. `hermes/skills/morning_brief.md` + 텔레그램 발송 경로.
-13. Sheets 미러 + 기존 Apps Script 뷰어 연계(`report_url`).
+12. ✅ `assemble.py`: 종목 일일 레코드 뷰 조립 (§5.2 StockDailyRecord). **단위 테스트 26개**.
+13. `hermes/skills/morning_brief.md` + 텔레그램 발송 경로.
+14. Sheets 미러 + 기존 Apps Script 뷰어 연계(`report_url`).
 
 ## 5. Gemini 호출 규칙 (토큰 절약)
 - 대량(종목별 뉴스 요약)=저렴 모델, 종합(시황 1회)=상위 모델. 모델명은 config로.
