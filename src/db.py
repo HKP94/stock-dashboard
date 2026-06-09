@@ -1,8 +1,9 @@
 """
 db.py — Postgres 연결·upsert 헬퍼·실행 로그
 
-접속 정보는 환경변수 DATABASE_URL 에서만 읽는다.
-외부에서 시크릿을 인자로 받거나 하드코딩하지 않는다.
+접속 정보는 개별 환경변수(DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME)에서만 읽는다.
+비밀번호(DB_PASSWORD)는 하드코딩하지 않으며, 외부에서 시크릿을 인자로 받지 않는다.
+Supabase Transaction Pooler 사용 시 prepare_threshold=None 필수.
 
 사용 예:
     from src.db import get_conn, upsert_price_daily, log_run
@@ -41,17 +42,41 @@ from src.schemas import (
 logger = logging.getLogger(__name__)
 
 
-def _get_dsn() -> str:
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL 환경변수가 설정되지 않았습니다.")
-    return dsn
+# 접속 기본값 (비밀번호 제외). 시크릿이 아니므로 기본값 허용.
+_DB_DEFAULTS = {
+    "DB_HOST": "aws-1-ap-northeast-2.pooler.supabase.com",
+    "DB_PORT": "6543",
+    "DB_USER": "postgres",
+    "DB_NAME": "postgres",
+}
+
+
+def _get_conn_kwargs() -> dict:
+    """개별 환경변수에서 psycopg.connect 인자를 구성한다. DB_PASSWORD는 필수(기본값 없음)."""
+    password = os.environ.get("DB_PASSWORD")
+    if not password:
+        raise RuntimeError("DB_PASSWORD 환경변수가 설정되지 않았습니다.")
+    return {
+        "host": os.environ.get("DB_HOST", _DB_DEFAULTS["DB_HOST"]),
+        "port": int(os.environ.get("DB_PORT", _DB_DEFAULTS["DB_PORT"])),
+        "user": os.environ.get("DB_USER", _DB_DEFAULTS["DB_USER"]),
+        "password": password,
+        "dbname": os.environ.get("DB_NAME", _DB_DEFAULTS["DB_NAME"]),
+    }
 
 
 @contextmanager
 def get_conn() -> Generator[psycopg.Connection, None, None]:
-    """자동 커밋·롤백 컨텍스트 매니저."""
-    with psycopg.connect(_get_dsn(), row_factory=dict_row) as conn:
+    """자동 커밋·롤백 컨텍스트 매니저.
+
+    Supabase Transaction Pooler는 서버측 prepared statement를 지원하지 않으므로
+    prepare_threshold=None 으로 비활성화한다.
+    """
+    with psycopg.connect(
+        **_get_conn_kwargs(),
+        row_factory=dict_row,
+        prepare_threshold=None,
+    ) as conn:
         yield conn
 
 

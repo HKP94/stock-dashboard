@@ -27,7 +27,11 @@ jobs:
 
       - name: 파이프라인 실행 (수집 → 연산 → LLM → 조립)
         env:
-          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          DB_HOST:            aws-1-ap-northeast-2.pooler.supabase.com
+          DB_PORT:            "6543"
+          DB_USER:            postgres.dpegnpmzgozvcvbqmnlt
+          DB_PASSWORD:        ${{ secrets.DB_PASSWORD }}
+          DB_NAME:            postgres
           DART_API_KEY:       ${{ secrets.DART_API_KEY }}
           GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
           GEMINI_BULK_MODEL:  gemini-2.5-flash-lite
@@ -36,7 +40,11 @@ jobs:
 
       - name: 텔레그램 브리핑 발송
         env:
-          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          DB_HOST:              aws-1-ap-northeast-2.pooler.supabase.com
+          DB_PORT:              "6543"
+          DB_USER:              postgres.dpegnpmzgozvcvbqmnlt
+          DB_PASSWORD:          ${{ secrets.DB_PASSWORD }}
+          DB_NAME:              postgres
           TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m src.send_telegram
