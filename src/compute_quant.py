@@ -94,12 +94,36 @@ def _fetch_prices(ticker: str, days: int, conn: psycopg.Connection) -> pd.DataFr
         return pd.DataFrame(columns=["close", "volume"])
     df = pd.DataFrame([dict(r) for r in rows])
     df["date"] = pd.to_datetime(df["date"])
+    # DB NUMERIC이 Decimal로 새어들면 np.log/나눗셈에서 TypeError → 읽기 경계에서 float 강제
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    if "volume" in df.columns:
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
     return df.sort_values("date").set_index("date")
 
 
 # ──────────────────────────────────────────────────────────────
 # DB 조회 헬퍼 (패치 가능, conn 의존)
 # ──────────────────────────────────────────────────────────────
+
+# 날짜/문자열은 그대로 두고 수치형(Decimal 포함)만 float로 변환할 컬럼
+_NUMERIC_COLS = frozenset({
+    "revenue", "op_income", "op_margin", "net_income",
+    "per_t", "per_f", "pbr", "ev_ebitda", "roe", "roa", "debt_ratio", "rev_growth",
+    "target_price", "upside", "sentiment_score",
+})
+
+
+def _floatify(row: dict) -> dict:
+    """DB 행의 NUMERIC(Decimal) 컬럼을 float로 변환(읽기 경계). None은 유지."""
+    out = dict(row)
+    for col in _NUMERIC_COLS:
+        if col in out and out[col] is not None:
+            try:
+                out[col] = float(out[col])
+            except (TypeError, ValueError):
+                out[col] = None
+    return out
+
 
 def _fetch_ticker_market(ticker: str, conn: psycopg.Connection) -> str:
     sql = "SELECT market FROM watchlist WHERE ticker = %s"
@@ -118,7 +142,7 @@ def _fetch_fundamentals_annual(ticker: str, conn: psycopg.Connection) -> list[di
     """
     with conn.cursor() as cur:
         cur.execute(sql, (ticker,))
-        return [dict(r) for r in cur.fetchall()]
+        return [_floatify(r) for r in cur.fetchall()]
 
 
 def _fetch_valuation_two(ticker: str, conn: psycopg.Connection) -> list[dict]:
@@ -129,7 +153,7 @@ def _fetch_valuation_two(ticker: str, conn: psycopg.Connection) -> list[dict]:
     """
     with conn.cursor() as cur:
         cur.execute(sql, (ticker,))
-        return [dict(r) for r in cur.fetchall()]
+        return [_floatify(r) for r in cur.fetchall()]
 
 
 def _fetch_analyst_records(
@@ -145,7 +169,7 @@ def _fetch_analyst_records(
             (ticker, asof),
         )
         row = cur.fetchone()
-        latest = dict(row) if row else None
+        latest = _floatify(row) if row else None
 
     with conn.cursor() as cur:
         cur.execute(
@@ -153,7 +177,7 @@ def _fetch_analyst_records(
             (ticker, asof_28, asof_21),
         )
         row = cur.fetchone()
-        prev = dict(row) if row else None
+        prev = _floatify(row) if row else None
 
     return latest, prev
 
@@ -325,7 +349,8 @@ def _compute_idio_vol(
     """60일 OLS 잔차 표준편차."""
     if price_df.empty or len(price_df) < 20:
         return None
-    ret = np.log(price_df["close"] / price_df["close"].shift(1)).dropna()
+    close = pd.to_numeric(price_df["close"], errors="coerce")  # Decimal 방어
+    ret = np.log(close / close.shift(1)).dropna()
 
     if "kospi" in market_df.columns and len(market_df["kospi"].dropna()) > 0:
         mret = market_df["kospi"].pct_change().reindex(ret.index).dropna()
@@ -431,15 +456,24 @@ def _score_value(
     flags_map: dict[str, list[str]],
 ) -> dict[str, float]:
     """가치 팩터 0~100."""
+    def _inv1(v) -> Optional[float]:
+        # 나눗셈 직전 float 캐스팅 — Decimal이 새어들어도 float/Decimal TypeError 방지
+        if v is None:
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return (1.0 / f) if f != 0 else None
+
     def inv(d, key_f, key_t) -> Optional[float]:
         if d is None:
             return None
-        v = d.get(key_f) or d.get(key_t)
-        return (1.0 / v) if v and v != 0 else None
+        return _inv1(d.get(key_f) or d.get(key_t))
 
     per_inv  = {t: inv(v, "per_f", "per_t") for t, v in val_map.items()}
-    pbr_inv  = {t: (1.0 / v["pbr"] if v and v.get("pbr") else None) for t, v in val_map.items()}
-    ev_inv   = {t: (1.0 / v["ev_ebitda"] if v and v.get("ev_ebitda") else None) for t, v in val_map.items()}
+    pbr_inv  = {t: (_inv1(v.get("pbr")) if v else None) for t, v in val_map.items()}
+    ev_inv   = {t: (_inv1(v.get("ev_ebitda")) if v else None) for t, v in val_map.items()}
 
     for t, v in val_map.items():
         if v is None or (not v.get("per_f") and not v.get("per_t")):

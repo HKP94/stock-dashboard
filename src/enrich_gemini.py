@@ -221,8 +221,9 @@ def _build_market_prompt(
     sentiment_rollup: dict,
 ) -> str:
     """§B 시황 종합 프롬프트."""
-    market_json = json.dumps(market_metrics, ensure_ascii=False)
-    sentiment_json = json.dumps(sentiment_rollup, ensure_ascii=False)
+    # default=str: Decimal 등 비직렬화 타입이 새어들어도 죽지 않게
+    market_json = json.dumps(market_metrics, ensure_ascii=False, default=str)
+    sentiment_json = json.dumps(sentiment_rollup, ensure_ascii=False, default=str)
 
     return (
         "너는 글로벌 매크로 스트래티지스트다. "

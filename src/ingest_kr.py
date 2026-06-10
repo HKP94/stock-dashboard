@@ -276,12 +276,21 @@ def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
     bgn_de = (date.today() - timedelta(days=365 * FS_BGN_YEARS)).strftime("%Y%m%d")
 
     # 기업 검색
+    # dart-fss 버전에 따라 find_by_stock_code가 단일 Corp 또는 list[Corp]를 반환한다.
+    # 단일 Corp를 corps[0]로 인덱싱하면 "'Corp' object is not subscriptable"로 죽으므로
+    # 두 형태를 모두 처리한다.
     corp_list = dart.get_corp_list()
-    corps = corp_list.find_by_stock_code(code)
-    if not corps:
+    found = corp_list.find_by_stock_code(code)
+    if not found:
         logger.warning("%s: DART 기업 코드 없음 (code=%s)", ticker, code)
         return []
-    corp = corps[0]
+    if isinstance(found, (list, tuple)):
+        corp = found[0] if found else None
+    else:
+        corp = found  # 단일 Corp 객체
+    if corp is None:
+        logger.warning("%s: DART 기업 매칭 실패 (code=%s)", ticker, code)
+        return []
     logger.info("%s: DART 기업 = %s", ticker, getattr(corp, "corp_name", corp))
 
     rows: list[FundamentalsRow] = []

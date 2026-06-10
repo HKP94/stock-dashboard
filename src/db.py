@@ -22,6 +22,7 @@ from typing import Generator
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.numeric import FloatLoader, NumericBinaryLoader
 
 from src.schemas import (
     AnalystRow,
@@ -65,18 +66,40 @@ def _get_conn_kwargs() -> dict:
     }
 
 
+class _NumericBinaryFloatLoader(NumericBinaryLoader):
+    """NUMERIC 바이너리 결과(기본 Decimal)를 float로 변환."""
+
+    def load(self, data):  # type: ignore[override]
+        return float(super().load(data))
+
+
+def _register_float_loaders(conn: psycopg.Connection) -> None:
+    """
+    NUMERIC/DECIMAL 컬럼을 decimal.Decimal이 아니라 Python float로 반환하도록 등록.
+
+    psycopg3는 NUMERIC을 기본 Decimal로 로드하는데, Decimal이 float·np.log·나눗셈에
+    섞이면 compute_indicators/compute_quant가 TypeError로 죽는다(indicators_daily=0,
+    quant_scores=0의 근본 원인). 텍스트(format 0)·바이너리(format 1) 양쪽 로더를 덮어
+    모든 읽기에서 float로 통일한다.
+    """
+    conn.adapters.register_loader("numeric", FloatLoader)                # text
+    conn.adapters.register_loader("numeric", _NumericBinaryFloatLoader)  # binary
+
+
 @contextmanager
 def get_conn() -> Generator[psycopg.Connection, None, None]:
     """자동 커밋·롤백 컨텍스트 매니저.
 
     Supabase Transaction Pooler는 서버측 prepared statement를 지원하지 않으므로
     prepare_threshold=None 으로 비활성화한다.
+    NUMERIC 컬럼은 float로 반환되도록 로더를 등록한다(Decimal 혼용 금지).
     """
     with psycopg.connect(
         **_get_conn_kwargs(),
         row_factory=dict_row,
         prepare_threshold=None,
     ) as conn:
+        _register_float_loaders(conn)
         yield conn
 
 
