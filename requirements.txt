@@ -28,5 +28,10 @@ google-genai>=1.0             # google-generativeai 후속
 gspread>=6.0
 google-auth>=2.0
 
+# ── 대시보드 (Streamlit, 로컬 우선) ──────────────────────────
+streamlit>=1.30               # dashboard/app.py
+plotly>=5.18                  # 팩터 레이더 차트 (없으면 막대 폴백)
+jinja2>=3.1                   # pandas Styler(표 색상 강조)용 — 없으면 평문 폴백
+
 # ── 유틸리티 ─────────────────────────────────────────────────
 tenacity>=8.2                 # 지수 백오프 재시도
