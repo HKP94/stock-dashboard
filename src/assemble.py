@@ -176,6 +176,188 @@ def _q_quant(ticker: str, conn: psycopg.Connection, asof: date) -> Optional[dict
 
 
 # ──────────────────────────────────────────────────────────────
+# Bulk 조회 헬퍼 (유니버스 전체를 테이블당 1쿼리로)
+#   assemble_daily 전용. 연결 점유 시간을 분 → 초로 단축.
+#   `ticker = ANY(%s)` 에 list를 넘기면 psycopg3가 Postgres 배열로 어댑트.
+# ──────────────────────────────────────────────────────────────
+
+def _bulk_prices(tickers: list[str], conn: psycopg.Connection, asof: date) -> dict[str, Optional[dict]]:
+    """ticker → {close, chg_pct}. asof 당일 종가 없으면 None (단일 쿼리 버전과 동일 의미)."""
+    out: dict[str, Optional[dict]] = {t: None for t in tickers}
+    if not tickers:
+        return out
+    sql = """
+        SELECT ticker, date, close
+        FROM (
+            SELECT ticker, date, close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices_daily
+            WHERE ticker = ANY(%s) AND date <= %s
+        ) t
+        WHERE rn <= 2
+        ORDER BY ticker, date DESC
+    """
+    by_ticker: dict[str, list[dict]] = {}
+    with conn.cursor() as cur:
+        cur.execute(sql, (tickers, asof))
+        for r in cur.fetchall():
+            by_ticker.setdefault(r["ticker"], []).append(dict(r))
+
+    for t in tickers:
+        rows = by_ticker.get(t, [])
+        # rn=1 (가장 최근 ≤ asof)이 정확히 asof 당일이어야 종가 인정 (단일쿼리 _q_price_chg와 동일)
+        if rows and rows[0]["date"] == asof and rows[0].get("close") is not None:
+            close = float(rows[0]["close"])
+            prev_close = (
+                float(rows[1]["close"])
+                if len(rows) > 1 and rows[1].get("close") is not None
+                else None
+            )
+            chg_pct = ((close - prev_close) / prev_close * 100) if prev_close and prev_close != 0 else None
+            out[t] = {"close": close, "chg_pct": chg_pct}
+    return out
+
+
+def _bulk_indicators(tickers: list[str], conn: psycopg.Connection, asof: date) -> dict[str, Optional[dict]]:
+    """ticker → 당일 지표 dict. 없으면 None."""
+    out: dict[str, Optional[dict]] = {t: None for t in tickers}
+    if not tickers:
+        return out
+    sql = """
+        SELECT ticker, rsi14, disparity20, is_aligned, slope50
+        FROM indicators_daily
+        WHERE ticker = ANY(%s) AND date = %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (tickers, asof))
+        for r in cur.fetchall():
+            out[r["ticker"]] = dict(r)
+    return out
+
+
+def _bulk_fundamentals(tickers: list[str], conn: psycopg.Connection) -> dict[str, dict]:
+    """ticker → {rev_yoy, op_margin, last_q_rev_b}. 단일쿼리 _q_fundamentals와 동일 로직."""
+    out: dict[str, dict] = {t: {"rev_yoy": None, "op_margin": None, "last_q_rev_b": None} for t in tickers}
+    if not tickers:
+        return out
+    sql = """
+        SELECT ticker, period_type, period_end, revenue, op_margin
+        FROM (
+            SELECT ticker, period_type, period_end, revenue, op_margin,
+                   ROW_NUMBER() OVER (PARTITION BY ticker, period_type ORDER BY period_end DESC) AS rn
+            FROM fundamentals
+            WHERE ticker = ANY(%s)
+        ) t
+        WHERE (period_type = 'annual' AND rn <= 2) OR (period_type = 'quarter' AND rn = 1)
+        ORDER BY ticker, period_type, period_end DESC
+    """
+    ann: dict[str, list[dict]] = {}
+    qtr: dict[str, dict] = {}
+    with conn.cursor() as cur:
+        cur.execute(sql, (tickers,))
+        for r in cur.fetchall():
+            if r["period_type"] == "annual":
+                ann.setdefault(r["ticker"], []).append(dict(r))
+            else:  # quarter — 첫 행이 최신
+                qtr.setdefault(r["ticker"], dict(r))
+
+    for t in tickers:
+        a = ann.get(t, [])
+        rev_yoy: Optional[float] = None
+        op_margin: Optional[float] = None
+        last_q_rev_b: Optional[float] = None
+        if a:
+            op_margin = a[0].get("op_margin")
+            if len(a) >= 2:
+                r0 = a[0].get("revenue")
+                r1 = a[1].get("revenue")
+                if r0 is not None and r1 and r1 != 0:
+                    rev_yoy = (r0 - r1) / abs(r1)
+        q = qtr.get(t)
+        if q and q.get("revenue"):
+            last_q_rev_b = float(q["revenue"]) / 1e9
+        out[t] = {"rev_yoy": rev_yoy, "op_margin": op_margin, "last_q_rev_b": last_q_rev_b}
+    return out
+
+
+def _bulk_valuation(tickers: list[str], conn: psycopg.Connection) -> dict[str, Optional[dict]]:
+    """ticker → 최신 밸류에이션 dict. 없으면 None."""
+    out: dict[str, Optional[dict]] = {t: None for t in tickers}
+    if not tickers:
+        return out
+    sql = """
+        SELECT ticker, per_t, per_f, pbr, ev_ebitda, roe, roa, debt_ratio, rev_growth
+        FROM (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY asof DESC) AS rn
+            FROM valuation
+            WHERE ticker = ANY(%s)
+        ) t
+        WHERE rn = 1
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (tickers,))
+        for r in cur.fetchall():
+            out[r["ticker"]] = dict(r)
+    return out
+
+
+def _bulk_analyst(tickers: list[str], conn: psycopg.Connection) -> dict[str, Optional[dict]]:
+    """ticker → 최신 애널리스트 컨센서스 dict. 없으면 None."""
+    out: dict[str, Optional[dict]] = {t: None for t in tickers}
+    if not tickers:
+        return out
+    sql = """
+        SELECT ticker, rating, target_price, upside
+        FROM (
+            SELECT ticker, rating, target_price, upside,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY asof DESC) AS rn
+            FROM analyst
+            WHERE ticker = ANY(%s)
+        ) t
+        WHERE rn = 1
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (tickers,))
+        for r in cur.fetchall():
+            out[r["ticker"]] = dict(r)
+    return out
+
+
+def _bulk_news(tickers: list[str], conn: psycopg.Connection, asof: date) -> dict[str, Optional[dict]]:
+    """ticker → 당일 뉴스 분석 dict. 없으면 None."""
+    out: dict[str, Optional[dict]] = {t: None for t in tickers}
+    if not tickers:
+        return out
+    sql = """
+        SELECT ticker, sentiment, sentiment_score, summary_md, based_on
+        FROM news_analysis
+        WHERE ticker = ANY(%s) AND asof = %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (tickers, asof))
+        for r in cur.fetchall():
+            out[r["ticker"]] = dict(r)
+    return out
+
+
+def _bulk_quant(tickers: list[str], conn: psycopg.Connection, asof: date) -> dict[str, Optional[dict]]:
+    """ticker → 당일 퀀트 점수 dict. 없으면 None."""
+    out: dict[str, Optional[dict]] = {t: None for t in tickers}
+    if not tickers:
+        return out
+    sql = """
+        SELECT ticker, momentum, value, quality, growth, sentiment, composite, flags
+        FROM quant_scores
+        WHERE ticker = ANY(%s) AND asof = %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (tickers, asof))
+        for r in cur.fetchall():
+            out[r["ticker"]] = dict(r)
+    return out
+
+
+# ──────────────────────────────────────────────────────────────
 # 레코드 조립 (순수 함수)
 # ──────────────────────────────────────────────────────────────
 
@@ -313,34 +495,51 @@ def assemble_daily(
 ) -> list[StockDailyRecord]:
     """
     활성 유니버스 전체 레코드 조립.
-    종목 단위 try/except — 한 종목 실패가 전체를 막지 않음.
+
+    Bulk 전략: 종목별 루프 쿼리(N×8) 대신 테이블당 1쿼리(총 8쿼리)로 전체 유니버스를
+    한 번에 읽고 Python에서 ticker 기준 조인. 연결 점유 시간을 분 → 초로 단축하여
+    Supabase Pooler idle timeout(연결 끊김 → "the connection is closed") 회피.
+    조립(_build_record)은 메모리상 dict로만 수행 — DB 미접근, 종목 단위 try/except 격리.
 
     ⚠️ 반환값은 참고용이며 투자 자문이 아닙니다.
     """
     asof = asof or date.today()
     watchlist = _q_watchlist(conn)
-    logger.info("assemble_daily: asof=%s 유니버스 %d종목", asof, len(watchlist))
+    tickers = [w["ticker"] for w in watchlist]
+    logger.info("assemble_daily: asof=%s 유니버스 %d종목 (bulk)", asof, len(tickers))
+    if not tickers:
+        return []
 
+    # ── 테이블별 bulk 조회 (연결은 여기서만 사용) ──────────────
+    prices = _bulk_prices(tickers, conn, asof)
+    indicators = _bulk_indicators(tickers, conn, asof)
+    fundamentals = _bulk_fundamentals(tickers, conn)
+    valuations = _bulk_valuation(tickers, conn)
+    analysts = _bulk_analyst(tickers, conn)
+    news = _bulk_news(tickers, conn, asof)
+    quants = _bulk_quant(tickers, conn, asof)
+
+    # ── 메모리상 조인 (DB 미접근) ─────────────────────────────
     results: list[StockDailyRecord] = []
     for wl in watchlist:
         ticker = wl["ticker"]
         try:
             record = _build_record(
                 wl=wl,
-                price=_q_price_chg(ticker, conn, asof),
-                ind=_q_indicators(ticker, conn, asof),
-                fund=_q_fundamentals(ticker, conn),
-                val=_q_valuation(ticker, conn),
-                ana=_q_analyst(ticker, conn),
-                news=_q_news(ticker, conn, asof),
-                quant=_q_quant(ticker, conn, asof),
+                price=prices.get(ticker),
+                ind=indicators.get(ticker),
+                fund=fundamentals.get(ticker, {}),
+                val=valuations.get(ticker),
+                ana=analysts.get(ticker),
+                news=news.get(ticker),
+                quant=quants.get(ticker),
             )
             results.append(record)
         except Exception as exc:
             logger.error("%s: 조립 실패 — %s", ticker, exc, exc_info=True)
             # 실패 종목 스킵, 다음 종목 계속
 
-    logger.info("assemble_daily: %d/%d 종목 조립 완료", len(results), len(watchlist))
+    logger.info("assemble_daily: %d/%d 종목 조립 완료", len(results), len(tickers))
     return results
 
 
