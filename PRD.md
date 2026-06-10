@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v1.1 |
+| 버전 | v1.2 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -426,6 +426,11 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 4. **대화형 Q&A(Hermes)**: "네이버 왜 빠졌어?", "내 포트 중 밸류 점수 낮은 거?" → DB+메모리로 답변.
 5. **백테스트(P3)**: 퀀트 점수 상위 N 종목의 과거 성과 검증(KIS backtester 또는 자체).
 6. **리포트 뷰어 연계**: 기존 Apps Script 모달/`리포트DB`를 DB의 `report_url` 컬럼과 연동해 유지.
+7. **대시보드 (Streamlit, `dashboard/app.py`)**: 텔레그램 브리핑을 보완하는 시각 표시 계층.
+   - **목적**: 관심종목 퀀트 점수·시장 상황·뉴스 감성을 한 화면에서 탐색(표 정렬·필터·종목 드릴다운). 브리핑이 "푸시 요약"이라면 대시보드는 "풀(pull) 탐색".
+   - **데이터 소스**: `assemble_daily(conn)`(§5.2 레코드) + `market_daily` + `prices_daily`(드릴다운 차트). **읽기 전용** — DB에 쓰지 않는다.
+   - **표시 원칙**: composite·팩터·플래그 등 **점수와 사실만**. 매수/매도 표현 금지, 하단 면책 고정. 결측은 "—"/"필터제외"로(N/A 금지).
+   - **로컬 우선**: `streamlit run dashboard/app.py`. 접속정보는 `DB_*` 환경변수 또는 `.streamlit/secrets.toml`. 배포는 추후(공개 배포 시 DB 비밀번호·보유종목 등 개인정보 노출 주의).
 
 ---
 
@@ -523,10 +528,18 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [ ] 검수: 스키마 준수·증분 처리·토큰 사용량 → **PM**
 
 ### Phase 3 — 전달 & 확장
-- [ ] Hermes 브리핑 스킬 + 텔레그램 발송(F5) → **Claude Code/Hermes**
-- [ ] 대화형 Q&A, 실적 캘린더, 리스크 요약(F6) → **Hermes/Claude Code**
-- [ ] Sheets 미러 + 뷰어 연계 → **Claude Code**
+- [x] `run_pipeline.py` + `send_telegram.py` + `auto_run.yml`(06:00 KST) — 일일 실행·브리핑(Python 템플릿)
+- [x] **대시보드** `dashboard/app.py`(Streamlit, F6-7) — 표·필터·드릴다운, 로컬 우선
+- [x] `backfill.py`(가격 2년치) + `recompute.py`(지표·퀀트 재계산) + `recompute.yml`(수동 트리거)
+- [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
+- [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [ ] (P3) 백테스트 → **Claude Code**
+
+### 안정화 (운영 중 발견·수정)
+- [x] **Decimal/DB 경계 버그**: psycopg3 NUMERIC→Decimal이 float·np.log·나눗셈에 섞여 indicators/quant 0건 → `db.get_conn` float 로더 + 읽기 경계 방어 캐스팅으로 수정
+- [x] **저장 경로**: 단일 트랜잭션 1회 커밋 → 단계별 commit/rollback으로 전환(앞 단계 오류·연결 끊김이 저장 무효화하던 문제)
+- [x] **assemble 타임아웃**: 종목별 루프 쿼리 → 테이블별 bulk 쿼리(연결 점유 분→초)
+- [x] **KR DART**: `find_by_stock_code` 단일 Corp 인덱싱 버그 수정, 실패 시 None 유지 + `runs.errors` 기록
 
 ---
 
@@ -543,3 +556,4 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 *변경 이력:*
 - *v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
 - *v1.1 (2026-06-09) §F4 실제 구현 내용으로 전면 교체(레짐감지·사전필터·동적가중치·VCM·12-1M), §11 로드맵 Phase 1·2 완료 항목 표시 — PM(Claude).*
+- *v1.2 (2026-06-11) §F6에 대시보드(Streamlit) 추가, §11에 Decimal 경계 수정·대시보드·recompute·안정화 항목 반영 — PM(Claude).*

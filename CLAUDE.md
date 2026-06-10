@@ -35,7 +35,18 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── compute_quant.py    # 팩터 스코어링 (PRD §F4)
 │   ├── rules.py            # 알림 룰 엔진 (PRD §F6-1)
 │   ├── enrich_gemini.py    # Gemini 호출 래퍼 (스키마 검증 포함)
-│   └── assemble.py         # 종목 일일 레코드(PRD §5.2) 조립 뷰
+│   ├── assemble.py         # 종목 일일 레코드(PRD §5.2) 조립 뷰
+│   ├── run_pipeline.py     # 일일 파이프라인 실행기(수집→연산→LLM→조립)
+│   ├── send_telegram.py    # 아침 브리핑 텔레그램 발송
+│   ├── backfill.py         # 가격 2년치 백필(1회용)
+│   └── recompute.py        # prices_daily 기준 indicators→quant 재계산(1회용)
+├── dashboard/
+│   ├── app.py              # Streamlit 대시보드 (로컬 우선)
+│   └── README.md           # 로컬 실행법·secrets 설정
+├── .github/
+│   └── workflows/
+│       ├── auto_run.yml    # 06:00 KST 파이프라인 + 텔레그램
+│       └── recompute.yml   # 수동 지표·퀀트 재계산
 ├── n8n/
 │   └── workflows/*.json    # 워크플로 export
 ├── hermes/
@@ -50,6 +61,8 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - 재시도: 네트워크/LLM 호출은 지수 백오프 3회. 실패 시 예외를 삼키지 말고 호출부에서 종목 단위로 격리.
 - 모델명·가중치·임계값 등은 코드 상단 상수 또는 `config.yaml`로 추출(하드코딩 금지). 예: `GEMINI_BULK_MODEL`, `GEMINI_SYNTH_MODEL`, `QUANT_WEIGHTS`, `RSI_OVERHEAT=70`.
 - 로깅: 표준 `logging`. 실행 시작/종료/오류를 `runs`에 적재.
+- **DB NUMERIC은 읽기 경계에서 float로 변환(Decimal 혼용 금지)**: psycopg3는 NUMERIC을 `decimal.Decimal`로 반환하는데, Decimal이 `float`·`np.log`·나눗셈(`float / Decimal`)에 섞이면 `TypeError`로 계산이 죽는다(indicators/quant 0건 사고의 근본 원인). `db.get_conn`이 NUMERIC→float 로더를 등록하지만, 모든 DB 읽기 경계(쿼리 결과 dict, DataFrame 컬럼)에서 `float()`/`pd.to_numeric`로 한 번 더 방어한다. 특히 `np.log`·나눗셈 직전.
+- **DB 쓰기는 단계별 커밋**: 한 트랜잭션에 장시간(네트워크 I/O 포함) 묶지 말 것. 각 저장 단계 직후 `conn.commit()`, 예외 시 `conn.rollback()`으로 회복(앞 단계 오류가 뒤 단계 저장을 무효화하지 않게). Supabase Pooler는 유휴 연결을 끊으므로 긴 단일 트랜잭션은 커밋 유실 위험.
 
 ## 4. 우선 작업 (Phase 순서대로, 각 PR 단위)
 > PR마다 ‘무엇을/왜/검증방법’을 PR 본문에 적고 PM 검수 요청.
