@@ -75,7 +75,12 @@ def compute_indicators(ticker: str, price_df: pd.DataFrame) -> list[IndicatorDai
         return []
 
     df = price_df.sort_index().copy()
-    close: pd.Series = df["close"].astype(float)
+    # DB NUMERIC이 Decimal로 새어들 수 있으므로 읽기 경계에서 float로 강제
+    # (Decimal/float 혼용 시 pandas-ta·나눗셈에서 TypeError 발생)
+    df["close"] = df["close"].astype(float)
+    if "volume" in df.columns:
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    close: pd.Series = df["close"]
 
     # ── SMA ──────────────────────────────────────────────────
     df["sma20"] = ta.sma(close, length=SMA_SHORT)
