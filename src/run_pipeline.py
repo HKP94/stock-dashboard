@@ -97,9 +97,11 @@ def _step_market(conn: psycopg.Connection, errors: list) -> None:
         market_row = result.get("market")
         if market_row:
             upsert_market_daily(conn, market_row)
-            logger.info("Step 1 완료: market_daily 저장")
+            conn.commit()
+            logger.info("Step 1 완료: market_daily upsert 1건 (commit)")
         errors.extend(result.get("errors", []))
     except Exception as exc:
+        conn.rollback()  # abort된 트랜잭션 회복 → 다음 단계 보호
         logger.error("Step 1 실패: %s", exc, exc_info=True)
         errors.append(_err("market", exc))
 
@@ -110,15 +112,20 @@ def _step_ingest_kr(conn: psycopg.Connection, kr_tickers: list[str], errors: lis
         return
     try:
         result = run_kr_ingest(kr_tickers)
+        n_price = n_fund = 0
         for price_rows in result.get("prices", {}).values():
             if price_rows:
                 upsert_price_daily(conn, price_rows)
+                n_price += len(price_rows)
         for fund_rows in result.get("fundamentals", {}).values():
             if fund_rows:
                 upsert_fundamentals(conn, fund_rows)
+                n_fund += len(fund_rows)
+        conn.commit()
         errors.extend(result.get("errors", []))
-        logger.info("Step 2 완료")
+        logger.info("Step 2 완료: prices upsert %d건 / fundamentals upsert %d건 (commit)", n_price, n_fund)
     except Exception as exc:
+        conn.rollback()
         logger.error("Step 2 실패: %s", exc, exc_info=True)
         errors.append(_err("ingest_kr", exc))
 
@@ -129,21 +136,31 @@ def _step_ingest_us(conn: psycopg.Connection, us_tickers: list[str], errors: lis
         return
     try:
         result = run_us_ingest(us_tickers)
+        n_price = n_fund = n_val = n_ana = 0
         for price_rows in result.get("prices", {}).values():
             if price_rows:
                 upsert_price_daily(conn, price_rows)
+                n_price += len(price_rows)
         for fund_rows in result.get("fundamentals", {}).values():
             if fund_rows:
                 upsert_fundamentals(conn, fund_rows)
+                n_fund += len(fund_rows)
         for val_row in result.get("valuations", {}).values():
             if val_row:
                 upsert_valuation(conn, [val_row])
+                n_val += 1
         for ana_row in result.get("analysts", {}).values():
             if ana_row:
                 upsert_analyst(conn, [ana_row])
+                n_ana += 1
+        conn.commit()
         errors.extend(result.get("errors", []))
-        logger.info("Step 3 완료")
+        logger.info(
+            "Step 3 완료: prices %d / fundamentals %d / valuation %d / analyst %d upsert (commit)",
+            n_price, n_fund, n_val, n_ana,
+        )
     except Exception as exc:
+        conn.rollback()
         logger.error("Step 3 실패: %s", exc, exc_info=True)
         errors.append(_err("ingest_us", exc))
 
@@ -158,28 +175,33 @@ def _step_ingest_news(conn: psycopg.Connection, all_tickers: list[str], errors: 
         for news_rows in result.get("news", {}).values():
             if news_rows:
                 new_total += insert_news_raw(conn, news_rows)
+        conn.commit()
         errors.extend(result.get("errors", []))
-        logger.info("Step 4 완료: 신규 %d건 삽입", new_total)
+        logger.info("Step 4 완료: news_raw 신규 %d건 삽입 (commit)", new_total)
     except Exception as exc:
+        conn.rollback()
         logger.error("Step 4 실패: %s", exc, exc_info=True)
         errors.append(_err("ingest_news", exc))
 
 
 def _step_compute_indicators(conn: psycopg.Connection, all_tickers: list[str], errors: list) -> None:
     logger.info("Step 5: 기술적 지표 계산 (%d종목)", len(all_tickers))
-    ok, fail = 0, 0
+    ok, fail, n_rows = 0, 0, 0
     for ticker in all_tickers:
         try:
             price_df = _load_price_df(ticker, conn)
             rows = compute_indicators(ticker, price_df)
             if rows:
                 upsert_indicators_daily(conn, rows)
+                conn.commit()  # 종목별 커밋 → 한 종목 실패가 앞 종목 저장을 무효화하지 않음
                 ok += 1
+                n_rows += len(rows)
         except Exception as exc:
-            logger.warning("%s: 지표 계산 실패 — %s", ticker, exc)
+            conn.rollback()  # abort 회복 → 다음 종목 보호
+            logger.warning("%s: 지표 계산/저장 실패 — %s", ticker, exc)
             errors.append(_err(f"indicators:{ticker}", exc))
             fail += 1
-    logger.info("Step 5 완료: %d성공 %d실패", ok, fail)
+    logger.info("Step 5 완료: indicators_daily upsert %d행 / %d종목 성공 / %d실패", n_rows, ok, fail)
 
 
 def _step_compute_quant(conn: psycopg.Connection, all_tickers: list[str], errors: list) -> None:
@@ -188,10 +210,13 @@ def _step_compute_quant(conn: psycopg.Connection, all_tickers: list[str], errors
         return
     try:
         rows = compute_quant_universe(all_tickers, conn)
-        upsert_quant_scores(conn, rows)
+        if rows:
+            upsert_quant_scores(conn, rows)
+            conn.commit()
         filtered = sum(1 for r in rows if r.composite is None)
-        logger.info("Step 6 완료: %d행 저장 (필터 제외 %d)", len(rows), filtered)
+        logger.info("Step 6 완료: quant_scores upsert %d행 (필터 제외 %d) (commit)", len(rows), filtered)
     except Exception as exc:
+        conn.rollback()
         logger.error("Step 6 실패: %s", exc, exc_info=True)
         errors.append(_err("compute_quant", exc))
 
@@ -200,16 +225,20 @@ def _step_enrich_gemini(conn: psycopg.Connection, errors: list) -> None:
     logger.info("Step 7: Gemini 뉴스 요약 + 시황 종합")
     try:
         enriched, news_errs = enrich_news_batch(conn)
+        conn.commit()
         errors.extend(news_errs)
-        logger.info("Step 7a 완료: 뉴스 요약 %d종목", enriched)
+        logger.info("Step 7a 완료: news_analysis upsert %d종목 (commit)", enriched)
     except Exception as exc:
+        conn.rollback()
         logger.error("Step 7a(news_batch) 실패: %s", exc, exc_info=True)
         errors.append(_err("enrich_news", exc))
 
     try:
         ok = enrich_market_summary(conn)
-        logger.info("Step 7b 완료: 시황 종합 %s", "저장" if ok else "스킵")
+        conn.commit()
+        logger.info("Step 7b 완료: 시황 종합 %s (commit)", "저장" if ok else "스킵")
     except Exception as exc:
+        conn.rollback()
         logger.error("Step 7b(market_summary) 실패: %s", exc, exc_info=True)
         errors.append(_err("enrich_market", exc))
 

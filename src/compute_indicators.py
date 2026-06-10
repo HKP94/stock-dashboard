@@ -139,3 +139,80 @@ def latest_indicators(
     """최신 1행만 반환 (n8n 단일 종목 연산 용)."""
     rows = compute_indicators(ticker, price_df)
     return rows[-1] if rows else None
+
+
+# ──────────────────────────────────────────────────────────────
+# DB 엔트리포인트: prices_daily 전체 → 지표 계산 → indicators_daily upsert
+#   db 의존은 함수 내부에서 지연 임포트(순수 계산 단위 테스트 격리 유지)
+# ──────────────────────────────────────────────────────────────
+
+def _load_price_df_from_db(ticker: str, conn) -> pd.DataFrame:
+    """prices_daily → DatetimeIndex DataFrame(close, volume)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT date, close, volume FROM prices_daily WHERE ticker = %s ORDER BY date ASC",
+            (ticker,),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["close", "volume"])
+    df = pd.DataFrame([dict(r) for r in rows])
+    df["date"] = pd.to_datetime(df["date"])
+    return df.set_index("date")
+
+
+def recompute_indicators_to_db(conn, tickers: Optional[list[str]] = None) -> int:
+    """
+    prices_daily 기준으로 지표를 계산해 indicators_daily에 upsert(+종목별 commit).
+    외부 시세 재수집 없이 DB 데이터만 사용.
+
+    tickers=None이면 prices_daily에 존재하는 모든 종목 대상.
+    반환: 저장(1행 이상 upsert)된 종목 수.
+    """
+    from src.db import upsert_indicators_daily  # 지연 임포트
+
+    if tickers is None:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT ticker FROM prices_daily ORDER BY ticker")
+            tickers = [r["ticker"] for r in cur.fetchall()]
+
+    saved = 0
+    for ticker in tickers:
+        try:
+            df = _load_price_df_from_db(ticker, conn)
+            rows = compute_indicators(ticker, df)
+            if rows:
+                upsert_indicators_daily(conn, rows)
+                conn.commit()  # 종목별 커밋 → 부분 실패 격리
+                saved += 1
+                logger.info("%s: indicators_daily upsert %d행 (commit)", ticker, len(rows))
+            else:
+                logger.warning("%s: 지표 0행 (데이터 부족) — 스킵", ticker)
+        except Exception as exc:
+            conn.rollback()
+            logger.error("%s: 지표 계산/저장 실패 — %s", ticker, exc, exc_info=True)
+
+    logger.info("recompute_indicators_to_db: %d/%d 종목 저장", saved, len(tickers))
+    return saved
+
+
+if __name__ == "__main__":
+    from src.db import get_conn, log_run_finish, log_run_start
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    logger.info("=== compute_indicators 단독 재계산 시작 ===")
+    with get_conn() as conn:
+        run_id = log_run_start(conn, "recompute_indicators")
+        try:
+            n = recompute_indicators_to_db(conn)
+            log_run_finish(conn, run_id, status="success" if n else "partial", errors=[])
+            logger.info("=== 완료: %d종목 indicators 저장 ===", n)
+        except Exception as exc:
+            conn.rollback()
+            log_run_finish(conn, run_id, status="failed", errors=[{"error": str(exc)}])
+            raise
+
+    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
