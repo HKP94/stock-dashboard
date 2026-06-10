@@ -538,9 +538,14 @@ def compute_quant_universe(
     if not tickers:
         return []
 
-    # 레짐
-    market_df = _fetch_market_history()
-    regime = compute_regime(market_df)
+    # 레짐 — yfinance 실패해도 전체가 멈추지 않게 neutral 폴백
+    try:
+        market_df = _fetch_market_history()
+        regime = compute_regime(market_df)
+    except Exception as exc:
+        logger.warning("레짐 감지 실패(%s) → 'neutral' 폴백", exc)
+        market_df = pd.DataFrame()
+        regime = "neutral"
     weights = _REGIME_WEIGHTS[regime]
     logger.info("레짐=%s 가중치=%s", regime, weights)
 

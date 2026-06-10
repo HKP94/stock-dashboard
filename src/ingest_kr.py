@@ -331,7 +331,17 @@ def run_kr_ingest(tickers: list[str]) -> dict:
             })
 
         try:
-            fundamentals[ticker] = fetch_kr_fundamentals(ticker)
+            f_rows = fetch_kr_fundamentals(ticker)
+            fundamentals[ticker] = f_rows
+            # fetch_kr_fundamentals는 DART 실패를 내부에서 삼키고 []를 반환한다.
+            # 0건이면 원인이 runs.errors에 드러나도록 비치명적 노트를 남긴다(값은 None 유지).
+            if not f_rows:
+                logger.warning("%s: DART 재무 0건 — runs.errors에 기록", ticker)
+                errors.append({
+                    "ticker": ticker, "step": "fundamentals_empty",
+                    "error": "DART 재무 0건 (조회 실패 또는 미제공) — 값 None 유지",
+                    "ts": datetime.utcnow().isoformat(),
+                })
         except Exception as exc:
             logger.error("%s: 재무 수집 실패: %s", ticker, exc, exc_info=True)
             errors.append({
