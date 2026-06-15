@@ -135,8 +135,9 @@ class TestNeutralFallback:
         assert result.confidence == "하"
 
     def test_summary_indicates_failure(self):
+        # PR-3: '분석 실패'(빈약) 대신 안내 문구 — 보류/참고 안내를 포함
         result = _neutral_news_fallback()
-        assert "분석 실패" in result.summary_md
+        assert "보류" in result.summary_md or "참고" in result.summary_md
 
     def test_key_points_not_empty(self):
         result = _neutral_news_fallback()

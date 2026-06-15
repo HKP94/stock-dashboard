@@ -51,31 +51,45 @@ MARKET_SYMBOLS: dict[str, str] = {
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def _fetch_close(symbol: str) -> Optional[float]:
-    """yfinance로 심볼의 최신 종가 반환. 데이터 없으면 None."""
-    df = yf.Ticker(symbol).history(period="5d")
+def _fetch_close_and_change(symbol: str) -> tuple[Optional[float], Optional[float]]:
+    """
+    yfinance로 심볼의 최신 종가 + 전일(직전 거래일) 대비 등락률(%)을 반환.
+    PR-4: 거래일 기준 실제 직전 종가와 비교 → 주말 carry-over로 인한 0.00% 버그 방지.
+    데이터 없으면 (None, None).
+    """
+    df = yf.Ticker(symbol).history(period="1mo")
     if df.empty:
-        return None
-    close_series = df["Close"].dropna()
-    if close_series.empty:
-        return None
-    return float(close_series.iloc[-1])
+        return None, None
+    closes = df["Close"].dropna()
+    if closes.empty:
+        return None, None
+    last = float(closes.iloc[-1])
+    change = None
+    if len(closes) >= 2:
+        prev = float(closes.iloc[-2])
+        if prev != 0:
+            change = round((last - prev) / prev * 100, 2)
+    return last, change
 
 
 def fetch_market_daily(asof: Optional[date] = None) -> MarketDailyRow:
     """
     7개 시장 심볼 수집 → MarketDailyRow.
     심볼 단위 격리: 실패한 심볼의 필드만 None, 나머지는 정상 반환.
-    summary_md / payload 는 None / {} (Gemini Phase 2에서 채움).
+    PR-4: payload.changes={field: pct}에 전일대비 등락률 저장(거래일 기준).
+    summary_*_md 는 None (Gemini Phase 2에서 채움).
     """
     asof = asof or date.today()
     fields: dict[str, Optional[float]] = {v: None for v in MARKET_SYMBOLS.values()}
+    changes: dict[str, float] = {}
 
     for symbol, field in MARKET_SYMBOLS.items():
         try:
-            val = _fetch_close(symbol)
+            val, chg = _fetch_close_and_change(symbol)
             fields[field] = val
-            logger.info("시장 %s (%s) = %s", symbol, field, val)
+            if chg is not None:
+                changes[field] = chg
+            logger.info("시장 %s (%s) = %s (chg=%s%%)", symbol, field, val, chg)
         except Exception as exc:
             logger.warning("시장 심볼 %s 수집 실패 (필드=%s): %s", symbol, field, exc)
             # 해당 필드는 None 유지 — 다른 심볼에 영향 없음
@@ -90,11 +104,11 @@ def fetch_market_daily(asof: Optional[date] = None) -> MarketDailyRow:
         usdkrw=fields["usdkrw"],
         ust10y=fields["ust10y"],
         summary_md=None,
-        payload={},
+        payload={"changes": changes},
     )
     logger.info(
-        "market_daily asof=%s  kospi=%s sp500=%s vix=%s usdkrw=%s",
-        asof, row.kospi, row.sp500, row.vix, row.usdkrw,
+        "market_daily asof=%s  kospi=%s sp500=%s vix=%s usdkrw=%s changes=%d개",
+        asof, row.kospi, row.sp500, row.vix, row.usdkrw, len(changes),
     )
     return row
 

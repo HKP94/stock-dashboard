@@ -180,17 +180,22 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshot (
 -- 시장 지표 (F3 — 지수/VIX/환율/금리 + Gemini 시황)
 -- =============================================================
 CREATE TABLE IF NOT EXISTS market_daily (
-    asof       DATE  PRIMARY KEY,
-    kospi      NUMERIC,
-    kosdaq     NUMERIC,
-    sp500      NUMERIC,
-    nasdaq     NUMERIC,
-    vix        NUMERIC,
-    usdkrw     NUMERIC,
-    ust10y     NUMERIC,
-    summary_md TEXT,
-    payload    JSONB NOT NULL DEFAULT '{}'
+    asof          DATE  PRIMARY KEY,
+    kospi         NUMERIC,
+    kosdaq        NUMERIC,
+    sp500         NUMERIC,
+    nasdaq        NUMERIC,
+    vix           NUMERIC,
+    usdkrw        NUMERIC,
+    ust10y        NUMERIC,
+    summary_md    TEXT,             -- (레거시) 통합 시황
+    summary_kr_md TEXT,             -- PR-4: 한국 시장 전용 시황 (Gemini)
+    summary_us_md TEXT,             -- PR-4: 미국 시장 전용 시황 (Gemini)
+    payload       JSONB NOT NULL DEFAULT '{}'  -- payload.changes={field: pct} (전일대비 등락)
 );
+-- PR-4: 기존 테이블에 컬럼 추가 (재실행 안전)
+ALTER TABLE market_daily ADD COLUMN IF NOT EXISTS summary_kr_md TEXT;
+ALTER TABLE market_daily ADD COLUMN IF NOT EXISTS summary_us_md TEXT;
 
 -- =============================================================
 -- 실행 로그 (관측성 — 모든 파이프라인 실행 기록)
@@ -205,3 +210,65 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_kind_started ON runs (kind, started_at DESC);
+
+-- =============================================================
+-- 보유종목 입력 (F1 — 수동 입력 기반 평가 계산용)
+-- PR-2: portfolio_holdings × prices_daily → portfolio / portfolio_snapshot
+-- =============================================================
+CREATE TABLE IF NOT EXISTS portfolio_holdings (
+    ticker      TEXT        PRIMARY KEY,
+    qty         NUMERIC     NOT NULL CHECK (qty >= 0),
+    avg_price   NUMERIC     NOT NULL CHECK (avg_price >= 0),
+    currency    TEXT        NOT NULL DEFAULT 'KRW',
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =============================================================
+-- 리서치 항목 (F6 — 유튜브·기사·리포트·퀀트·메모 수동 입력)
+-- PR-4
+-- =============================================================
+CREATE TABLE IF NOT EXISTS research_items (
+    id          BIGSERIAL   PRIMARY KEY,
+    ticker      TEXT        NOT NULL,
+    item_type   TEXT        NOT NULL CHECK (item_type IN ('youtube', 'article', 'report', 'quant', 'memo')),
+    title       TEXT        NOT NULL,
+    url         TEXT,
+    note        TEXT,
+    added_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_items_ticker ON research_items (ticker, added_at DESC);
+
+-- =============================================================
+-- 투자 판단 메모 (F6 — 수동 입력, 종목별 1행)
+-- PR-3: 로컬 API PUT /api/notes/{ticker}
+-- =============================================================
+CREATE TABLE IF NOT EXISTS stock_notes (
+    ticker          TEXT        PRIMARY KEY,
+    horizon         TEXT        CHECK (horizon IN ('short', 'long', 'watch')),
+    attractiveness  INT         CHECK (attractiveness BETWEEN 1 AND 5),
+    thesis          TEXT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =============================================================
+-- 백테스트 / 회고 결과 (PR-5)
+-- metric_type: 'true_backtest'(과거 시점 데이터만, 미래정보 없음)
+--            | 'retrospective'(오늘 스냅샷 기반 회고 — 선정시점편향 주의, 백테스트 아님)
+-- =============================================================
+CREATE TABLE IF NOT EXISTS backtest_results (
+    id            BIGSERIAL   PRIMARY KEY,
+    strategy_name TEXT        NOT NULL,
+    metric_type   TEXT        NOT NULL CHECK (metric_type IN ('true_backtest', 'retrospective')),
+    computed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    window_start  DATE,
+    window_end    DATE,
+    cum_return    NUMERIC,
+    cagr          NUMERIC,
+    mdd           NUMERIC,
+    vol           NUMERIC,
+    sharpe        NUMERIC,
+    payload       JSONB       NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_strategy ON backtest_results (strategy_name, computed_at DESC);

@@ -38,14 +38,37 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── assemble.py         # 종목 일일 레코드(PRD §5.2) 조립 뷰
 │   ├── run_pipeline.py     # 일일 파이프라인 실행기(수집→연산→LLM→조립)
 │   ├── send_telegram.py    # 아침 브리핑 텔레그램 발송
-│   ├── backfill.py         # 가격 2년치 백필(1회용)
-│   └── recompute.py        # prices_daily 기준 indicators→quant 재계산(1회용)
+│   ├── backfill.py         # 누락/부족 종목 자동탐지 + 2년치 가격 백필 + 지표·퀀트 재계산
+│   ├── news_refresh.py     # 가벼운 뉴스 리프레시(수집+요약+export, 18:00 KST 잡)
+│   ├── recompute.py        # prices_daily 기준 indicators→quant 재계산(1회용)
+│   ├── compute_portfolio.py  # portfolio_holdings × prices_daily → portfolio upsert (F1, USD→KRW 환산)
+│   ├── backtest.py           # 모멘텀 진짜 백테스트 + 팩터 회고 → backtest_results (PRD §F7)
+│   ├── local_api.py          # FastAPI 로컬 쓰기 API (127.0.0.1:8765, CORS=5173만 허용)
+│   └── export_dashboard_data.py  # DB → dashboard-web/src/data.json (1회용/CI)
 ├── dashboard/
-│   ├── app.py              # Streamlit 대시보드 (로컬 우선)
-│   └── README.md           # 로컬 실행법·secrets 설정
+│   ├── app.py              # Streamlit 대시보드 — 레거시, 유지보수 안 함
+│   ├── watchlist_admin.py  # watchlist 관리 도구 (SQL 없이 추가·비활성·보유토글)
+│   └── README.md           # 레거시 설명 + watchlist_admin 실행법
+├── dashboard-web/          # React 대시보드 (현행 메인)
+│   ├── src/
+│   │   ├── main.jsx        # 진입점
+│   │   ├── App.jsx         # 앱 셸 + 탭 라우터
+│   │   ├── ui.jsx          # 공유 UI 컴포넌트 + SVG 차트
+│   │   ├── tabsA.jsx       # Overview·StockDetail·News
+│   │   ├── tabsB.jsx       # Screener·Market·Research
+│   │   ├── tabsC.jsx       # Portfolio (로컬 API 연동)
+│   │   ├── tabsD.jsx       # Strategy 전략 비교 (백테스트 recharts + 회고)
+│   │   ├── data.js         # data.json import (없으면 mock fallback)
+│   │   ├── data.json       # export_dashboard_data.py 생성 (gitignore 권장)
+│   │   ├── index.css       # 전역 스타일 + Pretendard 폰트
+│   │   └── PretendardVariable.ttf
+│   ├── index.html
+│   ├── vite.config.js
+│   └── package.json
 ├── .github/
 │   └── workflows/
-│       ├── auto_run.yml    # 06:00 KST 파이프라인 + 텔레그램
+│       ├── auto_run.yml    # 06:00 KST 전체 파이프라인 + 텔레그램
+│       ├── news_refresh.yml # 18:00 KST 뉴스 수집+요약+export (가벼운 잡)
 │       └── recompute.yml   # 수동 지표·퀀트 재계산
 ├── n8n/
 │   └── workflows/*.json    # 워크플로 export
@@ -55,7 +78,11 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
     └── test_*.py
 ```
 
-## 3. 코딩 컨벤션
+## 3. 코딩 컨벤션 & PR 표준 절차
+- **PR마다 PRD.md §11 로드맵과 변경 이력을 갱신한다** (PR 본문에 '무엇을/왜/어떻게 검증'과 함께). 이 규칙은 모든 PR에 상시 적용된다.
+- **백테스트 vs 회고 절대 구분 (PRD §F7)**: 모멘텀만 진짜 백테스트(과거 시점 데이터만). 가치·퀄리티·성장·복합은 오늘 스냅샷뿐이라 "회고"(선정시점편향) — 화면·코드에서 절대 혼동 금지, 회고는 "백테스트 아님" 경고 필수.
+- **시장 뉴스 pseudo-ticker**: 시장 시황 뉴스는 `_MARKET_KR`/`_MARKET_US` ticker로 `news_raw`에 저장. 이들은 watchlist에 없으므로 종목 카드/enrich 종목요약 대상에서 제외(`enrich_news_batch`는 watchlist 종목만 처리).
+- **시장 등락률**: `ingest_market`이 거래일 기준 전일대비 등락을 `market_daily.payload.changes`에 저장(주말 carry-over 0.00% 버그 방지). export는 changes 우선, 폴백은 상대오차 1e-5 초과 시만 인정.
 - Python 3.12, 타입힌트 필수, `pydantic` v2로 외부 데이터·LLM 출력 검증.
 - 모든 외부 수집 함수는 **순수 함수에 가깝게**: 입력(ticker 등) → 표준화된 dict/모델 반환. DB 쓰기는 `db.py`로 분리.
 - 재시도: 네트워크/LLM 호출은 지수 백오프 3회. 실패 시 예외를 삼키지 말고 호출부에서 종목 단위로 격리.

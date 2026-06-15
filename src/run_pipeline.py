@@ -27,6 +27,7 @@ import pandas as pd
 import psycopg
 
 from src.assemble import assemble_daily
+from src.compute_portfolio import compute_portfolio
 from src.compute_indicators import compute_indicators
 from src.compute_quant import compute_quant_universe
 from src.db import (
@@ -170,7 +171,11 @@ def _step_ingest_news(conn: psycopg.Connection, all_tickers: list[str], errors: 
     if not all_tickers:
         return
     try:
-        result = run_news_ingest(all_tickers)
+        # PR-4: 회사명 맵(Google News 쿼리 품질) + 시장 뉴스(_MARKET_KR/_MARKET_US) 포함
+        with conn.cursor() as cur:
+            cur.execute("SELECT ticker, name FROM watchlist")
+            company_names = {r["ticker"]: r["name"] for r in cur.fetchall()}
+        result = run_news_ingest(all_tickers, company_names=company_names)
         new_total = 0
         for news_rows in result.get("news", {}).values():
             if news_rows:
@@ -243,6 +248,33 @@ def _step_enrich_gemini(conn: psycopg.Connection, errors: list) -> None:
         errors.append(_err("enrich_market", exc))
 
 
+def _step_compute_portfolio(conn: psycopg.Connection, errors: list) -> None:
+    """Step 9: 보유종목 평가 (portfolio_holdings → portfolio + portfolio_snapshot). 실패해도 파이프라인 계속."""
+    logger.info("Step 9: 보유종목 평가")
+    try:
+        result = compute_portfolio(conn)
+        logger.info("Step 9 완료: %d종목 평가 완료", result["n"])
+    except Exception as exc:
+        conn.rollback()
+        logger.warning("Step 9 실패(비치명적): %s", exc)
+        errors.append(_err("compute_portfolio", exc))
+
+
+def _step_backtest(conn: psycopg.Connection, errors: list) -> None:
+    """Step 10: 멀티전략 백테스트 + 회고. 실패해도 파이프라인 계속."""
+    logger.info("Step 10: 백테스트 + 회고")
+    try:
+        from src.backtest import run_backtest
+        result = run_backtest(conn)
+        logger.info("Step 10 완료: true=%s retro=%s",
+                    result.get("true_backtest", {}).get("ok"),
+                    result.get("retrospective", {}).get("ok"))
+    except Exception as exc:
+        conn.rollback()
+        logger.warning("Step 10 실패(비치명적): %s", exc)
+        errors.append(_err("backtest", exc))
+
+
 def _step_assemble(conn: psycopg.Connection, errors: list) -> list[StockDailyRecord]:
     logger.info("Step 8: 레코드 조립")
     try:
@@ -291,6 +323,8 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
             _step_compute_indicators(conn, all_tickers, errors)
             _step_compute_quant(conn, all_tickers, errors)
             _step_enrich_gemini(conn, errors)
+            _step_compute_portfolio(conn, errors)
+            _step_backtest(conn, errors)
             records = _step_assemble(conn, errors)
 
         except Exception as exc:

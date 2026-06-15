@@ -1,9 +1,26 @@
-# ATLAS 대시보드 (Streamlit)
+# ATLAS 대시보드 (Streamlit) — 레거시
 
-관심종목의 퀀트 점수·시장 상황·뉴스 감성을 한 화면에서 보는 **로컬 우선** 대시보드.
-DB(Postgres)에 적재된 데이터를 **읽기만** 한다(쓰기·주문 없음).
+> ⚠️ **메인 대시보드는 `dashboard-web/` (React/Vite)** 입니다.
+> `dashboard/app.py`는 레거시로, 유지보수하지 않습니다.
 
-> ⚠️ 본 화면은 정보·정량 분석 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다.
+> 투자 자문 아님 / 원금 손실 가능
+
+## 관리 도구: watchlist_admin.py
+
+SQL 없이 watchlist 테이블을 관리하는 **별도 관리 도구** (메인 React 대시보드와 독립 실행).
+
+```bash
+# 리포 루트에서 실행 (필요할 때만)
+streamlit run dashboard/watchlist_admin.py
+```
+
+기능:
+- 현재 watchlist 표시 (ticker/name/market/sector/is_holding/active)
+- 종목 추가 폼 (ticker·name·market·sector 입력 → INSERT)
+- `active` 토글 — 삭제 대신 비활성화 (이력 보존)
+- `is_holding` 토글
+
+접속 정보는 `.streamlit/secrets.toml` 또는 환경변수 `DB_*`를 사용합니다 (아래 참고).
 
 ## 화면 구성
 - **상단**: ATLAS 타이틀 + 날짜 + 레짐 배지(bull/neutral/bear) + 면책

@@ -380,27 +380,33 @@ def upsert_portfolio_snapshot(conn: psycopg.Connection, row: PortfolioSnapshotRo
 
 
 def upsert_market_daily(conn: psycopg.Connection, row: MarketDailyRow) -> None:
+    # PR-4: summary_kr_md/summary_us_md는 COALESCE로 기존 값 보존(시황 단계가 별도로 채우므로
+    # 지표 수집(ingest_market)이 시황을 NULL로 덮어쓰지 않게 한다).
     sql = """
         INSERT INTO market_daily
-            (asof, kospi, kosdaq, sp500, nasdaq, vix, usdkrw, ust10y, summary_md, payload)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            (asof, kospi, kosdaq, sp500, nasdaq, vix, usdkrw, ust10y,
+             summary_md, summary_kr_md, summary_us_md, payload)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
         ON CONFLICT (asof) DO UPDATE SET
-            kospi      = EXCLUDED.kospi,
-            kosdaq     = EXCLUDED.kosdaq,
-            sp500      = EXCLUDED.sp500,
-            nasdaq     = EXCLUDED.nasdaq,
-            vix        = EXCLUDED.vix,
-            usdkrw     = EXCLUDED.usdkrw,
-            ust10y     = EXCLUDED.ust10y,
-            summary_md = EXCLUDED.summary_md,
-            payload    = EXCLUDED.payload
+            kospi         = EXCLUDED.kospi,
+            kosdaq        = EXCLUDED.kosdaq,
+            sp500         = EXCLUDED.sp500,
+            nasdaq        = EXCLUDED.nasdaq,
+            vix           = EXCLUDED.vix,
+            usdkrw        = EXCLUDED.usdkrw,
+            ust10y        = EXCLUDED.ust10y,
+            summary_md    = COALESCE(EXCLUDED.summary_md,    market_daily.summary_md),
+            summary_kr_md = COALESCE(EXCLUDED.summary_kr_md, market_daily.summary_kr_md),
+            summary_us_md = COALESCE(EXCLUDED.summary_us_md, market_daily.summary_us_md),
+            payload       = EXCLUDED.payload
     """
     with conn.cursor() as cur:
         cur.execute(
             sql,
             (
                 row.asof, row.kospi, row.kosdaq, row.sp500, row.nasdaq,
-                row.vix, row.usdkrw, row.ust10y, row.summary_md, _to_json(row.payload),
+                row.vix, row.usdkrw, row.ust10y,
+                row.summary_md, row.summary_kr_md, row.summary_us_md, _to_json(row.payload),
             ),
         )
     logger.debug("upsert_market_daily: asof=%s", row.asof)

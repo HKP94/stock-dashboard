@@ -158,7 +158,20 @@ def _parse_dart_col_date(col) -> Optional[date]:
         except (TypeError, ValueError):
             pass
 
+    # MultiIndex 컬럼 튜플이면 level0(기간 문자열)을 쓴다. 예: ('20240101-20241231', ('연결재무제표',))
+    if isinstance(col, tuple) and col:
+        return _parse_dart_col_date(col[0])
+
     s = str(col).strip()
+
+    # 기간 범위 'YYYYMMDD-YYYYMMDD' → 종료일 (extract_fs 데이터 컬럼 형식)
+    if "-" in s:
+        last = s.split("-")[-1].strip()
+        if len(last) == 8 and last.isdigit():
+            try:
+                return date(int(last[:4]), int(last[4:6]), int(last[6:8]))
+            except ValueError:
+                pass
 
     # YYYYMMDD
     if len(s) == 8 and s.isdigit():
@@ -177,32 +190,41 @@ def _parse_dart_col_date(col) -> Optional[date]:
     return None
 
 
+def _find_label_col(df: pd.DataFrame):
+    """extract_fs DataFrame에서 계정명(한국어) 메타 컬럼을 찾는다.
+
+    extract_fs는 계정명을 index가 아니라 'label_ko' 컬럼에 담는다(MultiIndex면
+    레벨 마지막이 'label_ko'). 못 찾으면 None.
+    """
+    for c in df.columns:
+        name = c[-1] if isinstance(c, tuple) else c
+        if str(name).strip().lower() in ("label_ko", "label_kr", "계정명", "항목명"):
+            return c
+    return None
+
+
 def _find_fs_value(
     df: pd.DataFrame,
+    label_col,
     candidates: frozenset[str],
-    col,
+    data_col,
 ) -> Optional[float]:
-    """재무제표 DataFrame에서 계정과목 후보를 찾아 값 반환."""
+    """label_col(계정명) 값이 candidates에 속하는 행에서 data_col 값을 반환."""
     if df is None or df.empty:
         return None
-
-    # MultiIndex / 단순 Index 공통 처리
-    idx_lv0 = (
-        df.index.get_level_values(0)
-        if isinstance(df.index, pd.MultiIndex)
-        else df.index
-    )
-
-    for label in candidates:
-        mask = idx_lv0 == label
-        if not mask.any():
-            continue
-        try:
-            val = df.loc[mask].iloc[0][col]
-            if pd.notna(val):
+    labels = df.iloc[:, list(df.columns).index(label_col)].astype(str).str.strip()
+    mask = labels.isin(candidates)
+    if not mask.any():
+        return None
+    # data_col로 직접 라벨 인덱싱하면 중첩 튜플 level 때문에 부분매칭(DataFrame 반환)이
+    # 일어날 수 있으므로 정확한 컬럼 위치(iloc)로 Series를 고른다.
+    series = df.iloc[:, list(df.columns).index(data_col)]
+    for val in series[mask].tolist():
+        if pd.notna(val):
+            try:
                 return float(val)
-        except (KeyError, IndexError, TypeError, ValueError):
-            continue
+            except (TypeError, ValueError):
+                continue
     return None
 
 
@@ -227,16 +249,22 @@ def _parse_fs_rows(
         logger.debug("%s: DART %s 손익계산서 없음", ticker, period_type)
         return []
 
+    label_col = _find_label_col(is_df)
+    if label_col is None:
+        logger.warning("%s: DART %s 계정명(label_ko) 컬럼 없음", ticker, period_type)
+        return []
+
     rows: list[FundamentalsRow] = []
     for col in is_df.columns:
+        if col == label_col:
+            continue
         period_end = _parse_dart_col_date(col)
         if period_end is None:
-            logger.debug("%s: DART 컬럼 날짜 파싱 불가 — %s", ticker, col)
-            continue
+            continue  # 메타 컬럼(concept_id/label_en/class*) 등은 날짜 파싱 불가 → 스킵
 
-        revenue = _find_fs_value(is_df, _REVENUE_LABELS, col)
-        op_income = _find_fs_value(is_df, _OP_INCOME_LABELS, col)
-        net_income = _find_fs_value(is_df, _NET_INCOME_LABELS, col)
+        revenue = _find_fs_value(is_df, label_col, _REVENUE_LABELS, col)
+        op_income = _find_fs_value(is_df, label_col, _OP_INCOME_LABELS, col)
+        net_income = _find_fs_value(is_df, label_col, _NET_INCOME_LABELS, col)
         op_margin = (
             op_income / revenue
             if revenue and op_income and revenue != 0
@@ -263,8 +291,15 @@ def _parse_fs_rows(
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def _dart_load_fs(corp, bgn_de: str, fs_tp: str, report_tp: str):
-    return corp.load_fs(bgn_de=bgn_de, fs_tp=fs_tp, report_tp=report_tp)
+def _dart_extract_fs(corp, bgn_de: str, separate: bool, report_tp: str):
+    # dart-fss 0.4.16: Corp.extract_fs(bgn_de, separate, report_tp, ...).
+    # separate=False → 연결(CFS), True → 개별/별도(OFS). report_tp: 'annual'/'quarter'.
+    return corp.extract_fs(
+        bgn_de=bgn_de,
+        separate=separate,
+        report_tp=report_tp,
+        progressbar=False,
+    )
 
 
 def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
@@ -297,9 +332,10 @@ def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
 
     for period_type, rpt_tp in [("annual", "annual"), ("quarter", "quarter")]:
         loaded = False
-        for fs_tp in ("CFS", "OFS"):  # 연결 우선, 실패 시 개별
+        for separate in (False, True):  # 연결(CFS) 우선, 실패 시 개별(OFS)
+            fs_label = "OFS" if separate else "CFS"
             try:
-                fs = _dart_load_fs(corp, bgn_de=bgn_de, fs_tp=fs_tp, report_tp=rpt_tp)
+                fs = _dart_extract_fs(corp, bgn_de=bgn_de, separate=separate, report_tp=rpt_tp)
                 parsed = _parse_fs_rows(ticker, fs, period_type)
                 if parsed:
                     rows.extend(parsed)
@@ -307,7 +343,7 @@ def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
                     break
             except Exception as e:
                 logger.warning(
-                    "%s: DART %s %s 실패: %s", ticker, period_type, fs_tp, e
+                    "%s: DART %s %s 실패: %s", ticker, period_type, fs_label, e
                 )
         if not loaded:
             logger.warning("%s: DART %s 재무 로드 실패 (CFS/OFS 모두)", ticker, period_type)

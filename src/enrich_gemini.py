@@ -107,12 +107,12 @@ def _parse_news_output(text: str) -> NewsSummaryOutput:
 
 
 def _neutral_news_fallback() -> NewsSummaryOutput:
-    """Gemini 2회 실패 시 저장할 중립 기본값 (PRD §A 코드 측 처리 기준)."""
+    """Gemini 2회 실패 시 저장할 중립 기본값. PR-3: '빈약한 실패' 대신 안내 문구."""
     return NewsSummaryOutput(
         sentiment="중립",
         sentiment_score=0.0,
-        key_points=["분석 실패"],
-        summary_md="분석 실패",
+        key_points=["뉴스 자동 요약을 일시적으로 생성하지 못함 — 원문 뉴스/지표를 참고하세요."],
+        summary_md="- 뉴스 자동 요약 일시 보류(생성 실패). 종목상세의 원문 뉴스와 가격·지표를 참고하세요.",
         confidence="하",
         based_on="recent",
     )
@@ -202,16 +202,20 @@ def _build_news_prompt(
         "입력 데이터 태그:\n"
         "- [야후/핵심팩트]: 주가에 직접 영향을 주는 주요 언론 핵심 뉴스. 가장 큰 가중치.\n"
         "- [네이버/시장트렌드]: 시장 참여자들의 전반적 이슈·심리 흐름.\n\n"
+        "★ 핵심 원칙 — '정보 나열'이 아니라 '인사이트':\n"
+        "- 각 key_point는 [핵심 사실] + [그것이 왜 중요한가/주가·심리에 주는 의미] 형태로 1줄 인사이트를 담아라.\n"
+        "  예: '실적 가이던스 상향(사실) → 시장 컨센서스를 웃돌아 단기 모멘텀 강화로 해석(의미)'.\n"
+        "- summary_md 첫 줄은 '오늘 이 종목 뉴스의 한 줄 결론(의미 중심)'으로 시작하라.\n\n"
         "규칙:\n"
         "- 가장 최근 날짜 뉴스에 더 큰 가중치를 둬라.\n"
         "- 주가에 핵심 영향을 주는 항목은 catalysts에 날짜·중요도와 함께 분리하라.\n"
-        "- 매수/매도 의견이나 목표가를 만들지 마라. 사실과 심리 해석만.\n\n"
+        "- 매수/매도 의견이나 목표가를 만들지 마라. 사실과 심리 '해석'만. 투자 자문 아님.\n\n"
         "아래 JSON 스키마로만, 순수 JSON으로 답하라(코드펜스·설명 금지):\n"
         '{"sentiment":"긍정|중립|부정","sentiment_score":-1.0~1.0,'
-        '"key_points":["불릿3~6개"],'
+        '"key_points":["[사실]→[의미] 형태 불릿3~6개"],'
         '"catalysts":[{"date":"YYYY-MM-DD","headline":"요약","impact":"긍정|부정","importance":"상|중|하"}],'
         '"risks":["하방리스크0~4개"],'
-        '"summary_md":"- 불릿\\n- 불릿 형태 종합","confidence":"상|중|하","based_on":"recent|fallback_old"}\n\n'
+        '"summary_md":"- 한 줄 결론(의미)\\n- [사실]→[의미] 불릿","confidence":"상|중|하","based_on":"recent|fallback_old"}\n\n'
         f"[분석할 뉴스 리스트]\n{news_text}"
     )
 
@@ -240,6 +244,42 @@ def _build_market_prompt(
     )
 
 
+def _build_region_market_prompt(
+    region: str,            # "한국" | "미국"
+    metrics: dict,          # 해당 시장 지표만
+    news_items: list[dict], # 해당 시장 뉴스
+) -> str:
+    """PR-4: 시장별(KR/US) 전용 시황 프롬프트. 입력 데이터를 시장별로 분리해 서로 다른 근거를 강제."""
+    metrics_json = json.dumps(metrics, ensure_ascii=False, default=str)
+    news_lines = []
+    for it in news_items[:12]:
+        pub = it.get("published_at")
+        d = pub.strftime("%Y-%m-%d") if pub else "날짜미상"
+        title = (it.get("title") or "")[:120]
+        news_lines.append(f"- {d} | {title}")
+    news_text = "\n".join(news_lines) if news_lines else "(관련 뉴스 없음)"
+
+    return (
+        f"너는 {region} 시장 전담 매크로 스트래티지스트다. "
+        f"아래 '{region} 시장 전용' 지표와 뉴스만 근거로 오늘 {region} 증시를 **해석**하라.\n"
+        f"다른 시장({'미국' if region=='한국' else '한국'}) 언급은 최소화하고, 반드시 아래 데이터에 근거하라.\n\n"
+        f"[{region} 시장 지표 (전일대비 등락 포함)]\n{metrics_json}\n\n"
+        f"[{region} 시장 뉴스]\n{news_text}\n\n"
+        "★ 핵심 원칙 — '수치 나열'이 아니라 '인사이트'를 써라:\n"
+        "- 단순히 'KOSPI 8124, 환율 1518' 처럼 숫자를 읊지 마라.\n"
+        "- 각 불릿은 [수치/사실] → [그래서 무엇을 의미하는가] 구조로. 즉 '왜 중요한가'를 해석하라.\n"
+        "- summary_md 3~5줄에 반드시 ① 오늘 시장 국면 해석 ② 주목할 리스크 또는 기회 ③ 관심종목군(섹터)에 주는 시사점을 담아라.\n\n"
+        "규칙:\n"
+        "- 매수/매도 단정·종목 권유 금지. '관찰/해석'으로만 서술(예: '~로 해석된다', '~에 유의'). 투자 자문 아님.\n"
+        f"- 반드시 {region} 시장 고유의 근거(지수 등락·환율/금리·뉴스)를 인용하라.\n\n"
+        "아래 JSON 스키마로만, 순수 JSON으로 답하라:\n"
+        '{"regime":"위험선호|중립|위험회피","headline":"40자내외 한줄 인사이트(수치+의미)",'
+        '"drivers":["오늘 시장을 움직인 요인 2~4개(해석 포함)"],"kr_us_note":"이 시장 국면 해석 1~2문장",'
+        '"watch_today":["향후 체크포인트 2~4개"],'
+        '"summary_md":"- [수치/사실] → [의미] 형태 불릿 3~5줄(국면해석·리스크/기회·섹터 시사점 포함)"}'
+    )
+
+
 # ──────────────────────────────────────────────────────────────
 # DB 조회 헬퍼 (enrich_gemini 전용 쿼리)
 # ──────────────────────────────────────────────────────────────
@@ -248,11 +288,13 @@ def _tickers_needing_enrichment(
     conn: psycopg.Connection,
     asof: date,
 ) -> list[str]:
-    """오늘 fetched_at 기준 새 뉴스가 있고, 아직 news_analysis 없는 ticker 목록."""
+    """오늘 fetched_at 기준 새 뉴스가 있고, 아직 news_analysis 없는 ticker 목록.
+    PR-4: watchlist 종목만(=_MARKET_* pseudo-ticker 제외)."""
     sql = """
         SELECT DISTINCT nr.ticker
         FROM news_raw nr
         WHERE nr.fetched_at::date = %s
+        AND nr.ticker IN (SELECT ticker FROM watchlist)
         AND NOT EXISTS (
             SELECT 1 FROM news_analysis na
             WHERE na.ticker = nr.ticker AND na.asof = %s
@@ -301,6 +343,24 @@ def _get_market_daily_row(
         cur.execute(sql, (asof,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def _get_market_news(
+    conn: psycopg.Connection,
+    pseudo_ticker: str,
+    limit: int = 12,
+) -> list[dict]:
+    """PR-4: _MARKET_KR/_MARKET_US 시장 뉴스 최근 limit건 (최신순)."""
+    sql = """
+        SELECT title, body, published_at
+        FROM news_raw
+        WHERE ticker = %s
+        ORDER BY published_at DESC NULLS LAST, fetched_at DESC
+        LIMIT %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (pseudo_ticker, limit))
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _get_sentiment_rollup(
@@ -395,11 +455,13 @@ def enrich_market_summary(
     asof: Optional[date] = None,
 ) -> bool:
     """
-    오늘 market_daily + 감성 집계 → Gemini 시황 종합 → market_daily.summary_md 업데이트.
+    PR-4: 한국·미국 시장을 각각 별도 Gemini 호출로 종합 → summary_kr_md / summary_us_md.
+    입력을 시장별로 분리(KR: KOSPI/KOSDAQ/KRW + _MARKET_KR 뉴스, US: SP500/NASDAQ/VIX/10Y + _MARKET_US 뉴스)
+    해 서로 다른 근거를 강제한다. summary 컬럼만 UPDATE → payload.changes(전일대비 등락) 보존.
 
     Returns
     -------
-    True: 저장 성공 | False: 스킵(데이터 없음) 또는 실패
+    True: 1개 이상 시장 저장 성공 | False: 스킵(데이터 없음) 또는 전부 실패
     """
     asof = asof or date.today()
 
@@ -408,42 +470,63 @@ def enrich_market_summary(
         logger.warning("market_daily %s 없음 — 시황 종합 스킵", asof)
         return False
 
-    sentiment_rollup = _get_sentiment_rollup(conn, asof)
-
-    market_metrics = {
-        "asof": str(asof),
-        "KOSPI": market_row.get("kospi"),
-        "KOSDAQ": market_row.get("kosdaq"),
-        "SP500": market_row.get("sp500"),
-        "NASDAQ": market_row.get("nasdaq"),
-        "VIX": market_row.get("vix"),
-        "USDKRW": market_row.get("usdkrw"),
-        "UST10Y": market_row.get("ust10y"),
-    }
+    changes = (market_row.get("payload") or {}).get("changes", {}) if isinstance(market_row.get("payload"), dict) else {}
 
     client = _get_gemini_client()
     model = _get_synth_model()
-    prompt = _build_market_prompt(market_metrics, sentiment_rollup)
 
-    output = _call_gemini_for_market(client, model, prompt)
-    if output is None:
-        logger.error("시황 종합 실패 — market_daily 업데이트 스킵")
+    from src.ingest_news import MARKET_KR_TICKER, MARKET_US_TICKER
+
+    # KR 입력
+    kr_metrics = {
+        "asof": str(asof),
+        "KOSPI": market_row.get("kospi"), "KOSPI_chg%": changes.get("kospi"),
+        "KOSDAQ": market_row.get("kosdaq"), "KOSDAQ_chg%": changes.get("kosdaq"),
+        "USDKRW": market_row.get("usdkrw"), "USDKRW_chg%": changes.get("usdkrw"),
+    }
+    kr_news = _get_market_news(conn, MARKET_KR_TICKER)
+
+    # US 입력
+    us_metrics = {
+        "asof": str(asof),
+        "SP500": market_row.get("sp500"), "SP500_chg%": changes.get("sp500"),
+        "NASDAQ": market_row.get("nasdaq"), "NASDAQ_chg%": changes.get("nasdaq"),
+        "VIX": market_row.get("vix"), "VIX_chg%": changes.get("vix"),
+        "UST10Y": market_row.get("ust10y"),
+    }
+    us_news = _get_market_news(conn, MARKET_US_TICKER)
+
+    kr_out = _call_gemini_for_market(client, model, _build_region_market_prompt("한국", kr_metrics, kr_news))
+    time.sleep(API_SLEEP)
+    us_out = _call_gemini_for_market(client, model, _build_region_market_prompt("미국", us_metrics, us_news))
+
+    summary_kr = kr_out.summary_md if kr_out else None
+    summary_us = us_out.summary_md if us_out else None
+
+    if summary_kr is None and summary_us is None:
+        logger.error("시황 종합 실패(KR·US 모두) — 업데이트 스킵")
         return False
 
-    updated = MarketDailyRow(
-        asof=asof,
-        kospi=market_row.get("kospi"),
-        kosdaq=market_row.get("kosdaq"),
-        sp500=market_row.get("sp500"),
-        nasdaq=market_row.get("nasdaq"),
-        vix=market_row.get("vix"),
-        usdkrw=market_row.get("usdkrw"),
-        ust10y=market_row.get("ust10y"),
-        summary_md=output.summary_md,
-        payload=output.model_dump(),
+    # summary 컬럼만 UPDATE → payload(전일대비 등락) 보존
+    combined = "\n".join(filter(None, [
+        f"[한국]\n{summary_kr}" if summary_kr else None,
+        f"[미국]\n{summary_us}" if summary_us else None,
+    ]))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE market_daily
+            SET summary_kr_md = COALESCE(%s, summary_kr_md),
+                summary_us_md = COALESCE(%s, summary_us_md),
+                summary_md    = COALESCE(%s, summary_md)
+            WHERE asof = %s
+            """,
+            (summary_kr, summary_us, combined or None, asof),
+        )
+    logger.info(
+        "시황 종합 저장 완료 (KR=%s US=%s)",
+        "✓" if summary_kr else "✗", "✓" if summary_us else "✗",
     )
-    upsert_market_daily(conn, updated)
-    logger.info("시황 종합 저장 완료 (regime=%s)", output.regime)
     return True
 
 

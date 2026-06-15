@@ -4,6 +4,7 @@ ingest_news.py — 뉴스 수집 + url_hash dedupe → news_raw
 소스:
   KR — 네이버 금융 뉴스 HTML 스크래핑 (requests + BeautifulSoup4)
        URL: https://finance.naver.com/item/news_news.naver?code={6자리코드}
+  KR/US — Google News RSS (인증 불필요, PR-2 추가)
   US — yfinance Ticker.news (구/신 API 모두 처리)
 
 절대 규칙:
@@ -16,10 +17,13 @@ ingest_news.py — 뉴스 수집 + url_hash dedupe → news_raw
 
 from __future__ import annotations
 
+import email.utils
 import logging
-from datetime import date, datetime
+import urllib.parse
+from datetime import date, datetime, timezone
 from typing import Optional
 
+import feedparser
 import requests
 import yfinance as yf
 from bs4 import BeautifulSoup
@@ -40,8 +44,11 @@ NAVER_NEWS_URL: str = (
 )
 NAVER_BASE_URL: str = "https://finance.naver.com"
 
-MAX_PAGES: int = 1     # 기본 스크래핑 페이지 수 (최근 뉴스면 충분)
-MAX_ITEMS: int = 30    # 종목당 최대 수집 건수
+GOOGLE_NEWS_RSS_BASE: str = "https://news.google.com/rss/search"
+
+MAX_PAGES: int = 2       # PR-2: 네이버 스크래핑 페이지 수 (1→2, 더 자세히)
+MAX_ITEMS: int = 40      # PR-2: 종목당 최대 수집 건수 (20/30→40, 소스별 합산)
+GOOGLE_MAX_ITEMS: int = 25  # PR-2: Google News RSS 소스당 최대 건수
 
 _SCRAPE_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -61,6 +68,26 @@ def _clean_ticker(ticker: str) -> str:
 
 def _is_kr(ticker: str) -> bool:
     return ticker.upper().endswith((".KS", ".KQ"))
+
+
+# ──────────────────────────────────────────────────────────────
+# PR-2: Google News RSS 날짜 파싱 (RFC 2822 / email.utils)
+# ──────────────────────────────────────────────────────────────
+
+def _parse_rfc822(text: str) -> Optional[datetime]:
+    """
+    RSS pubDate(RFC 2822) → UTC datetime.
+    예: 'Thu, 05 Jun 2025 10:23:00 GMT'
+    email.utils.parsedate_to_datetime가 timezone-aware datetime을 반환한다.
+    """
+    if not text:
+        return None
+    try:
+        dt = email.utils.parsedate_to_datetime(text.strip())
+        # UTC로 정규화 (timezone-aware)
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)  # naive UTC
+    except Exception:
+        return None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -220,6 +247,130 @@ def fetch_naver_news(
 
 
 # ──────────────────────────────────────────────────────────────
+# PR-2: Google News RSS 수집
+# ──────────────────────────────────────────────────────────────
+
+def _google_news_url(query: str, is_kr: bool) -> str:
+    """Google News RSS URL 생성."""
+    params = {"q": query}
+    if is_kr:
+        params.update({"hl": "ko", "gl": "KR", "ceid": "KR:ko"})
+    else:
+        params.update({"hl": "en-US", "gl": "US", "ceid": "US:en"})
+    return GOOGLE_NEWS_RSS_BASE + "?" + urllib.parse.urlencode(params)
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def _fetch_rss(url: str) -> feedparser.FeedParserDict:
+    """requests로 RSS XML 다운로드 후 feedparser로 파싱.
+    feedparser 단독 HTTPS는 macOS 시스템 인증서 문제로 실패하는 경우가 있으므로
+    requests(certifi 번들 사용)로 먼저 내용을 받는다.
+    """
+    resp = requests.get(url, headers=_SCRAPE_HEADERS, timeout=15)
+    resp.raise_for_status()
+    return feedparser.parse(resp.content)
+
+
+def _collect_rss_rows(
+    store_ticker: str,
+    queries: list[str],
+    is_kr: bool,
+    max_items: int,
+) -> list[NewsRawRow]:
+    """주어진 쿼리들로 Google News RSS 수집 → store_ticker로 태깅된 NewsRawRow 리스트."""
+    seen_urls: set[str] = set()
+    rows: list[NewsRawRow] = []
+
+    for query in queries:
+        if len(rows) >= max_items:
+            break
+        url = _google_news_url(query, is_kr)
+        try:
+            feed = _fetch_rss(url)
+        except Exception as exc:
+            logger.warning("%s: Google News RSS 실패 (query=%r): %s", store_ticker, query, exc)
+            continue
+
+        for entry in feed.entries:
+            if len(rows) >= max_items:
+                break
+            title = (entry.get("title") or "").strip()
+            link  = (entry.get("link") or entry.get("id") or "").strip()
+            if not title or not link or not link.startswith("http"):
+                continue
+            if link in seen_urls:
+                continue
+            seen_urls.add(link)
+
+            published_at = _parse_rfc822(entry.get("published", ""))
+            body = (entry.get("summary") or entry.get("description") or None)
+            if body:
+                body = BeautifulSoup(body, "html.parser").get_text(separator=" ")[:500]
+
+            rows.append(NewsRawRow(
+                ticker=store_ticker,
+                source="google_news",
+                published_at=published_at,
+                title=title,
+                body=body,
+                url=link,
+            ))
+
+    logger.info("%s: Google News RSS %d건 수집", store_ticker, len(rows))
+    return rows
+
+
+def fetch_google_news(
+    ticker: str,
+    company_name: str,
+    max_items: int = GOOGLE_MAX_ITEMS,
+) -> list[NewsRawRow]:
+    """
+    Google News RSS에서 종목 관련 뉴스 수집.
+    KR: "{회사명} 주가", "{회사명} 실적"
+    US: "{ticker} stock", "{회사명} earnings"
+    """
+    kr = _is_kr(ticker)
+    code = _clean_ticker(ticker)  # KR: 6자리 코드
+    if kr:
+        # PR-2: 회사명 + 코드 결합 쿼리로 커버리지 보강
+        queries = [f"{company_name} 주가", f"{company_name} 실적", f"{company_name} OR {code}"]
+    else:
+        queries = [f"{ticker} stock", f"{company_name} earnings", f"{company_name} OR {ticker}"]
+    return _collect_rss_rows(ticker, queries, kr, max_items)
+
+
+# ──────────────────────────────────────────────────────────────
+# PR-4: 시장 뉴스 (pseudo-ticker _MARKET_KR / _MARKET_US)
+# ──────────────────────────────────────────────────────────────
+
+MARKET_KR_TICKER: str = "_MARKET_KR"
+MARKET_US_TICKER: str = "_MARKET_US"
+
+_MARKET_QUERIES: dict[str, tuple[list[str], bool]] = {
+    MARKET_KR_TICKER: (["코스피 전망", "한국 증시 시황"], True),
+    MARKET_US_TICKER: (["S&P 500 outlook", "Nasdaq forecast", "Fed rate"], False),
+}
+
+
+def fetch_market_news(max_items: int = GOOGLE_MAX_ITEMS) -> dict[str, list[NewsRawRow]]:
+    """KR/US 시장 시황 뉴스를 _MARKET_KR/_MARKET_US pseudo-ticker로 수집."""
+    out: dict[str, list[NewsRawRow]] = {}
+    for pseudo_ticker, (queries, is_kr) in _MARKET_QUERIES.items():
+        try:
+            out[pseudo_ticker] = _collect_rss_rows(pseudo_ticker, queries, is_kr, max_items)
+        except Exception as exc:
+            logger.warning("%s: 시장 뉴스 수집 실패: %s", pseudo_ticker, exc)
+            out[pseudo_ticker] = []
+    return out
+
+
+# ──────────────────────────────────────────────────────────────
 # US 뉴스 수집 (yfinance Ticker.news)
 # ──────────────────────────────────────────────────────────────
 
@@ -273,25 +424,62 @@ def fetch_yahoo_news(
 # 배치 실행
 # ──────────────────────────────────────────────────────────────
 
-def run_news_ingest(tickers: list[str]) -> dict:
+def run_news_ingest(
+    tickers: list[str],
+    company_names: Optional[dict[str, str]] = None,
+    include_market: bool = True,
+) -> dict:
     """
     종목 배치 뉴스 수집. 종목 단위 격리(try/except).
+    PR-2: 기존 소스(네이버/yfinance)에 Google News RSS 추가.
+    PR-4: include_market=True면 _MARKET_KR/_MARKET_US 시장 뉴스도 함께 수집.
+    company_names: {ticker: 회사명} — 없으면 ticker를 그대로 사용
     반환: {"news": {ticker: [NewsRawRow, ...]}, "errors": [...]}
     """
     news: dict[str, list[NewsRawRow]] = {}
     errors: list[dict] = []
+    if company_names is None:
+        company_names = {}
 
     for ticker in tickers:
         try:
+            rows: list[NewsRawRow] = []
+            name = company_names.get(ticker, _clean_ticker(ticker))
+
             if _is_kr(ticker):
-                news[ticker] = fetch_naver_news(ticker)
+                rows += fetch_naver_news(ticker)
             else:
-                news[ticker] = fetch_yahoo_news(ticker)
+                rows += fetch_yahoo_news(ticker)
+
+            # PR-2: Google News RSS 추가 수집 (두 소스 합산, MAX_ITEMS cap)
+            try:
+                google_rows = fetch_google_news(ticker, name)
+                rows += google_rows
+            except Exception as ge:
+                logger.warning("%s: Google News RSS 보조 수집 실패: %s", ticker, ge)
+                # 보조 소스 실패는 종목 전체를 막지 않음
+
+            news[ticker] = rows[:MAX_ITEMS]
         except Exception as exc:
             logger.error("%s: 뉴스 수집 실패: %s", ticker, exc, exc_info=True)
             errors.append({
                 "ticker": ticker,
                 "step": "news",
+                "error": str(exc),
+                "ts": datetime.utcnow().isoformat(),
+            })
+
+    # PR-4: 시장 뉴스 (_MARKET_KR / _MARKET_US)
+    if include_market:
+        try:
+            market_news = fetch_market_news()
+            for pseudo_ticker, rows in market_news.items():
+                news[pseudo_ticker] = rows
+        except Exception as exc:
+            logger.warning("시장 뉴스 수집 실패: %s", exc)
+            errors.append({
+                "ticker": "_MARKET",
+                "step": "market_news",
                 "error": str(exc),
                 "ts": datetime.utcnow().isoformat(),
             })

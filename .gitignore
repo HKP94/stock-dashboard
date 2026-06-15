@@ -49,3 +49,9 @@ htmlcov/
 
 # ── n8n 로컬 데이터 ───────────────────────────────────────────
 n8n/.n8n/
+
+# ── React 대시보드 빌드 산출물 ────────────────────────────────
+dashboard-web/dist/
+dashboard-web/node_modules/
+# data.json: DB 결과물(보유종목·개인정보 포함), 빌드 전 재생성
+dashboard-web/src/data.json

@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v1.2 |
+| 버전 | v1.8 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -53,7 +53,7 @@
 
 | 요구 | 기능 ID | 요약 |
 |---|---|---|
-| ① KB 계좌 연동 실시간 현황 | **F1** | 보유종목·평가손익·현금 스냅샷 (읽기 전용) |
+| ① KB 계좌 연동 실시간 현황 | **F1** | 보유종목·평가손익·현금 스냅샷 → **수동 입력 구현 완료** (portfolio_holdings + local_api + Portfolio 탭) |
 | ② 관심종목 정량 일일 업데이트 | **F2** | 뉴스·주가흐름·매력도·컨센서스·매출 등 |
 | ③ 시장 상황 업데이트 | **F3** | 지수·금리·환율·VIX + 시황 서술 |
 | ④ 퀀트 관점 피드백 알고리즘 | **F4** | 팩터 스코어링(투명·규칙기반) |
@@ -424,13 +424,31 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 2. **실적 캘린더**: 관심종목 어닝 D-3/D-day 알림(FMP/DART 일정).
 3. **포트폴리오 리스크 요약**: 섹터·통화·종목 집중도, 보유 vs 관심 괴리.
 4. **대화형 Q&A(Hermes)**: "네이버 왜 빠졌어?", "내 포트 중 밸류 점수 낮은 거?" → DB+메모리로 답변.
-5. **백테스트(P3)**: 퀀트 점수 상위 N 종목의 과거 성과 검증(KIS backtester 또는 자체).
+5. **백테스트 ✅ 구현**: `src/backtest.py` — 모멘텀 진짜 백테스트 + 팩터별 회고(§F7 표준 원칙). 투자 판단 메모(horizon/매력도/논거)는 `stock_notes`.
 6. **리포트 뷰어 연계**: 기존 Apps Script 모달/`리포트DB`를 DB의 `report_url` 컬럼과 연동해 유지.
-7. **대시보드 (Streamlit, `dashboard/app.py`)**: 텔레그램 브리핑을 보완하는 시각 표시 계층.
-   - **목적**: 관심종목 퀀트 점수·시장 상황·뉴스 감성을 한 화면에서 탐색(표 정렬·필터·종목 드릴다운). 브리핑이 "푸시 요약"이라면 대시보드는 "풀(pull) 탐색".
-   - **데이터 소스**: `assemble_daily(conn)`(§5.2 레코드) + `market_daily` + `prices_daily`(드릴다운 차트). **읽기 전용** — DB에 쓰지 않는다.
-   - **표시 원칙**: composite·팩터·플래그 등 **점수와 사실만**. 매수/매도 표현 금지, 하단 면책 고정. 결측은 "—"/"필터제외"로(N/A 금지).
-   - **로컬 우선**: `streamlit run dashboard/app.py`. 접속정보는 `DB_*` 환경변수 또는 `.streamlit/secrets.toml`. 배포는 추후(공개 배포 시 DB 비밀번호·보유종목 등 개인정보 노출 주의).
+7. **대시보드 (React/Vite, `dashboard-web/`)**: 텔레그램 브리핑을 보완하는 시각 표시 계층. ✅ v1.3 구현 완료.
+   - **구현**: Vite + React (Pretendard·JetBrains Mono·Instrument Serif), `claude design` 프로토타입 pixel-perfect 포팅.
+   - **탭**: 오버뷰(랭킹·알림·주목뉴스) · 종목상세(차트·팩터·지표) · 뉴스 · 스크리너 · 시장전망 · 리서치노트.
+   - **데이터**: `src/export_dashboard_data.py` → `dashboard-web/src/data.json` → React 빌드타임 import. 없으면 mock fallback.
+   - **개선**: 종목상세 "섹터 N개 중 순위" 텍스트, 스크리너 레짐 판정 근거 한 줄.
+   - **표시 원칙**: composite·팩터·플래그 등 **점수와 사실만**. 매수/매도 표현 금지, 하단 면책 고정. 결측은 null/None(N/A 금지).
+   - **로컬 실행**: `cd dashboard-web && npm run dev` → http://localhost:5173.
+   - **레거시**: `dashboard/app.py` (Streamlit) — 유지보수 안 함, 참조용으로만 보존.
+
+### F7 — 전략 검증: "진짜 백테스트" vs "회고" (표준 원칙, 위반 금지)
+
+전략 성과 비교는 두 개념을 **절대 혼동하지 않는다**. 어기는 화면·코드는 금지한다.
+
+| 구분 | true_backtest (진짜 백테스트) | retrospective (회고) |
+|---|---|---|
+| 정의 | 각 과거 시점 t에서 **t까지의 데이터만**으로 선정·평가 (look-ahead 없음) | **오늘** 선정한 상위 종목의 **과거 수익률**을 되돌아봄 |
+| 적용 팩터 | **모멘텀만** (가격 시계열로 과거 재현 가능) | 가치·퀄리티·성장·복합 (valuation/analyst가 오늘 스냅샷 1건뿐 → 과거 재현 불가) |
+| 편향 | 없음(실제 운용 가능 성과 추정) | **선정시점편향(look-ahead/survivorship)** 존재 |
+| 화면 표기 | "실제 백테스트" | **"참고용 · 백테스트 아님"** + 선정시점편향 경고 박스 필수 |
+
+- 구현: `src/backtest.py` — `compute_momentum_backtest`(252영업일 후 21영업일 리밸런싱, PRD §F4 모멘텀 0.10·Z1M+0.20·Z3M+0.30·Z6M+0.40·Z12-1M, 동일가중 top_n + 동일가중/Buy&Hold 벤치마크), `compute_retrospective`(오늘 quant 상위 5 × 1/3/6/12M 수익률 + 벤치마크).
+- 지표: 누적수익률·CAGR·MDD·연환산변동성(월std×√12)·Sharpe(rf=0). 결과는 `backtest_results`(metric_type 구분).
+- 표시: React "전략 비교" 탭 — 섹션1(recharts 누적수익 차트+메트릭표, "과거 성과는 미래 보장 안 함"), 섹션2(경고 박스 + 팩터별 카드).
 
 ---
 
@@ -529,22 +547,50 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ### Phase 3 — 전달 & 확장
 - [x] `run_pipeline.py` + `send_telegram.py` + `auto_run.yml`(06:00 KST) — 일일 실행·브리핑(Python 템플릿)
-- [x] **대시보드** `dashboard/app.py`(Streamlit, F6-7) — 표·필터·드릴다운, 로컬 우선
+- [x] **대시보드 (Streamlit)** `dashboard/app.py` — 레거시, 유지보수 안 함
+- [x] **대시보드 (React)** `dashboard-web/` (Vite+React, F6-7) — pixel-perfect 디자인 포팅, data.json 연동, 섹터순위·레짐근거 개선 포함
+- [x] **대시보드 UI 개선 PR-1~6** (2026-06-14):
+  - PR-1: 종목상세 네비게이션 — 검색/자동완성 + 이전·다음 버튼 + 같은섹터 칩 (34개 풀리스트 제거)
+  - PR-2: 지수 등락률 0.00% 버그 수정 (`prev_distinct`로 실제 변동 행 탐색) + 시장 코멘트 카드
+  - PR-3: 알림 분리 — 액션 신호/데이터 품질 분류, 품질 항목 접힘 섹션 (export에 flagsAction/flagsQuality)
+  - PR-4: 가격차트 거래량 바 추가 + SMA60/120 범례 클릭 토글 (volumeSeries·sma60Series 등 export)
+  - PR-5: `dashboard/watchlist_admin.py` — SQL 없이 watchlist 추가·비활성화·보유토글
+  - PR-6: 종목상세 증권사 리포트 외부링크 (KR:네이버, US:TipRanks)
 - [x] `backfill.py`(가격 2년치) + `recompute.py`(지표·퀀트 재계산) + `recompute.yml`(수동 트리거)
+- [x] **PR-1~4 대시보드 심화** (2026-06-14):
+  - PR-1: 종목상세 네비게이션 드롭다운 `<select>` 교체 (이름·티커·시장 형식, 이전/다음·섹터칩 유지)
+  - PR-2: F1 포트폴리오 수동 입력 — `portfolio_holdings` 테이블, `compute_portfolio.py`, run_pipeline Step 9 추가, watchlist_admin 보유관리 섹션, export+React 포트폴리오 요약카드·보유정보카드
+  - PR-3: 종목상세 리포트 iframe 인라인 표시 (보안 차단 대비 새탭 버튼 병행)
+  - PR-4: 리서치 항목 — `research_items` 테이블, watchlist_admin 리서치관리 섹션, export 포함, Research 탭 YouTube embed + 유형별 카드 + 검색보조 버튼
+- [x] **PR-1~4 이번 라운드** (2026-06-14):
+  - PR-1: 뉴스 AI 요약 카드를 헤더 바로 아래 전체폭으로 이동 (가격차트보다 위)
+  - PR-2: Google News RSS 소스 추가 (`feedparser`, RFC2822 파싱, 단위 테스트 17개), 총 테스트 234통과
+  - PR-3: `stock_notes` 테이블 + `src/local_api.py` (FastAPI 127.0.0.1:8765), CORS=localhost:5173, portfolio/notes CRUD; `watchlist_admin` 보유관리 섹션 제거
+  - PR-4: React 포트폴리오 탭 (7번째, `/api/portfolio` 연동, 합계+테이블+추가/삭제), StockDetail 투자판단 카드 (horizon/attractiveness/thesis → PUT /api/notes), 오버뷰 랭킹 horizon 뱃지
+- [x] **데이터 완결성·뉴스·인사이트 PR-1~3** (2026-06-15):
+  - PR-1: `src/backfill.py`(누락종목 자동탐지+백필), export를 종목별 '최신' 조회로 견고화(asof 불일치 해결), 데이터없는 종목 'hasData'+'데이터 수집 중' 라벨+정렬 맨아래
+  - PR-2: 뉴스 cap 40·쿼리 보강(회사명 OR 코드)·네이버 2페이지, `news_refresh.yml`(18:00 KST)+`src/news_refresh.py`, 뉴스 피드를 news_raw 원문+URL로, 종목별 원문기사·최근5건 타임라인
+  - PR-3: GEMINI 프롬프트(뉴스·KR/US 시황) 인사이트형 개정([수치/사실]→[의미]), 폴백도 수치+해석 한 줄, 스키마 검증 통과
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
-- [ ] (P3) 백테스트 → **Claude Code**
+- [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
+- [x] **2차 버그/일관성 PR-1~4** (2026-06-15):
+  - PR-1: 종목상세 뉴스 카드 항상 동일 위치(종목별 최근 1건+기준일, 없으면 placeholder)
+  - PR-2: 종목상세 리포트 iframe 섹션 제거, reportUrl 필드 정리
+  - PR-3: 포트폴리오 USD→KRW 환산 합산(환율 market_daily, payload.by_currency/fx_rate), ₩ 전체숫자 표시
+  - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
 
 ### 안정화 (운영 중 발견·수정)
 - [x] **Decimal/DB 경계 버그**: psycopg3 NUMERIC→Decimal이 float·np.log·나눗셈에 섞여 indicators/quant 0건 → `db.get_conn` float 로더 + 읽기 경계 방어 캐스팅으로 수정
 - [x] **저장 경로**: 단일 트랜잭션 1회 커밋 → 단계별 commit/rollback으로 전환(앞 단계 오류·연결 끊김이 저장 무효화하던 문제)
 - [x] **assemble 타임아웃**: 종목별 루프 쿼리 → 테이블별 bulk 쿼리(연결 점유 분→초)
 - [x] **KR DART**: `find_by_stock_code` 단일 Corp 인덱싱 버그 수정, 실패 시 None 유지 + `runs.errors` 기록
+- [x] **KR DART 재무 0건**: `corp.load_fs` → `corp.extract_fs(separate=...)` 메서드명·인자 수정 + `label_ko` 컬럼 기반 파서 재작성. 9종목 DB 백필 완료.
 
 ---
 
 ## 12. 미해결 질문 (사용자 답변 필요)
-1. **F1 경로**: KIS 보조계좌 개설(옵션 A) OK? 아니면 KB 고수(옵션 B 확인 필요) / 반자동(옵션 D)?
+1. **F1 경로**: 수동 입력(`portfolio_holdings`)으로 1차 구현 완료(PR-2). KIS API 자동 연동(옵션 A)으로 업그레이드할 경우 별도 PR 필요.
 2. **n8n 호스팅**: self-host(Docker) vs n8n Cloud? 상시 켜둘 서버/PC가 있는가?
 3. **DB**: Postgres(Supabase) vs SQLite(단일 PC)?
 4. **Hermes 실행 환경**: 로컬 GPU(VRAM?) 가능한가, 아니면 클라우드 모델 라우팅?
@@ -557,3 +603,9 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
 - *v1.1 (2026-06-09) §F4 실제 구현 내용으로 전면 교체(레짐감지·사전필터·동적가중치·VCM·12-1M), §11 로드맵 Phase 1·2 완료 항목 표시 — PM(Claude).*
 - *v1.2 (2026-06-11) §F6에 대시보드(Streamlit) 추가, §11에 Decimal 경계 수정·대시보드·recompute·안정화 항목 반영 — PM(Claude).*
+- *v1.3 (2026-06-14) §F6 대시보드를 React/Vite 버전으로 교체(Streamlit 레거시 명시), `dashboard-web/` 신설, `export_dashboard_data.py` 추가, §11 로드맵 반영 — Claude Code.*
+- *v1.4 (2026-06-14) §11 대시보드 UI PR-1~6 완료 반영(네비개선·등락률수정·알림분리·차트보강·관리도구·리포트링크), §11 안정화에 KR DART 재무 0건 수정 추가 — Claude Code.*
+- *v1.5 (2026-06-14) §11 PR-1~4 심화: 드롭다운 네비, F1 수동포트폴리오(portfolio_holdings+compute_portfolio), 리포트iframe, 리서치항목(research_items+YouTube embed); §5.1 스키마 2테이블 추가 — Claude Code.*
+- *v1.6 (2026-06-14) §11 PR-1~4: 뉴스요약최상단이동, Google News RSS(feedparser+RFC2822+단위테스트17), stock_notes+local_api(FastAPI 8765), 포트폴리오탭+투자판단카드+horizon뱃지; §2.1 F1 구현완료 반영; §5.1 stock_notes 추가 — Claude Code.*
+- *v1.7 (2026-06-15) 신규 §F7(진짜 백테스트 vs 회고 표준원칙). 2차 버그수정 PR-1~4(뉴스카드 일관성·리포트섹션제거·포트폴리오 통화환산·시장 KR/US 분리+지수등락버그). 백테스트 PR-5~8(backtest_results·src/backtest.py·전략비교탭·단위테스트13). §5.1 backtest_results + market_daily.summary_kr_md/us_md 추가 — Claude Code.*
+- *v1.8 (2026-06-15) PR-1 데이터완결성(src/backfill.py 누락탐지+백필, export 종목별 최신조회로 asof불일치 해결, 데이터없음 라벨). PR-2 뉴스강화(cap40·쿼리보강·네이버2p, news_refresh.yml 18:00KST+src/news_refresh.py, 원문URL 피드·종목별 기사/타임라인). PR-3 인사이트형 프롬프트([수치]→[의미])·폴백 해석문구 — Claude Code.*

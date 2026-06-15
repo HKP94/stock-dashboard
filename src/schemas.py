@@ -159,6 +159,8 @@ class MarketDailyRow(BaseModel):
     usdkrw: Optional[float] = None
     ust10y: Optional[float] = None
     summary_md: Optional[str] = None
+    summary_kr_md: Optional[str] = None  # PR-4: 한국 시장 전용 시황
+    summary_us_md: Optional[str] = None  # PR-4: 미국 시장 전용 시황
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
