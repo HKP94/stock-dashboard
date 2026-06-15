@@ -42,7 +42,7 @@ function PnlCell({ pnl, pnl_pct, currency }) {
 export function Portfolio({ D, nav }) {
   const [rows, setRows] = useState(null);  // null = 로딩중
   const [error, setError] = useState(null);
-  const [form, setForm] = useState({ ticker: D.stocks[0]?.t || "", qty: "", avg_price: "", currency: "KRW" });
+  const [form, setForm] = useState({ ticker: "", qty: "", avg_price: "", currency: "KRW" });  // PR-4: 기본 미선택
   const [saving, setSaving] = useState(false);
   const [apiOk, setApiOk] = useState(true);
 
@@ -54,14 +54,17 @@ export function Portfolio({ D, nav }) {
       setApiOk(true);
     } catch (e) {
       setApiOk(false);
-      setError("로컬 API 연결 실패. `python -m src.local_api` 를 먼저 실행하세요.");
+      setError("데이터 서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.");
     }
   }, []);
 
   useEffect(() => { loadPortfolio(); }, [loadPortfolio]);
 
+  // PR-4: 종목 미선택 / 수량·평단가 0 이하면 저장 비활성
+  const formValid = form.ticker && parseFloat(form.qty) > 0 && parseFloat(form.avg_price) > 0;
+
   const handleSave = async () => {
-    if (!form.ticker || !form.qty || !form.avg_price) return;
+    if (!formValid) return;
     setSaving(true);
     try {
       await fetch(`${API}/api/portfolio`, {
@@ -76,7 +79,8 @@ export function Portfolio({ D, nav }) {
   };
 
   const handleDelete = async (ticker) => {
-    if (!confirm(`${ticker} 보유 삭제?`)) return;
+    const nm = D.stocks.find((s) => s.t === ticker)?.name || ticker;
+    if (!confirm(`'${nm}(${ticker})' 보유 종목을 삭제할까요? 되돌릴 수 없습니다.`)) return;
     await fetch(`${API}/api/portfolio/${ticker}`, { method: "DELETE" });
     await loadPortfolio();
   };
@@ -103,10 +107,9 @@ export function Portfolio({ D, nav }) {
 
   if (!apiOk) return (
     <div style={{ background: C.warnBg, border: `1px solid ${C.warn}33`, borderRadius: 10, padding: "24px 28px" }}>
-      <div style={{ fontSize: 14.5, fontWeight: 700, color: C.warn, marginBottom: 8 }}>API 서버 연결 필요</div>
+      <div style={{ fontSize: 14.5, fontWeight: 700, color: C.warn, marginBottom: 8 }}>데이터 서버에 연결할 수 없습니다</div>
       <div style={{ fontSize: 13, color: C.ink2, lineHeight: 1.6 }}>
-        포트폴리오 탭을 사용하려면 로컬 API 서버가 실행 중이어야 합니다.<br />
-        터미널에서 실행: <code style={{ background: C.surface2, padding: "2px 6px", borderRadius: 4, fontFamily: "var(--mono)" }}>python -m src.local_api</code>
+        포트폴리오 기능을 사용하려면 데이터 서버 연결이 필요합니다. 잠시 후 다시 시도해 주세요.
       </div>
       <button onClick={loadPortfolio} style={{ marginTop: 14, border: `1px solid ${C.warn}`, background: C.warnBg, color: C.warn, borderRadius: 7, padding: "7px 16px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>다시 연결</button>
     </div>
@@ -206,12 +209,13 @@ export function Portfolio({ D, nav }) {
             <select
               value={form.ticker}
               onChange={(e) => setForm((f) => ({ ...f, ticker: e.target.value }))}
-              style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "var(--sans)", color: C.ink, background: C.surface, cursor: "pointer", outline: "none" }}
+              style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "var(--sans)", color: form.ticker ? C.ink : C.ink3, background: C.surface, cursor: "pointer", outline: "none" }}
             >
+              <option value="">선택하세요</option>
               {D.stocks.map((s) => <option key={s.t} value={s.t}>{s.name} ({s.t})</option>)}
             </select>
           </div>
-          {[["수량", "qty", "1", "number"], ["평단가", "avg_price", "1000", "number"]].map(([label, key, ph, type]) => (
+          {[["수량", "qty", "예: 10", "number"], ["평단가", "avg_price", "예: 50000", "number"]].map(([label, key, ph, type]) => (
             <div key={key} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               <MonoCaps style={{ fontSize: 9.5 }}>{label}</MonoCaps>
               <input
@@ -234,8 +238,8 @@ export function Portfolio({ D, nav }) {
           </div>
           <button
             onClick={handleSave}
-            disabled={saving || !form.qty || !form.avg_price}
-            style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: saving ? 0.6 : 1 }}
+            disabled={saving || !formValid}
+            style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600, cursor: (saving || !formValid) ? "default" : "pointer", opacity: (saving || !formValid) ? 0.45 : 1 }}
           >
             {saving ? "저장 중…" : "저장"}
           </button>

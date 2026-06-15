@@ -75,7 +75,7 @@ export function HoldDot({ on }) {
   }}></span>;
 }
 export function AlignBadge({ on }) {
-  return <span style={{ fontSize: 11, fontWeight: 700, color: on ? C.ok : C.ink3 }}>{on ? "정배열" : "—"}</span>;
+  return <span style={{ fontSize: 11, fontWeight: 700, color: on ? C.ok : C.ink3, whiteSpace: "nowrap" }}>{on ? "정배열" : "—"}</span>;
 }
 
 export function CompositeCell({ value, width = 110 }) {
@@ -89,12 +89,13 @@ export function CompositeCell({ value, width = 110 }) {
 }
 
 export function MiniBars({ f, h = 26 }) {
-  const order = [["m", "M"], ["v", "V"], ["q", "Q"], ["g", "G"], ["s", "S"]];
+  // PR-5: 약어 → 한글 툴팁
+  const order = [["m", "M", "모멘텀"], ["v", "V", "가치"], ["q", "Q", "퀄리티"], ["g", "G", "성장"], ["s", "S", "감성"]];
   return <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: h }}>
-    {order.map(([k, lbl]) => {
+    {order.map(([k, lbl, ko]) => {
       const v = f[k];
       const col = v >= 70 ? C.ok : v >= 45 ? C.ink2 : C.ink3;
-      return <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }} title={lbl + " " + v}>
+      return <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, cursor: "help" }} title={`${ko}(${lbl}) ${v}`}>
         <div style={{ width: 7, height: h - 10, background: C.surface2, borderRadius: 2, display: "flex", alignItems: "flex-end", overflow: "hidden" }}>
           <div style={{ width: "100%", height: (v / 100) * (h - 10), background: col, borderRadius: 2 }}></div>
         </div>
@@ -104,18 +105,21 @@ export function MiniBars({ f, h = 26 }) {
   </div>;
 }
 
-export function FactorBar({ label, value, group }) {
-  const col = value >= 70 ? C.ok : value >= 50 ? C.warn : C.ink3;
+export function FactorBar({ label, value, group, fallback }) {
+  // PR-6: 중립 폴백(데이터 없음→50)은 옅은 색 + "데이터 없음" 표기로 실제 점수와 구분
+  const col = fallback ? C.line2 : value >= 70 ? C.ok : value >= 50 ? C.warn : C.ink3;
   const groupLabel = group === "timing" ? "타이밍" : group === "mispricing" ? "미스프라이싱" : null;
-  return <div style={{ display: "grid", gridTemplateColumns: "92px 1fr 40px", alignItems: "center", gap: 12, padding: "9px 0" }}>
+  return <div style={{ display: "grid", gridTemplateColumns: "92px 1fr 56px", alignItems: "center", gap: 12, padding: "9px 0" }}>
     <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-      <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: fallback ? C.ink3 : C.ink }}>{label}</span>
       {groupLabel && <MonoCaps style={{ fontSize: 9 }} color={group === "timing" ? C.acc : C.ink3}>{groupLabel}</MonoCaps>}
     </div>
     <div style={{ height: 9, background: C.surface2, borderRadius: 999, overflow: "hidden" }}>
-      <div style={{ width: value + "%", height: "100%", background: col, borderRadius: 999, transition: "width .5s" }}></div>
+      <div style={{ width: value + "%", height: "100%", background: col, borderRadius: 999, transition: "width .5s", opacity: fallback ? 0.5 : 1 }}></div>
     </div>
-    <Num size={15} weight={700} color={col} style={{ textAlign: "right" }}>{value}</Num>
+    {fallback
+      ? <span style={{ fontSize: 9, color: C.ink3, textAlign: "right", whiteSpace: "nowrap" }} title="데이터가 없어 중립(50)으로 처리됨">데이터 없음</span>
+      : <Num size={15} weight={700} color={col} style={{ textAlign: "right" }}>{value}</Num>}
   </div>;
 }
 

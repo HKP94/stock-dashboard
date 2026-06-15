@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v1.9 |
+| 버전 | v2.0 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -579,6 +579,14 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-2: run_pipeline KR 단계에 valuation/analyst upsert(US 대칭) → KR 11종목 value/quality/growth 50고정→실제분포(11/11)
   - PR-3: valuation/analyst `(ticker, asof)` 일별 누적(스냅샷 시계열) — §F7 진짜 백테스트 승격 경로
   - PR-4: `ingest_kis.py` KIS 옵션 골격(키 있을 때만 활성, 없으면 무에러 스킵)
+- [x] **데이터·UX 정비 PR-0~6** (2026-06-16):
+  - PR-0: **US 종목 valuation/analyst 누락 근본수정** — export가 글로벌 max(asof) 사용 → KR 수집일(06-15)이 최신이라 US(06-14) 전부 None되던 버그를 종목별 DISTINCT ON으로 수정. ROE 비율→% 표시, KR per_t 폴백, US 뉴스쿼리 영문정식명+티커로 구체화(메타/알파벳 모호성 해소)
+  - PR-1: UI 내부 스크립트명(.py/명령어) 노출 전부 사용자 친화 문구로 교체
+  - PR-2: 오버뷰 알림 헤더/본문 중복 렌더 수정(flagDesc 미매칭→본문 생략)
+  - PR-3: 추세 컬럼 nowrap, 만/억 축약 제거 확인
+  - PR-4: 포트폴리오 폼 기본 미선택·placeholder만·미선택/0 저장비활성·삭제 confirm
+  - PR-5: MVQGS·COMPOSITE·레짐가중치 툴팁, COMPOSITE — 사전필터제외 구분
+  - PR-6: 종목상세 데이터없음 empty state, 팩터 중립폴백(데이터없음) vs 실제 점수 구분 표기(factorFallback)
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -618,3 +626,4 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v1.7 (2026-06-15) 신규 §F7(진짜 백테스트 vs 회고 표준원칙). 2차 버그수정 PR-1~4(뉴스카드 일관성·리포트섹션제거·포트폴리오 통화환산·시장 KR/US 분리+지수등락버그). 백테스트 PR-5~8(backtest_results·src/backtest.py·전략비교탭·단위테스트13). §5.1 backtest_results + market_daily.summary_kr_md/us_md 추가 — Claude Code.*
 - *v1.8 (2026-06-15) PR-1 데이터완결성(src/backfill.py 누락탐지+백필, export 종목별 최신조회로 asof불일치 해결, 데이터없음 라벨). PR-2 뉴스강화(cap40·쿼리보강·네이버2p, news_refresh.yml 18:00KST+src/news_refresh.py, 원문URL 피드·종목별 기사/타임라인). PR-3 인사이트형 프롬프트([수치]→[의미])·폴백 해석문구 — Claude Code.*
 - *v1.9 (2026-06-15) KR 밸류·컨센서스 무료 수집: ingest_kr에 네이버금융+FnGuide 스크래핑(PER/PBR/ROE/부채/목표가/투자의견), run_pipeline KR단계 valuation/analyst upsert(US대칭) → KR 가치/퀄리티/성장 50고정→실제분포(11/11). §F2 소스 갱신, §F4-5 KR 실제값 반영, §F7 스냅샷누적→진짜백테스트 승격경로. ingest_kis.py KIS옵션골격. 단위테스트 +9(256 passed) — Claude Code.*
+- *v2.0 (2026-06-16) 데이터·UX 정비 PR-0~6: US valuation/analyst 누락 근본수정(글로벌 max(asof)→종목별 DISTINCT ON, ROE %표시, US뉴스쿼리 영문정식명), 내부스크립트명 노출제거, 알림 중복렌더 수정, 추세 nowrap, 포트폴리오 폼 안전장치, 약어/상태 툴팁, 종목상세 empty state + 팩터 중립폴백 구분 — Claude Code.*

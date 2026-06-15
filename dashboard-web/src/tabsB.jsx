@@ -311,7 +311,7 @@ export function Research({ D, nav }) {
                 📄 리포트 검색 ({s?.mk === "KR" ? "네이버" : "TipRanks"})
               </a>
             )}
-            <span style={{ fontSize: 11, color: C.ink3 }}>항목 추가: watchlist_admin.py → 리서치 항목</span>
+            <span style={{ fontSize: 11, color: C.ink3 }}>리서치 항목은 관리 도구에서 추가할 수 있습니다.</span>
           </div>
         </Panel>
       </div>
@@ -341,7 +341,7 @@ export function Research({ D, nav }) {
         {filtered.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center", color: C.ink3, fontSize: 13, background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10 }}>
             {items.length === 0
-              ? "리서치 항목이 없습니다. watchlist_admin.py에서 추가하세요."
+              ? "리서치 항목이 없습니다. 관리 도구에서 추가할 수 있습니다."
               : "해당 유형의 항목이 없습니다."}
           </div>
         ) : (

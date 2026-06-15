@@ -47,7 +47,7 @@ export function Strategy({ D }) {
   if (strategies.length === 0 && retro.length === 0) {
     return (
       <div style={{ padding: 40, textAlign: "center", color: C.ink3, fontSize: 13, background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10 }}>
-        백테스트 데이터가 없습니다. <code style={{ fontFamily: "var(--mono)" }}>python -m src.backtest</code> → <code style={{ fontFamily: "var(--mono)" }}>python -m src.export_dashboard_data</code> 실행 후 새로고침하세요.
+백테스트 데이터를 준비 중입니다. 잠시 후 다시 확인해 주세요.
       </div>
     );
   }

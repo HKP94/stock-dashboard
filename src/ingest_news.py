@@ -325,6 +325,19 @@ def _collect_rss_rows(
     return rows
 
 
+# PR-0: US 종목 영문 정식명 — watchlist.name이 한글이라 영문 Google News 쿼리 품질이 낮고
+# "Meta"/"Alpha" 등 일반명사 충돌이 생긴다. 정식명+티커로 쿼리를 구체화해 무관 결과를 줄인다.
+_US_ENGLISH_NAME: dict[str, str] = {
+    "AAPL": "Apple", "ALB": "Albemarle", "ASML": "ASML", "BA": "Boeing",
+    "BBW": "Build-A-Bear Workshop", "BE": "Bloom Energy", "CELH": "Celsius Holdings",
+    "CRDO": "Credo Technology", "ELV": "Elevance Health", "FUTU": "Futu Holdings",
+    "GOOG": "Alphabet", "HSY": "Hershey", "LITE": "Lumentum", "META": "Meta Platforms",
+    "MSFT": "Microsoft", "NVDA": "Nvidia", "RCL": "Royal Caribbean", "SLB": "SLB Schlumberger",
+    "SMR": "NuScale Power", "SPCE": "Virgin Galactic", "TSLA": "Tesla",
+    "TSM": "Taiwan Semiconductor", "VRT": "Vertiv", "WM": "Waste Management", "XOM": "Exxon Mobil",
+}
+
+
 def fetch_google_news(
     ticker: str,
     company_name: str,
@@ -332,16 +345,17 @@ def fetch_google_news(
 ) -> list[NewsRawRow]:
     """
     Google News RSS에서 종목 관련 뉴스 수집.
-    KR: "{회사명} 주가", "{회사명} 실적"
-    US: "{ticker} stock", "{회사명} earnings"
+    KR: "{회사명} 주가", "{회사명} 실적", "{회사명} OR {코드}"
+    US: "{영문정식명} {ticker} stock", "{영문정식명} earnings", "{ticker} stock forecast"
+        (영문 정식명+티커로 일반명사 충돌 회피 — 예: "Meta Platforms META stock")
     """
     kr = _is_kr(ticker)
     code = _clean_ticker(ticker)  # KR: 6자리 코드
     if kr:
-        # PR-2: 회사명 + 코드 결합 쿼리로 커버리지 보강
         queries = [f"{company_name} 주가", f"{company_name} 실적", f"{company_name} OR {code}"]
     else:
-        queries = [f"{ticker} stock", f"{company_name} earnings", f"{company_name} OR {ticker}"]
+        eng = _US_ENGLISH_NAME.get(ticker, company_name)
+        queries = [f"{eng} {ticker} stock", f"{eng} earnings", f"{ticker} stock forecast"]
     return _collect_rss_rows(ticker, queries, kr, max_items)
 
 

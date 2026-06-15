@@ -61,7 +61,13 @@ const flagDesc = (f, s) => {
   if (/HBM/.test(f)) return "HBM 사이클 수혜 — 구조적 모멘텀";
   if (/고밸류|경계/.test(f)) return "밸류에이션 부담 — 변동성 확대 유의";
   if (/약세/.test(f)) return "추세 기울기 하락, 약세 흐름";
-  return f;
+  // PR-2: 헤더(플래그)와 본문이 중복되지 않도록 미매칭 플래그도 '근거 문장'으로
+  if (/목표가 근접/.test(f)) return s.tp != null ? `컨센서스 목표가에 근접 — 추가 상승 여력 축소 점검` : "컨센서스 목표가에 근접";
+  if (/골든크로스/.test(f)) return "단기·중기 이동평균선 교차 임박";
+  if (/급등/.test(f)) return "단기 급등 — 변동성·차익실현 유의";
+  if (/급락/.test(f)) return "단기 급락 — 과매도 여부·악재 점검";
+  if (/이격도/.test(f)) return "주가가 이동평균선에서 크게 이탈 — 단기 되돌림 가능";
+  return "";  // 매칭 없으면 본문 생략(헤더와 중복 방지)
 };
 
 // PR-3: 플래그 분류 헬퍼 (data.json이 분리되어 있지만 fallback 포함)
@@ -179,11 +185,21 @@ export function Overview({ D, nav, goNews }) {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-                {["", "종목", "현재가", "COMPOSITE", "M·V·Q·G·S", "RSI", "추세", "주요 플래그", "판단"].map((h, i) => (
-                  <th key={i} style={{ textAlign: "left", padding: "9px 12px" }}>
-                    <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps>
-                  </th>
-                ))}
+                {["", "종목", "현재가", "COMPOSITE", "M·V·Q·G·S", "RSI", "추세", "주요 플래그", "판단"].map((h, i) => {
+                  // PR-5: 약어 헤더 툴팁
+                  const tip = {
+                    "COMPOSITE": "5개 팩터를 레짐 가중치로 합산한 종합 점수(0~100)",
+                    "M·V·Q·G·S": "모멘텀 · 가치 · 퀄리티 · 성장 · 감성 (5팩터 점수)",
+                    "RSI": "상대강도지수(14일) — 70↑ 과열, 30↓ 과매도",
+                    "추세": "이동평균선 정배열(20>60>120) 여부",
+                    "판단": "내 투자 판단(방향·매력도)",
+                  }[h];
+                  return (
+                    <th key={i} title={tip || undefined} style={{ textAlign: "left", padding: "9px 12px", cursor: tip ? "help" : "default" }}>
+                      <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -211,10 +227,14 @@ export function Overview({ D, nav, goNews }) {
                         <ChangePct v={s.chg} size={11.5} />
                       </div>
                     </td>
-                    <td style={{ padding: "10px 12px", width: 150 }}><CompositeCell value={s.comp} /></td>
+                    <td style={{ padding: "10px 12px", width: 150 }}>
+                      {s.comp == null
+                        ? <span title="사전필터(F-Score·고유변동성)로 종합점수 제외" style={{ fontSize: 10.5, fontWeight: 700, color: C.ink3, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "3px 8px", whiteSpace: "nowrap", cursor: "help" }}>사전필터 제외</span>
+                        : <CompositeCell value={s.comp} />}
+                    </td>
                     <td style={{ padding: "10px 12px" }}><MiniBars f={s.f} /></td>
                     <td style={{ padding: "10px 12px" }}><Num size={13} weight={600} color={s.rsi == null ? C.ink3 : s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi == null ? "—" : s.rsi.toFixed(0)}</Num></td>
-                    <td style={{ padding: "10px 12px" }}><AlignBadge on={s.align} /></td>
+                    <td style={{ padding: "10px 12px", whiteSpace: "nowrap" }}><AlignBadge on={s.align} /></td>
                     <td style={{ padding: "10px 12px", maxWidth: 150 }}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                         {af.slice(0, 2).map((f) => (
@@ -251,7 +271,9 @@ export function Overview({ D, nav, goNews }) {
             sub={`${actionAlerts.length} RULES FLAGGED`}
             bodyStyle={{ maxHeight: 320, overflowY: "auto" }}
           >
-            {actionAlerts.map((a, i) => (
+            {actionAlerts.map((a, i) => {
+              const desc = flagDesc(a.f, a.s);  // PR-2: 헤더(플래그)와 다른 근거 문장. 빈 값이면 본문 생략
+              return (
               <div key={i} onClick={() => nav(a.s.t)} className="row-hover" style={{ display: "flex", gap: 11, padding: "11px 16px", borderBottom: `1px solid ${C.line}`, cursor: "pointer", alignItems: "flex-start" }}>
                 <span style={{ width: 3, alignSelf: "stretch", borderRadius: 2, background: flagTone(a.f), flexShrink: 0 }}></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -259,10 +281,10 @@ export function Overview({ D, nav, goNews }) {
                     <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{a.s.name}</span>
                     <span style={{ fontSize: 11, fontWeight: 700, color: flagTone(a.f) }}>{a.f}</span>
                   </div>
-                  <div style={{ fontSize: 11.5, color: C.ink2, lineHeight: 1.4 }}>{flagDesc(a.f, a.s)}</div>
+                  {desc && <div style={{ fontSize: 11.5, color: C.ink2, lineHeight: 1.4 }}>{desc}</div>}
                 </div>
               </div>
-            ))}
+            );})}
             {actionAlerts.length === 0 && (
               <div style={{ padding: "18px 16px", fontSize: 12.5, color: C.ink3, textAlign: "center" }}>액션 신호 없음</div>
             )}
@@ -486,6 +508,31 @@ export function StockDetail({ D, ticker, nav }) {
   ];
   const toneCol = (t) => ({ ok: C.ok, bad: C.bad, warn: C.warn, acc: C.acc, neutral: C.ink }[t] || C.ink);
   const sectorRankText = s.comp != null ? `${s.sec} ${sectorCount}개 중 ${sectorRank}위` : `${s.sec} ${sectorCount}개`;
+  const fb = s.factorFallback || {};  // PR-6: 팩터별 중립폴백 여부
+
+  // PR-6: 데이터 없는 종목 — 빈 박스 대신 명확한 empty state
+  if (s.hasData === false) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "18px 22px", display: "flex", alignItems: "center", gap: 14 }}>
+          <button onClick={() => nav(null, "overview")} style={{ ...btnGhost, fontSize: 18, color: C.ink3 }}>←</button>
+          <div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+              <span style={{ fontSize: 24, fontWeight: 800, color: C.ink }}>{s.name}</span>
+              <span className="mono" style={{ fontSize: 13, color: C.ink3 }}>{s.t} · {s.mk}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "56px 24px", textAlign: "center" }}>
+          <div style={{ fontSize: 30, marginBottom: 12 }}>⏳</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.ink, marginBottom: 6 }}>데이터 수집 중입니다</div>
+          <div style={{ fontSize: 12.5, color: C.ink3, lineHeight: 1.6 }}>
+            최근 추가된 종목이라 가격·지표·재무가 아직 준비되지 않았습니다.<br />다음 갱신 후 다시 확인해 주세요.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -639,10 +686,10 @@ export function StockDetail({ D, ticker, nav }) {
           </div>
           <div style={{ padding: "8px 18px 14px" }}>
             <MonoCaps style={{ fontSize: 9 }} color={C.acc}>타이밍 그룹 — 단기 시그널</MonoCaps>
-            {factors.filter(([k]) => D.factorMeta[k].group === "timing").map(([k, v]) => <FactorBar key={k} label={D.factorMeta[k].ko} value={v} group="timing" />)}
+            {factors.filter(([k]) => D.factorMeta[k].group === "timing").map(([k, v]) => <FactorBar key={k} label={D.factorMeta[k].ko} value={v} group="timing" fallback={fb[k]} />)}
             <div style={{ height: 1, background: C.line, margin: "8px 0" }}></div>
             <MonoCaps style={{ fontSize: 9 }}>미스프라이싱 그룹 — 장기 보유 판단</MonoCaps>
-            {factors.filter(([k]) => D.factorMeta[k].group === "mispricing").map(([k, v]) => <FactorBar key={k} label={D.factorMeta[k].ko} value={v} group="mispricing" />)}
+            {factors.filter(([k]) => D.factorMeta[k].group === "mispricing").map(([k, v]) => <FactorBar key={k} label={D.factorMeta[k].ko} value={v} group="mispricing" fallback={fb[k]} />)}
           </div>
         </Panel>
       </div>

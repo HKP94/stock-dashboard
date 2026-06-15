@@ -568,10 +568,18 @@ def build_data() -> dict:
         """)
         quant_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
 
-        cur.execute("SELECT ticker, per_f, pbr, roe FROM valuation WHERE asof=(SELECT max(asof) FROM valuation)")
+        # PR-0: 종목별 최신 valuation/analyst (글로벌 max(asof) 사용 시 KR/US 수집일이
+        # 달라 한쪽이 통째로 누락되는 버그 — indicators/quant와 동일하게 DISTINCT ON으로 수정).
+        cur.execute("""
+            SELECT DISTINCT ON (ticker) ticker, per_f, per_t, pbr, roe
+            FROM valuation ORDER BY ticker, asof DESC
+        """)
         val_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
 
-        cur.execute("SELECT ticker, rating, target_price, upside FROM analyst WHERE asof=(SELECT max(asof) FROM analyst)")
+        cur.execute("""
+            SELECT DISTINCT ON (ticker) ticker, rating, target_price, upside
+            FROM analyst ORDER BY ticker, asof DESC
+        """)
         ana_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
 
         # PR-1: 증분 처리로 오늘자 news_analysis가 없는 종목도 빈 카드가 되지 않도록
@@ -676,7 +684,7 @@ def build_data() -> dict:
             flags_action, flags_quality = _split_flags(raw_flags)
 
             # 재무
-            per  = _f(val.get("per_f"))
+            per  = _f(val.get("per_f")) or _f(val.get("per_t"))  # PR-0: KR은 per_t 폴백
             pbr  = _f(val.get("pbr"))
             roe  = _f(val.get("roe"))
             rev  = _f(fund.get("op_margin"))
@@ -695,6 +703,17 @@ def build_data() -> dict:
             sum_bullets = [l.lstrip("- ").strip() for l in summary_raw.split("\n") if l.strip().startswith("-")][:3]
             if not sum_bullets and summary_raw:
                 sum_bullets = [summary_raw[:100]]
+
+            # PR-6: 팩터별 '중립 폴백(데이터 없음→50)' 여부 — quant 플래그로 판별
+            factor_fallback = {"m": False, "v": False, "q": False, "g": False, "s": False}
+            for f in raw_flags:
+                if not ("데이터 부족" in f or "사전필터" in f or "발행주식수" in f):
+                    continue
+                if any(k in f for k in ("PER", "밸류", "가치", "PBR")): factor_fallback["v"] = True
+                if any(k in f for k in ("F-Score", "ROE", "퀄리티", "부채")): factor_fallback["q"] = True
+                if "모멘텀" in f: factor_fallback["m"] = True
+                if any(k in f for k in ("성장", "매출", "Growth")): factor_fallback["g"] = True
+                if any(k in f for k in ("감성", "뉴스", "Sentiment")): factor_fallback["s"] = True
 
             # PR-4: SMA 시계열 계산
             sma20  = _sma(ser, 20)
@@ -740,10 +759,11 @@ def build_data() -> dict:
                 "flags":        raw_flags,         # 하위호환
                 "flagsAction":  flags_action,      # PR-3
                 "flagsQuality": flags_quality,     # PR-3
+                "factorFallback": factor_fallback, # PR-6: 팩터별 중립폴백(데이터없음) 여부
                 "rank":   [rk, total_stocks],
                 "per":    round(per, 1) if per else None,
                 "pbr":    round(pbr, 2) if pbr else None,
-                "roe":    round(roe, 1) if roe else None,
+                "roe":    round(roe * 100, 1) if roe is not None else None,  # PR-0: 비율→% 표시(US/KR 모두 ratio 저장)
                 "rev":    round(rev * 100, 1) if rev else None,
                 "fscore": fscore,
                 "tp":     round(tp) if tp else None,

@@ -84,7 +84,9 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **백테스트 vs 회고 절대 구분 (PRD §F7)**: 모멘텀만 진짜 백테스트(과거 시점 데이터만). 가치·퀄리티·성장·복합은 오늘 스냅샷뿐이라 "회고"(선정시점편향) — 화면·코드에서 절대 혼동 금지, 회고는 "백테스트 아님" 경고 필수.
 - **시장 뉴스 pseudo-ticker**: 시장 시황 뉴스는 `_MARKET_KR`/`_MARKET_US` ticker로 `news_raw`에 저장. 이들은 watchlist에 없으므로 종목 카드/enrich 종목요약 대상에서 제외(`enrich_news_batch`는 watchlist 종목만 처리).
 - **시장 등락률**: `ingest_market`이 거래일 기준 전일대비 등락을 `market_daily.payload.changes`에 저장(주말 carry-over 0.00% 버그 방지). export는 changes 우선, 폴백은 상대오차 1e-5 초과 시만 인정.
-- **KR 밸류/컨센서스 = 네이버금융 + FnGuide 무료 스크래핑** (`ingest_kr.fetch_kr_valuation_analyst`). PER/PBR/현재가/목표가/투자의견=네이버 종목메인, ROE/부채비율=FnGuide `#highlight_D_A`. **yfinance KR 절대 금지**. KIS(`ingest_kis.py`)는 키 있을 때만 활성 보조. ROE는 비율(0.07) 단위로 정규화해 US와 통일.
+- **KR 밸류/컨센서스 = 네이버금융 + FnGuide 무료 스크래핑** (`ingest_kr.fetch_kr_valuation_analyst`). PER/PBR/현재가/목표가/투자의견=네이버 종목메인, ROE/부채비율=FnGuide `#highlight_D_A`. **yfinance KR 절대 금지**. KIS(`ingest_kis.py`)는 키 있을 때만 활성 보조. ROE는 비율(0.07) 단위로 정규화해 US와 통일(표시 시 ×100 %).
+- **export는 종목별 '최신' 조회만 사용**(`SELECT DISTINCT ON (ticker) ... ORDER BY ticker, asof/date DESC`). 글로벌 `max(asof)`/특정날짜 고정 금지 — KR/US 수집일이 달라 한쪽이 통째로 누락되는 버그의 근원(indicators·quant·price·**valuation·analyst** 전부 적용).
+- **UI 텍스트에 내부 스크립트명·명령어(.py / `python -m ...`) 노출 금지.** 사용자 친화 문구만. 빈 상태/에러도 "잠시 후 다시" 식으로.
 - Python 3.12, 타입힌트 필수, `pydantic` v2로 외부 데이터·LLM 출력 검증.
 - 모든 외부 수집 함수는 **순수 함수에 가깝게**: 입력(ticker 등) → 표준화된 dict/모델 반환. DB 쓰기는 `db.py`로 분리.
 - 재시도: 네트워크/LLM 호출은 지수 백오프 3회. 실패 시 예외를 삼키지 말고 호출부에서 종목 단위로 격리.
