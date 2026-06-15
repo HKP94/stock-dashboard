@@ -806,10 +806,21 @@ def build_data() -> dict:
         # PR-3: 액션 신호만 카운트
         rules_count = sum(len(s["flagsAction"]) for s in stocks)
 
+        # PR-1: 실제 가격 기준일(데이터 신선도) — 시장별 최신 거래일
+        cur.execute("""
+            SELECT w.market, max(p.date) AS d
+            FROM prices_daily p JOIN watchlist w USING(ticker)
+            WHERE w.active GROUP BY w.market
+        """)
+        price_asof = {r["market"]: str(r["d"]) for r in cur.fetchall() if r["d"]}
+        price_asof_latest = max(price_asof.values()) if price_asof else None
+
         now = datetime.now()
         data = {
             "today":      now.strftime("%Y년 %-m월 %-d일 (%a)").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"),
             "updated":    now.strftime("%H:%M") + " KST",
+            "priceAsof":  price_asof_latest,   # PR-1: 가격 기준일(최신 거래일)
+            "priceAsofByMarket": price_asof,   # {"KR": "...", "US": "..."}
             "rulesCount": rules_count,
             "market":     market,
             "regimes":    REGIMES,

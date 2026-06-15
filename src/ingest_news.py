@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import email.utils
 import logging
+import os
 import urllib.parse
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -354,8 +355,9 @@ def fetch_google_news(
     if kr:
         queries = [f"{company_name} 주가", f"{company_name} 실적", f"{company_name} OR {code}"]
     else:
+        # PR-2: 정식명+티커 복수 쿼리로 US 건수·정확도 보강
         eng = _US_ENGLISH_NAME.get(ticker, company_name)
-        queries = [f"{eng} {ticker} stock", f"{eng} earnings", f"{ticker} stock forecast"]
+        queries = [f"{eng} {ticker} stock", f"{eng} earnings", f"{ticker} stock forecast", f"{ticker} news"]
     return _collect_rss_rows(ticker, queries, kr, max_items)
 
 
@@ -367,8 +369,12 @@ MARKET_KR_TICKER: str = "_MARKET_KR"
 MARKET_US_TICKER: str = "_MARKET_US"
 
 _MARKET_QUERIES: dict[str, tuple[list[str], bool]] = {
-    MARKET_KR_TICKER: (["코스피 전망", "한국 증시 시황"], True),
-    MARKET_US_TICKER: (["S&P 500 outlook", "Nasdaq forecast", "Fed rate"], False),
+    MARKET_KR_TICKER: (["코스피 전망", "한국 증시 시황", "코스닥 시황"], True),
+    # PR-2: US 시장 뉴스 소스 다양화
+    MARKET_US_TICKER: (
+        ["US stock market today", "S&P 500", "Nasdaq", "Federal Reserve", "US stocks outlook"],
+        False,
+    ),
 }
 
 
@@ -435,6 +441,96 @@ def fetch_yahoo_news(
 
 
 # ──────────────────────────────────────────────────────────────
+# PR-2: Yahoo Finance RSS (US 뉴스 보강, 무료·인증불필요)
+# ──────────────────────────────────────────────────────────────
+
+YAHOO_RSS_URL: str = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+
+
+def fetch_yahoo_rss(ticker: str, max_items: int = GOOGLE_MAX_ITEMS) -> list[NewsRawRow]:
+    """Yahoo Finance RSS 헤드라인 피드 → list[NewsRawRow]. 실패/레이트리밋(429) 시 [].
+    재시도하지 않는다(429는 빠르게 회복 안 됨 → 파이프라인 지연 방지)."""
+    url = YAHOO_RSS_URL.format(ticker=ticker)
+    try:
+        resp = requests.get(url, headers=_SCRAPE_HEADERS, timeout=12)
+        if resp.status_code != 200:
+            logger.info("%s: Yahoo RSS %d (스킵)", ticker, resp.status_code)
+            return []
+        feed = feedparser.parse(resp.content)
+    except Exception as exc:
+        logger.warning("%s: Yahoo RSS 실패: %s", ticker, exc)
+        return []
+    rows: list[NewsRawRow] = []
+    for entry in feed.entries[:max_items]:
+        title = (entry.get("title") or "").strip()
+        link = (entry.get("link") or entry.get("id") or "").strip()
+        if not title or not link or not link.startswith("http"):
+            continue
+        published_at = _parse_rfc822(entry.get("published", ""))
+        body = entry.get("summary") or entry.get("description") or None
+        if body:
+            body = BeautifulSoup(body, "html.parser").get_text(separator=" ")[:500]
+        rows.append(NewsRawRow(
+            ticker=ticker, source="yahoo_rss",
+            published_at=published_at, title=title, body=body, url=link,
+        ))
+    logger.info("%s: Yahoo RSS %d건 수집", ticker, len(rows))
+    return rows
+
+
+# ──────────────────────────────────────────────────────────────
+# PR-2: Finnhub company-news (옵션, FINNHUB_API_KEY 있을 때만)
+# ──────────────────────────────────────────────────────────────
+
+def finnhub_enabled() -> bool:
+    return bool(os.environ.get("FINNHUB_API_KEY"))
+
+
+def fetch_finnhub_news(ticker: str, max_items: int = GOOGLE_MAX_ITEMS) -> list[NewsRawRow]:
+    """
+    Finnhub company-news → list[NewsRawRow]. FINNHUB_API_KEY 없으면 [] (자동 스킵).
+    무료 티어 레이트리밋(분당 60) 고려. 키 발급·검증은 사용자 몫.
+    """
+    key = os.environ.get("FINNHUB_API_KEY")
+    if not key:
+        return []
+    from datetime import timedelta
+    today = date.today()
+    frm = (today - timedelta(days=14)).isoformat()
+    url = (
+        f"https://finnhub.io/api/v1/company-news?symbol={ticker}"
+        f"&from={frm}&to={today.isoformat()}&token={key}"
+    )
+    try:
+        resp = requests.get(url, headers=_SCRAPE_HEADERS, timeout=15)
+        resp.raise_for_status()
+        items = resp.json()
+    except Exception as exc:
+        logger.warning("%s: Finnhub 뉴스 실패(스킵): %s", ticker, exc)
+        return []
+    rows: list[NewsRawRow] = []
+    for it in (items or [])[:max_items]:
+        headline = (it.get("headline") or "").strip()
+        link = (it.get("url") or "").strip()
+        if not headline or not link or not link.startswith("http"):
+            continue
+        ts = it.get("datetime")
+        pub = None
+        if ts:
+            try:
+                pub = datetime.fromtimestamp(int(ts), tz=timezone.utc).replace(tzinfo=None)
+            except (TypeError, ValueError):
+                pub = None
+        rows.append(NewsRawRow(
+            ticker=ticker, source="finnhub",
+            published_at=pub, title=headline,
+            body=(it.get("summary") or None), url=link,
+        ))
+    logger.info("%s: Finnhub %d건 수집", ticker, len(rows))
+    return rows
+
+
+# ──────────────────────────────────────────────────────────────
 # 배치 실행
 # ──────────────────────────────────────────────────────────────
 
@@ -464,11 +560,16 @@ def run_news_ingest(
                 rows += fetch_naver_news(ticker)
             else:
                 rows += fetch_yahoo_news(ticker)
+                # PR-2: US 뉴스 보강 — Yahoo RSS + Finnhub(옵션). 소스별 실패 격리.
+                for fn in (fetch_yahoo_rss, fetch_finnhub_news):
+                    try:
+                        rows += fn(ticker)
+                    except Exception as se:
+                        logger.warning("%s: %s 보조 수집 실패: %s", ticker, fn.__name__, se)
 
-            # PR-2: Google News RSS 추가 수집 (두 소스 합산, MAX_ITEMS cap)
+            # Google News RSS 추가 수집 (전 소스 합산, url_hash dedupe는 insert_news_raw에서)
             try:
-                google_rows = fetch_google_news(ticker, name)
-                rows += google_rows
+                rows += fetch_google_news(ticker, name)
             except Exception as ge:
                 logger.warning("%s: Google News RSS 보조 수집 실패: %s", ticker, ge)
                 # 보조 소스 실패는 종목 전체를 막지 않음

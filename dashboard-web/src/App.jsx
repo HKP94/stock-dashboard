@@ -61,13 +61,18 @@ export default function App() {
             </span>
           </div>
 
-          {/* right: updated */}
+          {/* right: 가격 기준일(신선도) + 갱신시각 */}
           <div style={{ textAlign: "right" }}>
-            <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>LAST UPDATE</MonoCaps>
+            <MonoCaps style={{ fontSize: 9 }} color={C.ink3} title="대시보드 가격이 기준한 최신 거래일">가격 기준일</MonoCaps>
             <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
               <span style={{ width: 6, height: 6, borderRadius: 999, background: C.ok }}></span>
-              <span className="mono tnum" style={{ fontSize: 12, fontWeight: 600, color: C.ink }}>{D.updated}</span>
+              <span className="mono tnum" style={{ fontSize: 12, fontWeight: 600, color: C.ink }}>{D.priceAsof || D.updated}</span>
             </div>
+            {D.priceAsofByMarket && (
+              <div className="mono" style={{ fontSize: 9, color: C.ink3, marginTop: 1 }}>
+                KR {D.priceAsofByMarket.KR || "—"} · US {D.priceAsofByMarket.US || "—"}
+              </div>
+            )}
           </div>
         </div>
 

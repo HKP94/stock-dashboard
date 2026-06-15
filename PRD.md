@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v2.0 |
+| 버전 | v2.1 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -534,7 +534,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [x] `schemas.py` + `db.py` — pydantic v2 계약 모델, upsert 헬퍼, log_run
 - [x] `ingest_us.py` — yfinance 가격·재무·밸류에이션·애널리스트
 - [x] `ingest_kr.py` — pykrx(가격) + dart-fss(DART 재무)
-- [x] `ingest_news.py` — 네이버 HTML 스크래핑(KR) + yfinance.news(US), DDGS 제거, url_hash dedupe
+- [x] `ingest_news.py` — KR: 네이버 HTML + Google News RSS / US: yfinance.news + Yahoo RSS + Finnhub(옵션) + Google News RSS, `_MARKET_KR/US` 시황뉴스, DDGS 제거, url_hash dedupe
 - [x] `ingest_market.py` — ^KS11·^KQ11·^GSPC·^IXIC·^VIX·KRW=X·^TNX
 - [x] `compute_indicators.py` — SMA20/50/200·RSI14·이격도·추세기울기·정배열 + 단위 테스트 20개
 - [ ] n8n 수집 워크플로(05:30/06:00/15:40) → **Claude Code(JSON) + 사용자 임포트**
@@ -587,6 +587,9 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-4: 포트폴리오 폼 기본 미선택·placeholder만·미선택/0 저장비활성·삭제 confirm
   - PR-5: MVQGS·COMPOSITE·레짐가중치 툴팁, COMPOSITE — 사전필터제외 구분
   - PR-6: 종목상세 데이터없음 empty state, 팩터 중립폴백(데이터없음) vs 실제 점수 구분 표기(factorFallback)
+- [x] **가격 신선도 + US 뉴스 강화 PR-1~2** (2026-06-16):
+  - PR-1: 가격 신선도 진단(18시 잡이 가격 미수집 + 파이프라인 미실행으로 06-12 정체 확인) → `news_refresh.py`에 경량 가격갱신(prices+indicators+quant, .info 생략) 추가. 18:00=KR 당일종가, 06:00=US 종가. 헤더 LAST UPDATE→"가격 기준일"(priceAsof, KR/US 분리). 검증: KR·US 06-12→06-15.
+  - PR-2: US 뉴스 소스 추가 — Yahoo Finance RSS(`fetch_yahoo_rss`), Finnhub 옵션(`FINNHUB_API_KEY` 있을 때만), Google 쿼리 보강("{정식명} stock/earnings", "{ticker} news"), `_MARKET_US` 다양화. 검증: US 종목당 평균 67→82.4(+415건). 단위테스트 +5.
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -627,3 +630,4 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v1.8 (2026-06-15) PR-1 데이터완결성(src/backfill.py 누락탐지+백필, export 종목별 최신조회로 asof불일치 해결, 데이터없음 라벨). PR-2 뉴스강화(cap40·쿼리보강·네이버2p, news_refresh.yml 18:00KST+src/news_refresh.py, 원문URL 피드·종목별 기사/타임라인). PR-3 인사이트형 프롬프트([수치]→[의미])·폴백 해석문구 — Claude Code.*
 - *v1.9 (2026-06-15) KR 밸류·컨센서스 무료 수집: ingest_kr에 네이버금융+FnGuide 스크래핑(PER/PBR/ROE/부채/목표가/투자의견), run_pipeline KR단계 valuation/analyst upsert(US대칭) → KR 가치/퀄리티/성장 50고정→실제분포(11/11). §F2 소스 갱신, §F4-5 KR 실제값 반영, §F7 스냅샷누적→진짜백테스트 승격경로. ingest_kis.py KIS옵션골격. 단위테스트 +9(256 passed) — Claude Code.*
 - *v2.0 (2026-06-16) 데이터·UX 정비 PR-0~6: US valuation/analyst 누락 근본수정(글로벌 max(asof)→종목별 DISTINCT ON, ROE %표시, US뉴스쿼리 영문정식명), 내부스크립트명 노출제거, 알림 중복렌더 수정, 추세 nowrap, 포트폴리오 폼 안전장치, 약어/상태 툴팁, 종목상세 empty state + 팩터 중립폴백 구분 — Claude Code.*
+- *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*

@@ -1,8 +1,8 @@
-name: ATLAS 뉴스 리프레시 (18:00 KST)
+name: ATLAS 가격·뉴스 리프레시 (18:00 KST)
 
-# PR-2: 하루 2회 뉴스 수집. 06:00 전체 파이프라인(auto_run.yml)에 더해
-# 18:00에 뉴스 수집 + Gemini 요약(+시황) + data.json export만 가볍게 돈다.
-# 가격/지표/퀀트 재계산은 생략(이미 06:00에 수행).
+# 하루 2회 갱신. 06:00 전체 파이프라인(auto_run.yml)에 더해 18:00에
+# 경량 가격 갱신(prices_daily+indicators/quant) + 뉴스 수집 + Gemini 요약(+시황) + export.
+# (PR-1) 18:00은 KR 장마감 후라 KR 당일 종가를 확보. 재무/밸류/컨센서스 수집은 06:00에서만.
 
 on:
   workflow_dispatch:   # 수동 실행

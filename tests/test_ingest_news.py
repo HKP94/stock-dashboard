@@ -147,3 +147,59 @@ class TestFetchGoogleNews:
             rows = fetch_google_news("AAPL", "Apple")
 
         assert rows == []
+
+
+# ──────────────────────────────────────────────────────────────
+# PR-2: US 뉴스 보강 소스 (Yahoo RSS, Finnhub) 테스트
+# ──────────────────────────────────────────────────────────────
+class TestYahooRss:
+    def test_parses_entries(self):
+        from src.ingest_news import fetch_yahoo_rss
+        rss = b"""<?xml version="1.0"?><rss><channel>
+          <item><title>Apple hits record</title><link>https://finance.yahoo.com/news/a1</link>
+            <pubDate>Mon, 15 Jun 2026 12:00:00 GMT</pubDate><description>x</description></item>
+        </channel></rss>"""
+        class R: status_code=200; content=rss
+        with patch("src.ingest_news.requests.get", return_value=R()):
+            rows = fetch_yahoo_rss("AAPL")
+        assert len(rows) == 1
+        assert rows[0].source == "yahoo_rss"
+        assert rows[0].url == "https://finance.yahoo.com/news/a1"
+        assert len(rows[0].url_hash) == 64
+
+    def test_429_returns_empty(self):
+        from src.ingest_news import fetch_yahoo_rss
+        class R: status_code=429; content=b"Too Many Requests"
+        with patch("src.ingest_news.requests.get", return_value=R()):
+            assert fetch_yahoo_rss("AAPL") == []
+
+
+class TestFinnhub:
+    def test_disabled_without_key(self, monkeypatch):
+        from src.ingest_news import finnhub_enabled, fetch_finnhub_news
+        monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+        assert finnhub_enabled() is False
+        assert fetch_finnhub_news("AAPL") == []
+
+    def test_parses_with_key(self, monkeypatch):
+        from src.ingest_news import fetch_finnhub_news
+        monkeypatch.setenv("FINNHUB_API_KEY", "dummy")
+        payload = [
+            {"headline": "Nvidia surges", "url": "https://x.com/n1", "datetime": 1781000000, "summary": "s"},
+            {"headline": "", "url": "https://x.com/skip", "datetime": 1781000001},  # 제목없음 → 스킵
+        ]
+        class R:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return payload
+        with patch("src.ingest_news.requests.get", return_value=R()):
+            rows = fetch_finnhub_news("NVDA")
+        assert len(rows) == 1
+        assert rows[0].source == "finnhub"
+        assert rows[0].title == "Nvidia surges"
+
+    def test_api_error_returns_empty(self, monkeypatch):
+        from src.ingest_news import fetch_finnhub_news
+        monkeypatch.setenv("FINNHUB_API_KEY", "dummy")
+        with patch("src.ingest_news.requests.get", side_effect=Exception("boom")):
+            assert fetch_finnhub_news("NVDA") == []

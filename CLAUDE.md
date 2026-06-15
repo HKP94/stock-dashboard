@@ -40,7 +40,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── run_pipeline.py     # 일일 파이프라인 실행기(수집→연산→LLM→조립)
 │   ├── send_telegram.py    # 아침 브리핑 텔레그램 발송
 │   ├── backfill.py         # 누락/부족 종목 자동탐지 + 2년치 가격 백필 + 지표·퀀트 재계산
-│   ├── news_refresh.py     # 가벼운 뉴스 리프레시(수집+요약+export, 18:00 KST 잡)
+│   ├── news_refresh.py     # 18:00 KST 잡: 경량 가격갱신(prices+indicators+quant) + 뉴스+요약+export
 │   ├── recompute.py        # prices_daily 기준 indicators→quant 재계산(1회용)
 │   ├── compute_portfolio.py  # portfolio_holdings × prices_daily → portfolio upsert (F1, USD→KRW 환산)
 │   ├── backtest.py           # 모멘텀 진짜 백테스트 + 팩터 회고 → backtest_results (PRD §F7)
@@ -87,6 +87,8 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **KR 밸류/컨센서스 = 네이버금융 + FnGuide 무료 스크래핑** (`ingest_kr.fetch_kr_valuation_analyst`). PER/PBR/현재가/목표가/투자의견=네이버 종목메인, ROE/부채비율=FnGuide `#highlight_D_A`. **yfinance KR 절대 금지**. KIS(`ingest_kis.py`)는 키 있을 때만 활성 보조. ROE는 비율(0.07) 단위로 정규화해 US와 통일(표시 시 ×100 %).
 - **export는 종목별 '최신' 조회만 사용**(`SELECT DISTINCT ON (ticker) ... ORDER BY ticker, asof/date DESC`). 글로벌 `max(asof)`/특정날짜 고정 금지 — KR/US 수집일이 달라 한쪽이 통째로 누락되는 버그의 근원(indicators·quant·price·**valuation·analyst** 전부 적용).
 - **UI 텍스트에 내부 스크립트명·명령어(.py / `python -m ...`) 노출 금지.** 사용자 친화 문구만. 빈 상태/에러도 "잠시 후 다시" 식으로.
+- **가격 갱신 = 하루 2회** (06:00 auto_run + 18:00 news_refresh 경량). 18:00은 KR 장마감 후라 KR 당일종가, 06:00은 US 종가 직후. 헤더는 `priceAsof`(실제 가격 기준일) 표시.
+- **US 뉴스 소스**: yfinance.news + **Yahoo Finance RSS**(`feeds.finance.yahoo.com`, 429 시 무재시도 스킵) + **Finnhub**(`FINNHUB_API_KEY` 있을 때만) + Google News RSS(영문 정식명+티커 복수쿼리). KR은 네이버 HTML + Google News RSS. 전부 url_hash dedupe·종목격리.
 - Python 3.12, 타입힌트 필수, `pydantic` v2로 외부 데이터·LLM 출력 검증.
 - 모든 외부 수집 함수는 **순수 함수에 가깝게**: 입력(ticker 등) → 표준화된 dict/모델 반환. DB 쓰기는 `db.py`로 분리.
 - 재시도: 네트워크/LLM 호출은 지수 백오프 3회. 실패 시 예외를 삼키지 말고 호출부에서 종목 단위로 격리.
