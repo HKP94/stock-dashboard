@@ -79,3 +79,104 @@ def test_parse_fs_rows_extracts_revenue_op_net():
 def test_parse_fs_rows_empty_when_no_income_statement():
     fs = _FakeFS({"cis": pd.DataFrame()})
     assert _parse_fs_rows("021240.KS", fs, "annual") == []
+
+
+# ──────────────────────────────────────────────────────────────
+# PR-1: KR 밸류에이션·컨센서스 무료 수집 (네이버 + FnGuide) 파싱 테스트
+# ──────────────────────────────────────────────────────────────
+from unittest.mock import patch
+from datetime import date as _date
+from src.ingest_kr import (
+    _parse_kr_number,
+    _fetch_naver_main,
+    _fetch_fnguide,
+    fetch_kr_valuation_analyst,
+)
+
+# 네이버 종목 메인 최소 fixture (실제 구조의 핵심 요소만)
+_NAVER_HTML = """
+<html><body>
+  <div class="rate_info"><p class="no_today"><em><span class="blind">248,000</span></em></p></div>
+  <table summary="투자정보"><tr><th>PER</th><td><em id="_per">21.53</em></td></tr>
+  <tr><th>PBR</th><td><em id="_pbr">1.26</em></td></tr></table>
+  <div class="aside_invest_info"><table><tbody>
+    <tr><th>투자의견 l 목표주가</th><td><em>4.00</em> 매수 l <em>329,227</em></td></tr>
+  </tbody></table></div>
+</body></html>
+"""
+
+# FnGuide #highlight_D_A 최소 fixture
+_FNGUIDE_HTML = """
+<html><body>
+<table id="highlight_D_A"><tbody>
+  <tr><th>부채비율(%)</th><td>41.59</td><td>41.90</td><td>45.21</td><td></td></tr>
+  <tr><th>ROE(%)</th><td>10.83</td><td>4.57</td><td>4.00</td><td>7.11</td></tr>
+  <tr><th>영업이익률(%)</th><td>18.18</td><td>19.11</td><td>16.72</td><td>17.44</td></tr>
+</tbody></table>
+<div>추정기관수 4.0 목표주가</div>
+</body></html>
+"""
+
+
+class TestParseKrNumber:
+    def test_comma(self):
+        assert _parse_kr_number("329,227") == 329227.0
+    def test_percent(self):
+        assert _parse_kr_number("45.21%") == 45.21
+    def test_unit_bae_won(self):
+        assert _parse_kr_number("21.53배") == 21.53
+        assert _parse_kr_number("248,000원") == 248000.0
+    def test_negative(self):
+        assert _parse_kr_number("-8.4") == -8.4
+    def test_blank_dash_na(self):
+        assert _parse_kr_number("") is None
+        assert _parse_kr_number("-") is None
+        assert _parse_kr_number("N/A") is None
+        assert _parse_kr_number(None) is None
+
+
+class TestFetchNaverMain:
+    def test_parses_per_pbr_target_rating(self):
+        with patch("src.ingest_kr._get_html", return_value=_NAVER_HTML.encode()):
+            out = _fetch_naver_main("035420")
+        assert out["per_t"] == 21.53
+        assert out["pbr"] == 1.26
+        assert out["current_price"] == 248000.0
+        assert out["target_price"] == 329227.0
+        assert out["rating"] == "매수"
+
+
+class TestFetchFnguide:
+    def test_parses_roe_debt_lastcol(self):
+        with patch("src.ingest_kr._get_html", return_value=_FNGUIDE_HTML.encode()):
+            out = _fetch_fnguide("035420")
+        # 마지막 비어있지 않은 값 사용: 부채비율 45.21(빈칸 제외), ROE 7.11
+        assert out["debt_ratio"] == 45.21
+        assert out["roe"] == 7.11
+        assert out["op_margin"] == 17.44
+        assert out["n_analysts"] == 4
+
+
+class TestFetchKrValuationAnalyst:
+    def test_combines_and_converts(self):
+        def fake_html(url):
+            return (_FNGUIDE_HTML if "fnguide" in url else _NAVER_HTML).encode()
+        with patch("src.ingest_kr._get_html", side_effect=fake_html), \
+             patch("src.ingest_kr.time.sleep", return_value=None):
+            val, ana = fetch_kr_valuation_analyst("035420.KS", asof=_date(2026, 6, 15))
+        # ROE %→비율 변환 (7.11% → 0.0711)
+        assert val.roe == pytest.approx(0.0711)
+        assert val.per_t == 21.53
+        assert val.pbr == 1.26
+        assert val.debt_ratio == 45.21
+        # upside = 329227/248000 - 1
+        assert ana.target_price == 329227.0
+        assert ana.rating == "매수"
+        assert ana.upside == pytest.approx(329227.0 / 248000.0 - 1, rel=1e-4)
+        assert ana.n_analysts == 4
+
+    def test_none_when_pages_empty(self):
+        with patch("src.ingest_kr._get_html", return_value=b"<html></html>"), \
+             patch("src.ingest_kr.time.sleep", return_value=None):
+            val, ana = fetch_kr_valuation_analyst("000000.KS")
+        assert val is None and ana is None

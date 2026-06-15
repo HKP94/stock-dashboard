@@ -27,7 +27,8 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── db.py               # Postgres 연결·upsert 헬퍼 (psycopg/sqlalchemy)
 │   ├── schemas.py          # pydantic 모델 = PRD §5.2/§5.3 계약 코드화
 │   ├── ingest_us.py        # US 가격·재무·밸류·컨센서스 (FMP/Finnhub + yfinance 폴백)
-│   ├── ingest_kr.py        # KR 가격(pykrx)·재무(DART)·시세/잔고(KIS)
+│   ├── ingest_kr.py        # KR 가격(pykrx)·재무(DART)·밸류/컨센서스(네이버+FnGuide 무료)
+│   ├── ingest_kis.py       # KIS Developers 옵션 보조(키 있을 때만, ROE/부채/컨센서스 보강)
 │   ├── ingest_news.py      # 뉴스 수집 + url_hash dedupe → news_raw
 │   ├── ingest_market.py    # 지수/VIX/환율/금리 → market_daily
 │   ├── ingest_portfolio.py # KIS 잔고(또는 선택 옵션) → portfolio*
@@ -83,6 +84,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **백테스트 vs 회고 절대 구분 (PRD §F7)**: 모멘텀만 진짜 백테스트(과거 시점 데이터만). 가치·퀄리티·성장·복합은 오늘 스냅샷뿐이라 "회고"(선정시점편향) — 화면·코드에서 절대 혼동 금지, 회고는 "백테스트 아님" 경고 필수.
 - **시장 뉴스 pseudo-ticker**: 시장 시황 뉴스는 `_MARKET_KR`/`_MARKET_US` ticker로 `news_raw`에 저장. 이들은 watchlist에 없으므로 종목 카드/enrich 종목요약 대상에서 제외(`enrich_news_batch`는 watchlist 종목만 처리).
 - **시장 등락률**: `ingest_market`이 거래일 기준 전일대비 등락을 `market_daily.payload.changes`에 저장(주말 carry-over 0.00% 버그 방지). export는 changes 우선, 폴백은 상대오차 1e-5 초과 시만 인정.
+- **KR 밸류/컨센서스 = 네이버금융 + FnGuide 무료 스크래핑** (`ingest_kr.fetch_kr_valuation_analyst`). PER/PBR/현재가/목표가/투자의견=네이버 종목메인, ROE/부채비율=FnGuide `#highlight_D_A`. **yfinance KR 절대 금지**. KIS(`ingest_kis.py`)는 키 있을 때만 활성 보조. ROE는 비율(0.07) 단위로 정규화해 US와 통일.
 - Python 3.12, 타입힌트 필수, `pydantic` v2로 외부 데이터·LLM 출력 검증.
 - 모든 외부 수집 함수는 **순수 함수에 가깝게**: 입력(ticker 등) → 표준화된 dict/모델 반환. DB 쓰기는 `db.py`로 분리.
 - 재시도: 네트워크/LLM 호출은 지수 백오프 3회. 실패 시 예외를 삼키지 말고 호출부에서 종목 단위로 격리.

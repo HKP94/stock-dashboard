@@ -19,11 +19,15 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import time
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 from tenacity import (
     before_sleep_log,
     retry,
@@ -31,7 +35,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from src.schemas import FundamentalsRow, PriceDailyRow
+from src.schemas import AnalystRow, FundamentalsRow, PriceDailyRow, ValuationRow
 
 logger = logging.getLogger(__name__)
 
@@ -356,13 +360,210 @@ def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
 # 배치 실행 (n8n Execute Command 또는 직접 호출)
 # ──────────────────────────────────────────────────────────────
 
+# ──────────────────────────────────────────────────────────────
+# KR 밸류에이션·컨센서스 (무료 공개 페이지 — 네이버 금융 + FnGuide)
+#
+# 개인·비상업 분석 용도. 계좌 불필요. yfinance KR 사용 금지 규칙 유지.
+# 소스:
+#   - 네이버 금융 종목 메인: PER(#_per)·PBR(#_pbr)·현재가·목표주가·투자의견
+#   - FnGuide Company Guide(#highlight_D_A): ROE·부채비율·매출증가율 보강
+# 규칙: 종목 단위 try/except, 값 없으면 None('N/A' 문자열 금지), 요청 사이 sleep,
+#       User-Agent 설정, 천단위 콤마/%/음수/공란 견고 파싱.
+# ──────────────────────────────────────────────────────────────
+
+NAVER_MAIN_URL: str = "https://finance.naver.com/item/main.naver?code={code}"
+FNGUIDE_URL: str = "https://comp.fnguide.com/SVO2/ASP/SVD_Main.asp?pGB=1&gicode=A{code}"
+_KR_WEB_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+}
+KR_WEB_SLEEP: float = 1.0   # 요청 사이 정중한 간격(레이트리밋 회피)
+
+
+def _parse_kr_number(text: Optional[str]) -> Optional[float]:
+    """천단위 콤마·%·공란·음수·'배'/'원' 단위 텍스트 → float. 실패 시 None."""
+    if not text:
+        return None
+    s = str(text).strip().replace(",", "").replace("%", "").replace("배", "").replace("원", "")
+    s = s.replace("\xa0", "").strip()
+    if s in ("", "-", "N/A", "n/a"):
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?", s)
+    if not m:
+        return None
+    try:
+        return float(m.group())
+    except ValueError:
+        return None
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def _get_html(url: str) -> bytes:
+    resp = requests.get(url, headers=_KR_WEB_HEADERS, timeout=15)
+    resp.raise_for_status()
+    return resp.content
+
+
+def _fetch_naver_main(code: str) -> dict:
+    """네이버 금융 종목 메인 → {per_t, pbr, current_price, target_price, rating}."""
+    soup = BeautifulSoup(_get_html(NAVER_MAIN_URL.format(code=code)), "html.parser")
+    out: dict = {}
+
+    def _em(sel: str) -> Optional[float]:
+        el = soup.select_one(sel)
+        return _parse_kr_number(el.get_text(strip=True)) if el else None
+
+    out["per_t"] = _em("#_per")
+    out["pbr"] = _em("#_pbr")
+
+    # 현재가
+    nt = soup.select_one(".no_today .blind") or soup.select_one("p.no_today")
+    out["current_price"] = _parse_kr_number(nt.get_text(strip=True)) if nt else None
+
+    # 투자의견 l 목표주가  (예: "투자의견 l 목표주가 4.00 매수 l 329,227")
+    target = rating = None
+    info = soup.select_one(".aside_invest_info")
+    if info:
+        for tr in info.select("tr"):
+            t = tr.get_text(" ", strip=True)
+            if "목표주가" in t or "투자의견" in t:
+                m = re.search(r"(\d\.\d{2})\s*([가-힣A-Za-z]+)?\s*l\s*([\d,]+)", t)
+                if m:
+                    rating = (m.group(2) or "").strip() or None
+                    target = _parse_kr_number(m.group(3))
+                break
+    out["target_price"] = target
+    out["rating"] = rating
+    return out
+
+
+def _fetch_fnguide(code: str) -> dict:
+    """FnGuide #highlight_D_A → {roe, debt_ratio, rev_growth, op_margin, n_analysts}. best-effort."""
+    out: dict = {}
+    try:
+        soup = BeautifulSoup(_get_html(FNGUIDE_URL.format(code=code)), "html.parser")
+    except Exception as exc:
+        logger.warning("FnGuide 조회 실패 (A%s): %s", code, exc)
+        return out
+
+    tbl = soup.select_one("#highlight_D_A")
+    if tbl:
+        for tr in tbl.select("tr"):
+            th = tr.select_one("th")
+            if not th:
+                continue
+            label = th.get_text(" ", strip=True)
+            vals = [td.get_text(strip=True) for td in tr.select("td")]
+            # 마지막 비어있지 않은 값(가장 최근 실적/추정)
+            last = next((v for v in reversed(vals) if v and v.strip() not in ("", "-")), None)
+            num = _parse_kr_number(last)
+            if "ROE" in label:
+                out["roe"] = num
+            elif "부채비율" in label:
+                out["debt_ratio"] = num
+            elif "매출액증가율" in label or "매출증가율" in label:
+                out["rev_growth"] = num
+            elif "영업이익률" in label:
+                out["op_margin"] = num
+
+    # 추정기관수(컨센서스 참여 기관) — 목표주가 영역
+    txt = soup.get_text(" ", strip=True)
+    m = re.search(r"추정기관수\s*([\d.]+)", txt)
+    if m:
+        out["n_analysts"] = int(float(m.group(1)))
+    return out
+
+
+def fetch_kr_valuation_analyst(
+    ticker: str, asof: Optional[date] = None
+) -> tuple[Optional[ValuationRow], Optional[AnalystRow]]:
+    """
+    KR 종목 밸류에이션 + 컨센서스 수집(네이버 + FnGuide). 계좌 불필요·무료.
+    반환: (ValuationRow, AnalystRow). 페이지 실패 시 해당 항목 None.
+    """
+    asof = asof or date.today()
+    code = _clean_ticker(ticker)
+
+    naver = _fetch_naver_main(code)
+    time.sleep(KR_WEB_SLEEP)
+    fn = _fetch_fnguide(code)
+    time.sleep(KR_WEB_SLEEP)
+
+    # PR-4: KIS 옵션 경로(키 있을 때만) — '있으면 우선'으로 보강. 키 없으면 {} 반환→무영향.
+    try:
+        from src.ingest_kis import fetch_kis_metrics
+        kis = fetch_kis_metrics(code)
+    except Exception:
+        kis = {}
+    if kis.get("roe") is not None:
+        fn["roe"] = kis["roe"] * 100.0 if kis["roe"] < 1.5 else kis["roe"]  # 비율→%로 통일(아래서 /100)
+    if kis.get("debt_ratio") is not None:
+        fn["debt_ratio"] = kis["debt_ratio"]
+    if kis.get("target_price") is not None:
+        naver["target_price"] = kis["target_price"]
+    if kis.get("rating"):
+        naver["rating"] = kis["rating"]
+    if kis.get("n_analysts") is not None:
+        fn["n_analysts"] = kis["n_analysts"]
+
+    # ROE는 %값(예: 7.11) → US와 단위 일관성 위해 그대로 % 단위 저장 안 함:
+    # US yfinance returnOnEquity는 비율(0.07). KR FnGuide ROE는 %(7.11). 일관성 위해 /100.
+    roe = fn.get("roe")
+    roe_ratio = roe / 100.0 if roe is not None else None
+    rev_growth = fn.get("rev_growth")
+    rev_growth_ratio = rev_growth / 100.0 if rev_growth is not None else None
+
+    val = ValuationRow(
+        ticker=ticker,
+        asof=asof,
+        per_t=naver.get("per_t"),
+        per_f=None,                       # 무료 소스 Fwd PER 미확보 → None(중립 처리)
+        pbr=naver.get("pbr"),
+        ev_ebitda=None,
+        roe=roe_ratio,
+        roa=None,
+        debt_ratio=fn.get("debt_ratio"),  # %단위(US debtToEquity와 의미 다르나 분포 랭킹용)
+        rev_growth=rev_growth_ratio,
+    )
+
+    target = naver.get("target_price")
+    curr = naver.get("current_price")
+    upside = ((target / curr) - 1) if (target and curr and curr != 0) else None
+    ana = AnalystRow(
+        ticker=ticker,
+        asof=asof,
+        rating=naver.get("rating"),
+        target_price=target,
+        upside=upside,
+        n_analysts=fn.get("n_analysts"),
+    )
+
+    has_val = any(v is not None for v in (val.per_t, val.pbr, val.roe, val.debt_ratio))
+    has_ana = ana.target_price is not None
+    logger.info(
+        "%s: KR valuation per_t=%s pbr=%s roe=%s debt=%s | analyst target=%s rating=%s upside=%s",
+        ticker, val.per_t, val.pbr, val.roe, val.debt_ratio, ana.target_price, ana.rating, ana.upside,
+    )
+    return (val if has_val else None), (ana if has_ana else None)
+
+
 def run_kr_ingest(tickers: list[str]) -> dict:
     """
     KR 종목 배치 수집. 종목 단위 격리(try/except).
-    반환: {"prices": {ticker: [...]}, "fundamentals": {ticker: [...]}, "errors": [...]}
+    반환: {"prices", "fundamentals", "valuations", "analysts", "errors"}
     """
     prices: dict[str, list[PriceDailyRow]] = {}
     fundamentals: dict[str, list[FundamentalsRow]] = {}
+    valuations: dict[str, ValuationRow] = {}
+    analysts: dict[str, AnalystRow] = {}
     errors: list[dict] = []
 
     for ticker in tickers:
@@ -394,7 +595,28 @@ def run_kr_ingest(tickers: list[str]) -> dict:
                 "error": str(exc), "ts": datetime.utcnow().isoformat(),
             })
 
-    return {"prices": prices, "fundamentals": fundamentals, "errors": errors}
+        # KR 밸류에이션 + 컨센서스 (네이버 + FnGuide, 무료)
+        try:
+            val_row, ana_row = fetch_kr_valuation_analyst(ticker)
+            if val_row is not None:
+                valuations[ticker] = val_row
+            if ana_row is not None:
+                analysts[ticker] = ana_row
+            if val_row is None and ana_row is None:
+                errors.append({
+                    "ticker": ticker, "step": "valuation_empty",
+                    "error": "네이버/FnGuide 밸류·컨센서스 0건 — 값 None 유지",
+                    "ts": datetime.utcnow().isoformat(),
+                })
+        except Exception as exc:
+            logger.error("%s: KR 밸류/컨센서스 수집 실패: %s", ticker, exc, exc_info=True)
+            errors.append({
+                "ticker": ticker, "step": "kr_valuation",
+                "error": str(exc), "ts": datetime.utcnow().isoformat(),
+            })
+
+    return {"prices": prices, "fundamentals": fundamentals,
+            "valuations": valuations, "analysts": analysts, "errors": errors}
 
 
 if __name__ == "__main__":

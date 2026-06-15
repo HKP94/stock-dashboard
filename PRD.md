@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v1.8 |
+| 버전 | v1.9 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -316,7 +316,7 @@ LLM은 **반드시 아래 JSON만** 반환한다. 상세 프롬프트는 `prompt
 ### F2 — 관심종목 정량 일일 업데이트
 **소스(시장별 분리, 이게 핵심 개선):**
 - **US**: 가격은 yfinance(폴백) + FMP/Finnhub/Alpha Vantage 중 1개(키 무료 티어), 재무·컨센서스는 FMP/Finnhub.
-- **KR**: 가격/거래량은 **pykrx**(KRX), 재무·공시는 **DART OpenAPI**(무료), 시세·일부 컨센서스는 **KIS**, 컨센서스/목표가는 네이버금융/에프앤가이드 보조. → yfinance KR 의존 제거.
+- **KR**: 가격/거래량은 **pykrx**(KRX), 재무·공시는 **DART OpenAPI**(무료). **밸류에이션(PER/PBR)·컨센서스(목표가·투자의견)·ROE·부채비율은 네이버금융 종목메인 + FnGuide Company Guide 무료 스크래핑**(계좌 불필요, `ingest_kr.fetch_kr_valuation_analyst`). **KIS Developers는 옵션**(환경변수 `KIS_APPKEY/KIS_APPSECRET` 있을 때만 활성, `ingest_kis.py` — ROE/부채/컨센서스 '있으면 우선' 보강). → **yfinance KR 사용 금지**(절대규칙).
 **산출 항목**(기존 `main.py` 컬럼 계승 + 정비): 현재가·등락률, SMA20/50/200·RSI14·이격도·추세기울기·정배열, 최근 1~3년·1~3분기 매출/영업이익률, PER(T/F)·PBR·EV/EBITDA·ROE·ROA·부채비율·매출성장률, 컨센서스(의견·목표가·상승여력), 뉴스 감성·요약.
 **증분 처리**: `news_raw`에 새 기사(URL 해시 신규)가 있는 종목만 Gemini 재요약 → 토큰 절약.
 
@@ -414,6 +414,8 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 데이터 없는 종목·팩터 → **50(중립)** + `flags`에 "데이터 부족" 기록 → N/A 전파 차단. 필터 제외 종목은 `composite = None` 저장.
 
+> **KR 가치/퀄리티/성장은 이제 실제 값**(네이버+FnGuide로 PER/PBR/ROE/부채/목표가 수집, 2026-06-15). 결측인 종목만 중립(50) 유지. 검증: KR 11종목 전부 value/quality/growth가 50고정 → 실제 분포로 전환(예: 코웨이 V=77.6, KT&G V=62.7).
+
 ### F5 — 매일 아침 텔레그램 브리핑
 **생성·발송 주체: Hermes Agent**(텔레그램 네이티브). DB에서 당일 `portfolio_snapshot`·`quant_scores`·`news_analysis`·`market_daily`를 읽고, Hermes 메모리(보유 이력·관심 변화·이전 브리핑)와 결합해 종합. 템플릿·페르소나는 `prompts/HERMES_PROMPT.md`.
 **구성**: ① 시장 한 줄 + 레짐 ② 내 포트폴리오 손익 요약 ③ 관심종목 퀀트 점수 상·하위 + 변동 ④ 오늘의 알림 플래그 ⑤ 주목 뉴스 3건 ⑥ 면책 1줄.
@@ -449,6 +451,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - 구현: `src/backtest.py` — `compute_momentum_backtest`(252영업일 후 21영업일 리밸런싱, PRD §F4 모멘텀 0.10·Z1M+0.20·Z3M+0.30·Z6M+0.40·Z12-1M, 동일가중 top_n + 동일가중/Buy&Hold 벤치마크), `compute_retrospective`(오늘 quant 상위 5 × 1/3/6/12M 수익률 + 벤치마크).
 - 지표: 누적수익률·CAGR·MDD·연환산변동성(월std×√12)·Sharpe(rf=0). 결과는 `backtest_results`(metric_type 구분).
 - 표시: React "전략 비교" 탭 — 섹션1(recharts 누적수익 차트+메트릭표, "과거 성과는 미래 보장 안 함"), 섹션2(경고 박스 + 팩터별 카드).
+- **승격 경로(2026-06-15~)**: `valuation`/`analyst`를 매 실행 `asof=오늘`로 일자별 누적 저장(PK `(ticker, asof)`). 가치·퀄리티·성장 스냅샷 시계열이 수개월 쌓이면, 회고(retrospective)를 각 과거 시점의 실제 스냅샷으로 재현하는 **진짜 백테스트로 승격** 가능. 그 전까지는 회고로만 표기(선정시점편향 경고 유지).
 
 ---
 
@@ -571,6 +574,11 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-1: `src/backfill.py`(누락종목 자동탐지+백필), export를 종목별 '최신' 조회로 견고화(asof 불일치 해결), 데이터없는 종목 'hasData'+'데이터 수집 중' 라벨+정렬 맨아래
   - PR-2: 뉴스 cap 40·쿼리 보강(회사명 OR 코드)·네이버 2페이지, `news_refresh.yml`(18:00 KST)+`src/news_refresh.py`, 뉴스 피드를 news_raw 원문+URL로, 종목별 원문기사·최근5건 타임라인
   - PR-3: GEMINI 프롬프트(뉴스·KR/US 시황) 인사이트형 개정([수치/사실]→[의미]), 폴백도 수치+해석 한 줄, 스키마 검증 통과
+- [x] **KR 밸류·컨센서스 무료 수집 PR-1~4** (2026-06-15):
+  - PR-1: `ingest_kr.fetch_kr_valuation_analyst` — 네이버금융(PER/PBR/목표가/투자의견/현재가)+FnGuide(ROE/부채비율) 스크래핑, 종목격리·None·견고파싱·sleep·UA, 파싱 단위테스트 9개
+  - PR-2: run_pipeline KR 단계에 valuation/analyst upsert(US 대칭) → KR 11종목 value/quality/growth 50고정→실제분포(11/11)
+  - PR-3: valuation/analyst `(ticker, asof)` 일별 누적(스냅샷 시계열) — §F7 진짜 백테스트 승격 경로
+  - PR-4: `ingest_kis.py` KIS 옵션 골격(키 있을 때만 활성, 없으면 무에러 스킵)
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -609,3 +617,4 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v1.6 (2026-06-14) §11 PR-1~4: 뉴스요약최상단이동, Google News RSS(feedparser+RFC2822+단위테스트17), stock_notes+local_api(FastAPI 8765), 포트폴리오탭+투자판단카드+horizon뱃지; §2.1 F1 구현완료 반영; §5.1 stock_notes 추가 — Claude Code.*
 - *v1.7 (2026-06-15) 신규 §F7(진짜 백테스트 vs 회고 표준원칙). 2차 버그수정 PR-1~4(뉴스카드 일관성·리포트섹션제거·포트폴리오 통화환산·시장 KR/US 분리+지수등락버그). 백테스트 PR-5~8(backtest_results·src/backtest.py·전략비교탭·단위테스트13). §5.1 backtest_results + market_daily.summary_kr_md/us_md 추가 — Claude Code.*
 - *v1.8 (2026-06-15) PR-1 데이터완결성(src/backfill.py 누락탐지+백필, export 종목별 최신조회로 asof불일치 해결, 데이터없음 라벨). PR-2 뉴스강화(cap40·쿼리보강·네이버2p, news_refresh.yml 18:00KST+src/news_refresh.py, 원문URL 피드·종목별 기사/타임라인). PR-3 인사이트형 프롬프트([수치]→[의미])·폴백 해석문구 — Claude Code.*
+- *v1.9 (2026-06-15) KR 밸류·컨센서스 무료 수집: ingest_kr에 네이버금융+FnGuide 스크래핑(PER/PBR/ROE/부채/목표가/투자의견), run_pipeline KR단계 valuation/analyst upsert(US대칭) → KR 가치/퀄리티/성장 50고정→실제분포(11/11). §F2 소스 갱신, §F4-5 KR 실제값 반영, §F7 스냅샷누적→진짜백테스트 승격경로. ingest_kis.py KIS옵션골격. 단위테스트 +9(256 passed) — Claude Code.*

@@ -113,7 +113,7 @@ def _step_ingest_kr(conn: psycopg.Connection, kr_tickers: list[str], errors: lis
         return
     try:
         result = run_kr_ingest(kr_tickers)
-        n_price = n_fund = 0
+        n_price = n_fund = n_val = n_ana = 0
         for price_rows in result.get("prices", {}).values():
             if price_rows:
                 upsert_price_daily(conn, price_rows)
@@ -122,9 +122,21 @@ def _step_ingest_kr(conn: psycopg.Connection, kr_tickers: list[str], errors: lis
             if fund_rows:
                 upsert_fundamentals(conn, fund_rows)
                 n_fund += len(fund_rows)
+        # PR-2: KR 밸류에이션/컨센서스 (네이버+FnGuide) — US 경로와 대칭
+        for val_row in result.get("valuations", {}).values():
+            if val_row:
+                upsert_valuation(conn, [val_row])
+                n_val += 1
+        for ana_row in result.get("analysts", {}).values():
+            if ana_row:
+                upsert_analyst(conn, [ana_row])
+                n_ana += 1
         conn.commit()
         errors.extend(result.get("errors", []))
-        logger.info("Step 2 완료: prices upsert %d건 / fundamentals upsert %d건 (commit)", n_price, n_fund)
+        logger.info(
+            "Step 2 완료: prices %d / fundamentals %d / valuation %d / analyst %d upsert (commit)",
+            n_price, n_fund, n_val, n_ana,
+        )
     except Exception as exc:
         conn.rollback()
         logger.error("Step 2 실패: %s", exc, exc_info=True)
