@@ -45,12 +45,20 @@ export function Portfolio({ D, nav }) {
   const [form, setForm] = useState({ ticker: "", qty: "", avg_price: "", currency: "KRW" });  // PR-4: 기본 미선택
   const [saving, setSaving] = useState(false);
   const [apiOk, setApiOk] = useState(true);
+  // PR-2: 현금
+  const [cashRows, setCashRows] = useState([]);
+  const [cashForm, setCashForm] = useState({ currency: "KRW", amount: "" });
+  const [cashSaving, setCashSaving] = useState(false);
 
   const loadPortfolio = useCallback(async () => {
     try {
       const res = await fetch(`${API}/api/portfolio`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setRows(await res.json());
+      try {
+        const cr = await fetch(`${API}/api/cash`);
+        if (cr.ok) setCashRows(await cr.json());
+      } catch (_) {}
       setApiOk(true);
     } catch (e) {
       setApiOk(false);
@@ -59,6 +67,20 @@ export function Portfolio({ D, nav }) {
   }, []);
 
   useEffect(() => { loadPortfolio(); }, [loadPortfolio]);
+
+  const handleSaveCash = async () => {
+    if (parseFloat(cashForm.amount) < 0 || cashForm.amount === "") return;
+    setCashSaving(true);
+    try {
+      await fetch(`${API}/api/cash`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currency: cashForm.currency, amount: parseFloat(cashForm.amount) }),
+      });
+      await loadPortfolio();
+      setCashForm((f) => ({ ...f, amount: "" }));
+    } catch (_) {}
+    setCashSaving(false);
+  };
 
   // PR-4: 종목 미선택 / 수량·평단가 0 이하면 저장 비활성
   const formValid = form.ticker && parseFloat(form.qty) > 0 && parseFloat(form.avg_price) > 0;
@@ -105,6 +127,15 @@ export function Portfolio({ D, nav }) {
   const totalCostKrw = totalEvalKrw - totalPnlKrw;
   const totalPnlPct = totalCostKrw > 0 ? (totalPnlKrw / totalCostKrw) * 100 : null;
 
+  // PR-2: 현금 KRW 환산 + 총자산(주식 + 현금)
+  let cashKrw = 0;
+  (cashRows || []).forEach((c) => {
+    const k = toKrw(c.amount || 0, c.currency);
+    if (k != null) cashKrw += k;
+  });
+  const assetTotalKrw = totalEvalKrw + cashKrw;
+  const hasAny = (rows && rows.length > 0) || cashKrw > 0;
+
   if (!apiOk) return (
     <div style={{ background: C.warnBg, border: `1px solid ${C.warn}33`, borderRadius: 10, padding: "24px 28px" }}>
       <div style={{ fontSize: 14.5, fontWeight: 700, color: C.warn, marginBottom: 8 }}>데이터 서버에 연결할 수 없습니다</div>
@@ -122,35 +153,45 @@ export function Portfolio({ D, nav }) {
         <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>투자 자문 아님 / 원금 손실 가능</MonoCaps>
       </div>
 
-      {/* 합계 (PR-3: ₩ 환산 전체 숫자) */}
-      {rows && rows.length > 0 && (
+      {/* 합계 (PR-2: 주식 / 현금 / 총자산 분리, ₩ 환산 전체 숫자) */}
+      {hasAny && (
         <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "14px 22px" }}>
-          <div style={{ display: "flex", gap: 32, alignItems: "flex-end" }}>
+          <div style={{ display: "flex", gap: 28, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div>
-              <MonoCaps style={{ fontSize: 9 }}>총 평가금액 (₩ 환산)</MonoCaps>
-              <Num size={22} weight={800} style={{ marginTop: 4, textDecoration: "none" }}>{fmtKrwFull(totalEvalKrw)}</Num>
+              <MonoCaps style={{ fontSize: 9 }}>주식 평가액 (₩)</MonoCaps>
+              <Num size={20} weight={800} style={{ marginTop: 4, textDecoration: "none" }}>{fmtKrwFull(totalEvalKrw)}</Num>
+            </div>
+            <div style={{ fontSize: 18, color: C.ink3, paddingBottom: 2 }}>+</div>
+            <div>
+              <MonoCaps style={{ fontSize: 9 }}>현금 (₩)</MonoCaps>
+              <Num size={20} weight={800} color={C.ink2} style={{ marginTop: 4, textDecoration: "none" }}>{fmtKrwFull(cashKrw)}</Num>
+            </div>
+            <div style={{ fontSize: 18, color: C.ink3, paddingBottom: 2 }}>=</div>
+            <div>
+              <MonoCaps style={{ fontSize: 9 }} color={C.acc}>총자산 (₩)</MonoCaps>
+              <Num size={22} weight={800} color={C.acc} style={{ marginTop: 4, textDecoration: "none" }}>{fmtKrwFull(assetTotalKrw)}</Num>
             </div>
             <div style={{ width: 1, height: 36, background: C.line2 }}></div>
             <div>
-              <MonoCaps style={{ fontSize: 9 }}>총 손익 (₩ 환산)</MonoCaps>
+              <MonoCaps style={{ fontSize: 9 }}>주식 손익 (₩)</MonoCaps>
               <div style={{ marginTop: 4 }}>
-                <Num size={22} weight={800} color={totalPnlKrw >= 0 ? C.ok : C.bad} style={{ textDecoration: "none" }}>
+                <Num size={18} weight={800} color={totalPnlKrw >= 0 ? C.ok : C.bad} style={{ textDecoration: "none" }}>
                   {totalPnlKrw >= 0 ? "+" : ""}{fmtKrwFull(totalPnlKrw)}
                 </Num>
                 {totalPnlPct != null && (
-                  <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 700, color: totalPnlKrw >= 0 ? C.ok : C.bad }}>
+                  <span style={{ marginLeft: 8, fontSize: 12.5, fontWeight: 700, color: totalPnlKrw >= 0 ? C.ok : C.bad }}>
                     ({totalPnlPct >= 0 ? "+" : ""}{totalPnlPct.toFixed(2)}%)
                   </span>
                 )}
               </div>
             </div>
             <div style={{ marginLeft: "auto", textAlign: "right" }}>
-              <MonoCaps style={{ fontSize: 9 }}>{rows.length}종목 보유</MonoCaps>
+              <MonoCaps style={{ fontSize: 9 }}>{(rows || []).length}종목 보유</MonoCaps>
             </div>
           </div>
           <div style={{ marginTop: 8, fontSize: 10.5, color: C.ink3 }}>
-            {fx ? `적용 환율 USD/KRW ${Math.round(fx).toLocaleString("ko-KR")} · USD 보유는 환산 반영` : "환율 데이터 없음 — KRW 종목만 합산"}
-            {fxMissing && " · 일부 USD 포지션 환산 제외"}
+            {fx ? `적용 환율 USD/KRW ${Math.round(fx).toLocaleString("ko-KR")} · USD 자산은 환산 반영` : "환율 데이터 없음 — KRW만 합산"}
+            {fxMissing && " · 일부 USD 환산 제외"}
           </div>
         </div>
       )}
@@ -243,6 +284,49 @@ export function Portfolio({ D, nav }) {
           >
             {saving ? "저장 중…" : "저장"}
           </button>
+        </div>
+      </Panel>
+
+      {/* PR-2: 현금 관리 */}
+      <Panel title="현금" sub="통화별 현금 (총자산에 합산)">
+        <div style={{ padding: "14px 18px" }}>
+          {cashRows.length > 0 && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+              {cashRows.map((c) => (
+                <span key={c.currency} style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 12px" }}>
+                  {c.currency} {fmtMoney(c.amount, c.currency)}
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <MonoCaps style={{ fontSize: 9.5 }}>통화</MonoCaps>
+              <select
+                value={cashForm.currency}
+                onChange={(e) => setCashForm((f) => ({ ...f, currency: e.target.value }))}
+                style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "var(--sans)", color: C.ink, background: C.surface, cursor: "pointer", outline: "none" }}
+              >
+                <option value="KRW">KRW</option>
+                <option value="USD">USD</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <MonoCaps style={{ fontSize: 9.5 }}>금액 (0 입력 시 삭제)</MonoCaps>
+              <input
+                type="number" placeholder="예: 1000000" value={cashForm.amount}
+                onChange={(e) => setCashForm((f) => ({ ...f, amount: e.target.value }))}
+                style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, width: 180, outline: "none", fontFamily: "var(--sans)", color: C.ink }}
+              />
+            </div>
+            <button
+              onClick={handleSaveCash}
+              disabled={cashSaving || cashForm.amount === ""}
+              style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600, cursor: (cashSaving || cashForm.amount === "") ? "default" : "pointer", opacity: (cashSaving || cashForm.amount === "") ? 0.45 : 1 }}
+            >
+              {cashSaving ? "저장 중…" : "현금 저장"}
+            </button>
+          </div>
         </div>
       </Panel>
     </div>

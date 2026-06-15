@@ -59,6 +59,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   │   ├── tabsB.jsx       # Screener·Market·Research
 │   │   ├── tabsC.jsx       # Portfolio (로컬 API 연동)
 │   │   ├── tabsD.jsx       # Strategy 전략 비교 (백테스트 recharts + 회고)
+│   │   ├── tabsE.jsx       # WatchlistAdmin 관심종목 관리 (추가/active토글, 로컬 API)
 │   │   ├── data.js         # data.json import (없으면 mock fallback)
 │   │   ├── data.json       # export_dashboard_data.py 생성 (gitignore 권장)
 │   │   ├── index.css       # 전역 스타일 + Pretendard 폰트
@@ -89,6 +90,9 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **UI 텍스트에 내부 스크립트명·명령어(.py / `python -m ...`) 노출 금지.** 사용자 친화 문구만. 빈 상태/에러도 "잠시 후 다시" 식으로.
 - **가격 갱신 = 하루 2회** (06:00 auto_run + 18:00 news_refresh 경량). 18:00은 KR 장마감 후라 KR 당일종가, 06:00은 US 종가 직후. 헤더는 `priceAsof`(실제 가격 기준일) 표시.
 - **US 뉴스 소스**: yfinance.news + **Yahoo Finance RSS**(`feeds.finance.yahoo.com`, 429 시 무재시도 스킵) + **Finnhub**(`FINNHUB_API_KEY` 있을 때만) + Google News RSS(영문 정식명+티커 복수쿼리). KR은 네이버 HTML + Google News RSS. 전부 url_hash dedupe·종목격리.
+- **텔레그램은 보류(비활성)**. `TELEGRAM_ENABLED=false`(기본)면 `send_telegram.run_send`가 no-op 성공. 살리려면 PRD §F5 메모 참고(플래그 true + 워크플로 step 주석 해제).
+- **포트폴리오 총자산 = 보유종목 평가액 + 현금**(둘 다 KRW 환산). 현금=`portfolio_cash`(통화별), `compute_portfolio`가 `cash_total`/`asset_total`을 snapshot payload에 저장.
+- **관심종목 active 토글**: 제외는 하드딜리트가 아니라 `watchlist.active=false`(데이터 보존). export/quant/recompute는 **active=TRUE만** 대상. 신규 추가는 `backfill_single`로 그 종목만 가격+지표+퀀트 백필(local_api 백그라운드).
 - Python 3.12, 타입힌트 필수, `pydantic` v2로 외부 데이터·LLM 출력 검증.
 - 모든 외부 수집 함수는 **순수 함수에 가깝게**: 입력(ticker 등) → 표준화된 dict/모델 반환. DB 쓰기는 `db.py`로 분리.
 - 재시도: 네트워크/LLM 호출은 지수 백오프 3회. 실패 시 예외를 삼키지 말고 호출부에서 종목 단위로 격리.

@@ -343,6 +343,9 @@ def _load_portfolio_snapshot(conn) -> dict:
         "fx_rate":       payload.get("fx_rate"),
         "fx_missing":    payload.get("fx_missing", False),
         "by_currency":   payload.get("by_currency", {}),
+        "cash_total":    payload.get("cash_total", 0),       # PR-2: 현금(KRW 환산)
+        "asset_total":   payload.get("asset_total"),         # PR-2: 총자산(주식+현금)
+        "cash_by_currency": payload.get("cash_by_currency", {}),
     }
 
 
@@ -516,7 +519,8 @@ def build_data() -> dict:
     with get_conn() as conn:
         # watchlist
         cur = conn.cursor()
-        cur.execute("SELECT ticker, name, market, sector, is_holding FROM watchlist ORDER BY ticker")
+        # PR-3: active=TRUE만 (비활성 종목은 랭킹/대시보드에서 제외, 데이터는 보존)
+        cur.execute("SELECT ticker, name, market, sector, is_holding FROM watchlist WHERE active = TRUE ORDER BY ticker")
         wl_rows = cur.fetchall()
         watchlist_map = {r["ticker"]: dict(r) for r in wl_rows}
         tickers = list(watchlist_map.keys())

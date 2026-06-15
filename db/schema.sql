@@ -223,6 +223,13 @@ CREATE TABLE IF NOT EXISTS portfolio_holdings (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- PR-2: 통화별 현금 (총자산 = 보유종목 평가액 + 현금, KRW 환산)
+CREATE TABLE IF NOT EXISTS portfolio_cash (
+    currency    TEXT        PRIMARY KEY,
+    amount      NUMERIC     NOT NULL DEFAULT 0,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- =============================================================
 -- 리서치 항목 (F6 — 유튜브·기사·리포트·퀀트·메모 수동 입력)
 -- PR-4

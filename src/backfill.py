@@ -93,6 +93,50 @@ def _backfill_one(ticker: str, market: str) -> int:
     return rows
 
 
+def backfill_single(ticker: str, market: str) -> dict:
+    """
+    PR-3: 신규 종목 1개 즉시 백필 — 가격 2년치 + 지표 + (유니버스)퀀트 재계산.
+    대시보드에서 종목 추가 직후 백그라운드로 호출. 자체 DB 연결 사용(스레드 안전).
+    반환: {"ticker", "prices", "indicators", "quant", "ok"}
+    """
+    _load_secrets_if_needed()
+    from src.compute_indicators import recompute_indicators_to_db
+    from src.compute_quant import compute_quant_universe
+
+    result = {"ticker": ticker, "prices": 0, "indicators": 0, "quant": 0, "ok": False}
+    try:
+        with get_conn() as conn:
+            rows = _backfill_one(ticker, market)
+            if rows:
+                upsert_price_daily(conn, rows)
+                conn.commit()
+                result["prices"] = len(rows)
+            try:
+                result["indicators"] = recompute_indicators_to_db(conn, [ticker])
+            except Exception as exc:
+                conn.rollback()
+                logger.warning("backfill_single 지표 실패 %s: %s", ticker, exc)
+            # 퀀트는 유니버스 상대점수 → active 전체 재계산
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT ticker FROM watchlist WHERE active=TRUE ORDER BY ticker")
+                    all_tickers = [r["ticker"] for r in cur.fetchall()]
+                qrows = compute_quant_universe(all_tickers, conn)
+                if qrows:
+                    upsert_quant_scores(conn, qrows)
+                    conn.commit()
+                    result["quant"] = len(qrows)
+            except Exception as exc:
+                conn.rollback()
+                logger.warning("backfill_single 퀀트 실패 %s: %s", ticker, exc)
+            result["ok"] = result["prices"] > 0
+        logger.info("backfill_single %s: prices=%d indicators=%d quant=%d",
+                    ticker, result["prices"], result["indicators"], result["quant"])
+    except Exception as exc:
+        logger.error("backfill_single 실패 %s: %s", ticker, exc, exc_info=True)
+    return result
+
+
 def run_backfill(check_only: bool = False) -> dict:
     """누락 종목 탐지 → (check_only가 아니면) 백필 + 지표·퀀트 재계산."""
     errors: list[dict] = []

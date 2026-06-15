@@ -58,6 +58,13 @@ def _get_usdkrw(conn: psycopg.Connection) -> Optional[float]:
     return float(row["usdkrw"]) if row else None
 
 
+def _load_cash(conn: psycopg.Connection) -> dict[str, float]:
+    """PR-2: 통화별 현금 {currency: amount}. 0 초과만."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT currency, amount FROM portfolio_cash WHERE amount > 0")
+        return {r["currency"]: float(r["amount"]) for r in cur.fetchall()}
+
+
 def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) -> dict:
     """
     portfolio_holdings × prices_daily 최신가 → portfolio + portfolio_snapshot upsert.
@@ -76,8 +83,9 @@ def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) -> 
     asof_ts = datetime.combine(asof, datetime.min.time()).replace(tzinfo=timezone.utc)
 
     holdings = _load_holdings(conn)
-    if not holdings:
-        logger.info("compute_portfolio: portfolio_holdings 데이터 없음 — 스킵")
+    cash_map = _load_cash(conn)  # PR-2: 통화별 현금
+    if not holdings and not cash_map:
+        logger.info("compute_portfolio: 보유종목·현금 모두 없음 — 스킵")
         return {"n": 0, "total_eval_krw": 0.0, "total_pnl_krw": 0.0}
 
     fx = _get_usdkrw(conn)  # USD→KRW 환율 (없으면 None)
@@ -147,12 +155,25 @@ def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) -> 
         total_pnl_krw = total_eval_krw - total_cost_krw
         total_pnl_pct = (total_pnl_krw / total_cost_krw * 100) if total_cost_krw > 0 else 0.0
 
+        # PR-2: 현금 KRW 환산 합계 + 총자산(주식 평가액 + 현금)
+        cash_total_krw = 0.0
+        for ccy, amt in cash_map.items():
+            kc = to_krw(amt, ccy)
+            if kc is None:
+                fx_missing_usd = True
+            else:
+                cash_total_krw += kc
+        asset_total_krw = total_eval_krw + cash_total_krw
+
         payload = {
             "pnl_pct": round(total_pnl_pct, 2),
             "n_holdings": n_ok,
             "fx_rate": fx,
             "fx_missing": fx_missing_usd,
             "currency": "KRW",
+            "cash_total": round(cash_total_krw, 2),       # PR-2: 현금(KRW 환산)
+            "asset_total": round(asset_total_krw, 2),     # PR-2: 총자산(주식+현금)
+            "cash_by_currency": {c: round(a, 2) for c, a in cash_map.items()},
             "by_currency": {
                 ccy: {
                     "eval": round(v["eval"], 2),
@@ -167,14 +188,15 @@ def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) -> 
         cur.execute(
             """
             INSERT INTO portfolio_snapshot (asof, total_value, total_cost, total_pnl, cash, payload)
-            VALUES (%s, %s, %s, %s, NULL, %s::jsonb)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb)
             ON CONFLICT (asof) DO UPDATE SET
                 total_value = EXCLUDED.total_value,
                 total_cost  = EXCLUDED.total_cost,
                 total_pnl   = EXCLUDED.total_pnl,
+                cash        = EXCLUDED.cash,
                 payload     = EXCLUDED.payload
             """,
-            (asof_ts, total_eval_krw, total_cost_krw, total_pnl_krw,
+            (asof_ts, total_eval_krw, total_cost_krw, total_pnl_krw, round(cash_total_krw, 2),
              json.dumps(payload, ensure_ascii=False)),
         )
 

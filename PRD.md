@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v2.1 |
+| 버전 | v2.2 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -417,6 +417,12 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 > **KR 가치/퀄리티/성장은 이제 실제 값**(네이버+FnGuide로 PER/PBR/ROE/부채/목표가 수집, 2026-06-15). 결측인 종목만 중립(50) 유지. 검증: KR 11종목 전부 value/quality/growth가 50고정 → 실제 분포로 전환(예: 코웨이 V=77.6, KT&G V=62.7).
 
 ### F5 — 매일 아침 텔레그램 브리핑
+
+> **⏸ 보류(비활성, 2026-06-16)**: 텔레그램 발송은 현재 끔. 코드(`send_telegram.py`)는 보존.
+> **활성화 방법**: ① 환경변수 `TELEGRAM_ENABLED=true` + `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` 설정,
+> ② `.github/workflows/auto_run.yml`의 '텔레그램 브리핑 발송' step 주석 해제(`TELEGRAM_ENABLED: "true"` 포함).
+> 기본값(`TELEGRAM_ENABLED` 미설정)에서는 `run_send`가 발송하지 않고 no-op 성공 반환 → 에러 없음.
+
 **생성·발송 주체: Hermes Agent**(텔레그램 네이티브). DB에서 당일 `portfolio_snapshot`·`quant_scores`·`news_analysis`·`market_daily`를 읽고, Hermes 메모리(보유 이력·관심 변화·이전 브리핑)와 결합해 종합. 템플릿·페르소나는 `prompts/HERMES_PROMPT.md`.
 **구성**: ① 시장 한 줄 + 레짐 ② 내 포트폴리오 손익 요약 ③ 관심종목 퀀트 점수 상·하위 + 변동 ④ 오늘의 알림 플래그 ⑤ 주목 뉴스 3건 ⑥ 면책 1줄.
 **대안 경로**: Hermes 운영이 부담이면 n8n Telegram 노드로 직접 발송 가능(이 경우 종합 텍스트는 Gemini가 생성, 메모리 기능은 포기).
@@ -590,6 +596,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [x] **가격 신선도 + US 뉴스 강화 PR-1~2** (2026-06-16):
   - PR-1: 가격 신선도 진단(18시 잡이 가격 미수집 + 파이프라인 미실행으로 06-12 정체 확인) → `news_refresh.py`에 경량 가격갱신(prices+indicators+quant, .info 생략) 추가. 18:00=KR 당일종가, 06:00=US 종가. 헤더 LAST UPDATE→"가격 기준일"(priceAsof, KR/US 분리). 검증: KR·US 06-12→06-15.
   - PR-2: US 뉴스 소스 추가 — Yahoo Finance RSS(`fetch_yahoo_rss`), Finnhub 옵션(`FINNHUB_API_KEY` 있을 때만), Google 쿼리 보강("{정식명} stock/earnings", "{ticker} news"), `_MARKET_US` 다양화. 검증: US 종목당 평균 67→82.4(+415건). 단위테스트 +5.
+- [x] **운영·포트폴리오·관심종목 PR-1~3** (2026-06-16):
+  - PR-1: 텔레그램 보류 — `TELEGRAM_ENABLED=false`(기본) 플래그로 발송 비활성(코드 보존), auto_run.yml 텔레그램 step 주석. §F5에 활성화 방법 메모.
+  - PR-2: 포트폴리오 현금 — `portfolio_cash`(통화별), local_api GET/PUT `/api/cash`, compute_portfolio 총자산=주식+현금(KRW환산), snapshot `cash_total`/`asset_total`, React 포트폴리오 탭 현금입력+요약카드(주식/현금/총자산).
+  - PR-3: 관심종목 대시보드 관리 — local_api watchlist CRUD(GET/POST+백그라운드 단일백필/PATCH active토글), `backfill.backfill_single`, React "관심종목 관리" 탭. export/quant active=true만. 검증: 추가→백필→랭킹 등장, 제외→랭킹 제외(데이터 보존).
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -631,3 +641,4 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v1.9 (2026-06-15) KR 밸류·컨센서스 무료 수집: ingest_kr에 네이버금융+FnGuide 스크래핑(PER/PBR/ROE/부채/목표가/투자의견), run_pipeline KR단계 valuation/analyst upsert(US대칭) → KR 가치/퀄리티/성장 50고정→실제분포(11/11). §F2 소스 갱신, §F4-5 KR 실제값 반영, §F7 스냅샷누적→진짜백테스트 승격경로. ingest_kis.py KIS옵션골격. 단위테스트 +9(256 passed) — Claude Code.*
 - *v2.0 (2026-06-16) 데이터·UX 정비 PR-0~6: US valuation/analyst 누락 근본수정(글로벌 max(asof)→종목별 DISTINCT ON, ROE %표시, US뉴스쿼리 영문정식명), 내부스크립트명 노출제거, 알림 중복렌더 수정, 추세 nowrap, 포트폴리오 폼 안전장치, 약어/상태 툴팁, 종목상세 empty state + 팩터 중립폴백 구분 — Claude Code.*
 - *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*
+- *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*

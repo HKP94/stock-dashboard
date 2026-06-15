@@ -205,6 +205,15 @@ def format_brief(
 # 텔레그램 발송
 # ──────────────────────────────────────────────────────────────
 
+def telegram_enabled() -> bool:
+    """
+    텔레그램 발송 활성 여부. 기본 비활성(보류).
+    살리려면 환경변수 TELEGRAM_ENABLED=true + TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID 설정,
+    그리고 .github/workflows/auto_run.yml의 '텔레그램 브리핑 발송' step 주석 해제.
+    """
+    return os.environ.get("TELEGRAM_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _get_env(key: str) -> str:
     v = os.environ.get(key)
     if not v:
@@ -240,8 +249,12 @@ def send_telegram(text: str) -> bool:
 def run_send(conn: psycopg.Connection, asof: Optional[date] = None) -> bool:
     """
     DB에서 오늘자 데이터를 읽어 브리핑을 생성하고 텔레그램으로 발송.
-    성공 시 True.
+    성공 시 True. (PR-1) TELEGRAM_ENABLED=false(기본)면 발송하지 않고 no-op 성공 반환.
     """
+    if not telegram_enabled():
+        logger.info("텔레그램 보류(비활성) — TELEGRAM_ENABLED 미설정. 발송 스킵.")
+        return True
+
     asof = asof or date.today()
     records = assemble_daily(conn, asof=asof)
     market = _q_market_today(conn, asof)

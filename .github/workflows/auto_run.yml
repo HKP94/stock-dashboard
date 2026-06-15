@@ -38,13 +38,16 @@ jobs:
           GEMINI_SYNTH_MODEL: gemini-3.5-flash
         run: python -m src.run_pipeline
 
-      - name: 텔레그램 브리핑 발송
-        env:
-          DB_HOST:              aws-1-ap-northeast-2.pooler.supabase.com
-          DB_PORT:              "6543"
-          DB_USER:              postgres.dpegnpmzgozvcvbqmnlt
-          DB_PASSWORD:          ${{ secrets.DB_PASSWORD }}
-          DB_NAME:              postgres
-          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m src.send_telegram
+      # PR-1: 텔레그램 브리핑 보류(비활성). 살리려면 아래 step 주석 해제 +
+      #       env에 TELEGRAM_ENABLED: "true" 추가 + repo secrets에 봇토큰/챗ID 등록.
+      # - name: 텔레그램 브리핑 발송
+      #   env:
+      #     DB_HOST:              aws-1-ap-northeast-2.pooler.supabase.com
+      #     DB_PORT:              "6543"
+      #     DB_USER:              postgres.dpegnpmzgozvcvbqmnlt
+      #     DB_PASSWORD:          ${{ secrets.DB_PASSWORD }}
+      #     DB_NAME:              postgres
+      #     TELEGRAM_ENABLED:     "true"
+      #     TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      #     TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
+      #   run: python -m src.send_telegram

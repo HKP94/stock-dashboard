@@ -6,6 +6,7 @@ import { Overview, StockDetail, NewsTab } from './tabsA.jsx';
 import { Screener, Market, Research } from './tabsB.jsx';
 import { Portfolio } from './tabsC.jsx';
 import { Strategy } from './tabsD.jsx';
+import { WatchlistAdmin } from './tabsE.jsx';
 
 const D = atlasData;
 
@@ -30,6 +31,7 @@ export default function App() {
     { k: "research", label: "리서치 노트" },
     { k: "portfolio", label: "포트폴리오" },
     { k: "strategy", label: "전략 비교" },
+    { k: "manage", label: "관심종목 관리" },
   ];
 
   const overall = D.market.overall;
@@ -101,6 +103,7 @@ export default function App() {
       {tab === "research" && <Research D={D} nav={nav} />}
       {tab === "portfolio" && <Portfolio D={D} nav={nav} />}
       {tab === "strategy" && <Strategy D={D} />}
+      {tab === "manage" && <WatchlistAdmin D={D} />}
     </div>
 
     {/* fixed disclaimer */}

@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -84,6 +84,22 @@ class NoteIn(BaseModel):
     thesis: Optional[str] = None
 
 
+class CashIn(BaseModel):
+    currency: str = "KRW"              # 'KRW' | 'USD'
+    amount: float = Field(..., ge=0)
+
+
+class WatchlistIn(BaseModel):
+    ticker: str
+    name: str
+    market: str = "US"                 # 'US' | 'KR'
+    sector: Optional[str] = None
+
+
+class WatchlistPatch(BaseModel):
+    active: bool
+
+
 # ── 헬퍼 ──────────────────────────────────────────────────────────
 def _latest_price(ticker: str) -> Optional[float]:
     with get_conn() as conn:
@@ -120,6 +136,9 @@ def _patch_data_json_portfolio() -> None:
                     "fx_rate":       payload.get("fx_rate"),
                     "fx_missing":    payload.get("fx_missing", False),
                     "by_currency":   payload.get("by_currency", {}),
+                    "cash_total":    payload.get("cash_total", 0),       # PR-2
+                    "asset_total":   payload.get("asset_total"),         # PR-2
+                    "cash_by_currency": payload.get("cash_by_currency", {}),
                 }
             # holding 필드도 갱신
             c.execute("SELECT ticker, qty, avg_price, currency FROM portfolio_holdings WHERE qty > 0")
@@ -233,6 +252,38 @@ def delete_portfolio(ticker: str):
     return {"ok": True, "ticker": ticker}
 
 
+# ── 현금 엔드포인트 (PR-2) ───────────────────────────────────────
+
+@app.get("/api/cash")
+def get_cash():
+    """통화별 현금 목록."""
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT currency, amount FROM portfolio_cash ORDER BY currency")
+        return [{"currency": r["currency"], "amount": float(r["amount"])} for r in c.fetchall()]
+
+
+@app.put("/api/cash", status_code=200)
+def upsert_cash(body: CashIn):
+    """통화별 현금 upsert(amount=0이면 행 삭제) → compute_portfolio → data.json 갱신."""
+    ccy = body.currency.upper()
+    with get_conn() as conn:
+        c = conn.cursor()
+        if body.amount == 0:
+            c.execute("DELETE FROM portfolio_cash WHERE currency=%s", (ccy,))
+        else:
+            c.execute(
+                """INSERT INTO portfolio_cash (currency, amount, updated_at)
+                   VALUES (%s,%s,now())
+                   ON CONFLICT (currency) DO UPDATE SET amount=EXCLUDED.amount, updated_at=now()""",
+                (ccy, body.amount),
+            )
+        conn.commit()
+        compute_portfolio(conn)
+    _patch_data_json_portfolio()
+    return {"ok": True, "currency": ccy, "amount": body.amount}
+
+
 # ── 투자 판단 메모 엔드포인트 ────────────────────────────────────
 
 @app.get("/api/notes/{ticker}")
@@ -278,6 +329,84 @@ def upsert_note(ticker: str, body: NoteIn):
     note_data = {"horizon": body.horizon, "attractiveness": body.attractiveness, "thesis": body.thesis}
     _patch_data_json_note(ticker, note_data)
     return {"ok": True, "ticker": ticker}
+
+
+# ── 관심종목(watchlist) 관리 엔드포인트 (PR-3) ──────────────────
+
+def _regenerate_data_json() -> None:
+    """data.json 전체 재생성(신규 종목이 랭킹에 등장하도록)."""
+    try:
+        from src.export_dashboard_data import build_data
+        data = build_data()
+        if _DATA_JSON.parent.exists():
+            with open(_DATA_JSON, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+            logger.info("data.json 전체 재생성 완료")
+    except Exception as exc:
+        logger.warning("data.json 재생성 실패: %s", exc)
+
+
+def _backfill_and_export(ticker: str, market: str) -> None:
+    """백그라운드: 단일 종목 백필 → data.json 재생성."""
+    try:
+        from src.backfill import backfill_single
+        backfill_single(ticker, market)
+    except Exception as exc:
+        logger.warning("백그라운드 백필 실패 %s: %s", ticker, exc)
+    _regenerate_data_json()
+
+
+@app.get("/api/watchlist")
+def get_watchlist():
+    """관심종목 전체(active 포함). 각 종목의 가격 데이터 유무(hasData)도 표시."""
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT w.ticker, w.name, w.market, w.sector, w.is_holding, w.active,
+                   EXISTS(SELECT 1 FROM prices_daily p WHERE p.ticker=w.ticker) AS has_data
+            FROM watchlist w ORDER BY w.active DESC, w.market, w.ticker
+        """)
+        return [dict(r) for r in c.fetchall()]
+
+
+@app.post("/api/watchlist", status_code=201)
+def add_watchlist(body: WatchlistIn, background: BackgroundTasks):
+    """관심종목 추가 → 백그라운드로 해당 종목만 백필(가격+지표+퀀트) → data.json 재생성."""
+    ticker = body.ticker.strip()
+    market = body.market.upper()
+    if market not in ("US", "KR"):
+        raise HTTPException(400, "market must be US or KR")
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT 1 FROM watchlist WHERE ticker=%s", (ticker,))
+        if c.fetchone():
+            # 이미 있으면 active=true로 되살림
+            c.execute("UPDATE watchlist SET active=true WHERE ticker=%s", (ticker,))
+            conn.commit()
+            existed = True
+        else:
+            c.execute(
+                """INSERT INTO watchlist (ticker, name, market, sector, is_holding, active, added_at)
+                   VALUES (%s,%s,%s,%s,false,true,now())""",
+                (ticker, body.name.strip(), market, (body.sector or "").strip() or None),
+            )
+            conn.commit()
+            existed = False
+    background.add_task(_backfill_and_export, ticker, market)
+    return {"ok": True, "ticker": ticker, "status": "collecting", "existed": existed}
+
+
+@app.patch("/api/watchlist/{ticker}", status_code=200)
+def patch_watchlist(ticker: str, body: WatchlistPatch):
+    """active 토글(관심 제외=active false, 데이터 보존). 변경 후 data.json 재생성."""
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE watchlist SET active=%s WHERE ticker=%s", (body.active, ticker))
+        if c.rowcount == 0:
+            raise HTTPException(404, "ticker not found")
+        conn.commit()
+    _regenerate_data_json()
+    return {"ok": True, "ticker": ticker, "active": body.active}
 
 
 # ── 실행 ──────────────────────────────────────────────────────────
