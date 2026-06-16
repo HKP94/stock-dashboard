@@ -45,12 +45,24 @@ export function WatchlistAdmin({ D }) {
     setAdding(false);
   };
 
+  const [toggleErr, setToggleErr] = useState("");
+
   const toggleActive = async (ticker, next) => {
-    await fetch(`${API}/api/watchlist/${ticker}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ active: next }),
-    });
-    await load();
+    setToggleErr("");
+    // 낙관적 업데이트 — 새로고침 없이 즉시 화면 반영
+    setList((prev) => (prev || []).map((w) => (w.ticker === ticker ? { ...w, active: next } : w)));
+    try {
+      const res = await fetch(`${API}/api/watchlist/${ticker}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: next }),
+      });
+      if (!res.ok) throw new Error();
+      await load();  // 서버 확정값 재조회(+ data.json 재생성으로 랭킹/스크리너 반영)
+    } catch (_) {
+      // 실패 시 롤백
+      setList((prev) => (prev || []).map((w) => (w.ticker === ticker ? { ...w, active: !next } : w)));
+      setToggleErr(`'${ticker}' 상태 변경 실패 — 데이터 서버 연결을 확인하세요.`);
+    }
   };
 
   if (!apiOk) return (
@@ -92,6 +104,10 @@ export function WatchlistAdmin({ D }) {
         <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>관심종목 관리</span>
         <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>대시보드에서 직접 추가·제외</MonoCaps>
       </div>
+
+      {toggleErr && (
+        <div style={{ background: C.warnBg, border: `1px solid ${C.warn}33`, borderRadius: 8, padding: "9px 14px", fontSize: 12.5, color: C.warn }}>{toggleErr}</div>
+      )}
 
       {/* 추가 폼 */}
       <Panel title="종목 추가" sub="추가 즉시 데이터 수집(가격·지표·퀀트)">

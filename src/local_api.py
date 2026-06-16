@@ -65,7 +65,8 @@ app = FastAPI(title="ATLAS Local API", docs_url="/docs")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    # PATCH 누락 시 watchlist active 토글 프리플라이트(OPTIONS)가 400으로 막혀 토글 무반응 → PATCH·OPTIONS 포함
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 

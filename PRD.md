@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v2.6 |
+| 버전 | v2.7 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -628,6 +628,9 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-2: 시장전망 KR/US **진입 환경**(`attractiveness`: 우호/중립/비우호) — 레짐+시장폭(정배열율)+변동성(VIX) 종합, 근거 서술. **단일 점수 강요 금지**. 검증: KR/US 우호, basis에 레짐·정배열·VIX.
   - PR-3: **탭 간 종목 컨텍스트 연속성** — 뉴스에서 종목 선택 시 전역 `ticker` 동기화(`selectNewsTicker`)+`goNews`에 setTicker → 종목상세 탭으로 가도 유지(스크리너·포트폴리오는 nav로 이미 동기화).
   - 단위테스트 +12(297 passed).
+- [x] **관심종목 active 토글 무반응 버그 PR-0~1** (2026-06-17):
+  - PR-0 진단: 프론트 PATCH 경로·바디 정상, 백엔드 `@app.patch` 정상(curl 200). **근본원인 = CORS `allow_methods`에 PATCH 누락** → 크로스오리진(5173→8765) PATCH 프리플라이트(OPTIONS)가 400으로 막혀 브라우저가 차단(curl은 CORS 우회라 200). 프론트 `toggleActive`도 try/catch·낙관적 업데이트 없어 실패가 조용히 묻힘.
+  - PR-1 수정: CORS `allow_methods`에 **PATCH·OPTIONS 추가**(프리플라이트 200·`allow-methods`에 PATCH). 프론트 `toggleActive` **낙관적 업데이트 + 실패 롤백 + 에러 배너 + 재조회**(새로고침 없이 즉시 반영). 검증: 프리플라이트 200, 토글 OFF→data.json에서 제외(38→37)→ON 복귀(데이터 보존). CORS 회귀 테스트 +3(300 passed).
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -671,6 +674,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*
 - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
 - *v2.3 (2026-06-16) Gemini "분석 실패" 진단·수정 PR-0~2: 근본원인=Gemini 키 일일쿼터 소진(429)+구버전 폴백행 잔존+파이프라인 정체+폴백 무기록+.env 미로딩. 수정=`_ensure_env`(.env 로드), `_call_gemini_with_backoff`(429/503 지수백오프 3회), 폴백 `based_on='fallback_old'` 표식+runs.errors 기록, `reenrich_stale_fallbacks`(run_pipeline Step 7a'), export 실제요약 우선+규칙기반 한 줄(`is_fallback_summary`). "분석 실패" UI 노출 0. 단위테스트 +11(272 passed) — Claude Code.*
+- *v2.7 (2026-06-17) 관심종목 active 토글 무반응 버그 PR-0~1: 근본원인=CORS allow_methods에 PATCH 누락→프리플라이트 400 차단(curl은 우회라 200). 수정=CORS에 PATCH·OPTIONS 추가, 프론트 toggleActive 낙관적 업데이트+롤백+에러배너+재조회. 검증=프리플라이트 200·토글 OFF→랭킹 제외(38→37)→ON 복귀(데이터 보존). CORS 회귀테스트 +3(300 passed) — Claude Code.*
 - *v2.6 (2026-06-17) 오버뷰 요약밴드+시장 매력도+탭 컨텍스트 PR-1~3: 오버뷰 최상단 dailyBrief(주목/주의/3축괴리/시장 한줄, 규칙기반·관찰서술·면책, 괴리종목은 주목서 제외), 시장전망 KR/US 진입환경(attractiveness 우호/중립/비우호=레짐+정배열율+VIX, 단일점수 금지), 탭 간 종목 컨텍스트 연속성(뉴스 선택→전역 ticker 동기화). export _build_daily_brief/_attach_market_attractiveness/_short_line. 단위테스트 +12(297 passed) — Claude Code.*
 - *v2.5 (2026-06-16) 매력도 3축+리서치 통합+내판단 인라인 PR-1~3: 설계원칙=세 축(퀀트/컨센서스/내판단) 단일점수 합산 금지·괴리 노출(확인편향 방지). 종목상세 AxesCard(3축 나란히+엇갈림 경고), StockResearchSection(research_items 유형별+빠른추가, local_api GET/POST/DELETE /api/research+_patch_data_json_research, 공용 ResearchItemCard tabsA 이동), 내판단 인라인 편집(별점 클릭·thesis blur 자동저장 PUT /api/notes·미입력 상태). InvestmentNoteCard→AxesCard 통합. 285 tests passed — Claude Code.*
 - *v2.4 (2026-06-16) 스크리너 장기보유+재무 시계열 PR-0~2: 장기보유 빈 원인=F-Score 구조적 만점7로 7+ 0개+export fscore=None 하드코딩. 수정=장기보유를 안전마진 복합점수(가치40+퀄리티35+건전성25, F-Score 결측 시 ROE·부채 대체)로 재정의, `quant_scores.fscore` 영속화, 스크리너 패널 재정의(≥55 상위9·empty state·근거1줄). 종목상세 재무추이: `fundamentals.ocf/fcf` 추가+ingest_us 현금흐름 수집+US25 백필, export `financials` 시계열, React recharts 카드(매출·이익·OCF·FCF+추세+컨센서스). §5.1 quant_scores.fscore·fundamentals.ocf/fcf, §F4-6 안전마진 명문화. 단위테스트 +13(285 passed) — Claude Code.*
