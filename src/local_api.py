@@ -100,6 +100,14 @@ class WatchlistPatch(BaseModel):
     active: bool
 
 
+class ResearchIn(BaseModel):
+    ticker: str
+    item_type: str                     # 'youtube'|'article'|'report'|'quant'|'memo'
+    title: str
+    url: Optional[str] = None
+    note: Optional[str] = None
+
+
 # ── 헬퍼 ──────────────────────────────────────────────────────────
 def _latest_price(ticker: str) -> Optional[float]:
     with get_conn() as conn:
@@ -186,6 +194,38 @@ def _patch_data_json_note(ticker: str, note_data: dict) -> None:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
     except Exception as exc:
         logger.warning("data.json note 갱신 실패: %s", exc)
+
+
+def _fetch_research_items(ticker: str) -> list[dict]:
+    """해당 종목 research_items를 export(_load_research_items)와 동일 형태로 반환."""
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, item_type, title, url, note, added_at FROM research_items WHERE ticker=%s ORDER BY added_at DESC",
+            (ticker,),
+        )
+        return [{
+            "id": r["id"], "type": r["item_type"], "title": r["title"],
+            "url": r["url"] or "", "note": r["note"] or "", "addedAt": str(r["added_at"])[:10],
+        } for r in c.fetchall()]
+
+
+def _patch_data_json_research(ticker: str) -> None:
+    """data.json의 해당 종목 researchItems만 재조회로 갱신(전체 재생성 회피)."""
+    if not _DATA_JSON.exists():
+        return
+    try:
+        items = _fetch_research_items(ticker)
+        with open(_DATA_JSON, encoding="utf-8") as f:
+            data = json.load(f)
+        for s in data.get("stocks", []):
+            if s["t"] == ticker:
+                s["researchItems"] = items
+                break
+        with open(_DATA_JSON, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+    except Exception as exc:
+        logger.warning("data.json research 갱신 실패: %s", exc)
 
 
 # ── 포트폴리오 엔드포인트 ────────────────────────────────────────
@@ -329,6 +369,51 @@ def upsert_note(ticker: str, body: NoteIn):
     note_data = {"horizon": body.horizon, "attractiveness": body.attractiveness, "thesis": body.thesis}
     _patch_data_json_note(ticker, note_data)
     return {"ok": True, "ticker": ticker}
+
+
+# ── 리서치 항목 엔드포인트 (PR-2) ───────────────────────────────────
+
+_RESEARCH_TYPES = ("youtube", "article", "report", "quant", "memo")
+
+
+@app.get("/api/research/{ticker}")
+def get_research(ticker: str):
+    """해당 종목 research_items 목록."""
+    return _fetch_research_items(ticker)
+
+
+@app.post("/api/research", status_code=201)
+def add_research(body: ResearchIn):
+    """리서치 항목 추가 → data.json 해당 종목 researchItems 갱신."""
+    if body.item_type not in _RESEARCH_TYPES:
+        raise HTTPException(400, f"item_type must be one of {_RESEARCH_TYPES}")
+    if not body.title.strip():
+        raise HTTPException(400, "title required")
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            """INSERT INTO research_items (ticker, item_type, title, url, note)
+               VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+            (body.ticker, body.item_type, body.title.strip(), body.url, body.note),
+        )
+        new_id = c.fetchone()["id"]
+        conn.commit()
+    _patch_data_json_research(body.ticker)
+    return {"ok": True, "id": new_id, "ticker": body.ticker}
+
+
+@app.delete("/api/research/{item_id}", status_code=200)
+def delete_research(item_id: int):
+    """리서치 항목 삭제 → 해당 종목 researchItems 갱신."""
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM research_items WHERE id=%s RETURNING ticker", (item_id,))
+        row = c.fetchone()
+        conn.commit()
+    if not row:
+        raise HTTPException(404, "research item not found")
+    _patch_data_json_research(row["ticker"])
+    return {"ok": True, "id": item_id, "ticker": row["ticker"]}
 
 
 # ── 관심종목(watchlist) 관리 엔드포인트 (PR-3) ──────────────────

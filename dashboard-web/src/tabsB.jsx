@@ -5,7 +5,7 @@ import {
   MonoCaps, Num, SentBadge, HoldDot,
   GaugeBar, RegimeBadge, WeightBars, btnGhost,
 } from './ui.jsx';
-import { Panel } from './tabsA.jsx';
+import { Panel, ResearchItemCard, RESEARCH_TYPE_LABEL } from './tabsA.jsx';
 
 const grade = (v) => v >= 88 ? "A+" : v >= 80 ? "A" : v >= 72 ? "B+" : v >= 64 ? "B" : v >= 56 ? "C+" : v >= 48 ? "C" : "D";
 const gradeCol = (v) => v >= 80 ? C.ok : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C.bad;
@@ -218,58 +218,6 @@ export function Market({ D }) {
 
 // ============================ RESEARCH (PR-4) ============================
 
-// YouTube watch URL → embed URL 변환
-function toYtEmbed(url) {
-  if (!url) return null;
-  // youtu.be/ID 또는 youtube.com/watch?v=ID
-  const m = url.match(/(?:youtu\.be\/|[?&]v=)([\w-]{11})/);
-  return m ? `https://www.youtube.com/embed/${m[1]}` : null;
-}
-
-const TYPE_LABEL = { youtube: "유튜브", article: "기사", report: "리포트", quant: "퀀트", memo: "메모" };
-const TYPE_COLOR = { youtube: C.bad, article: C.acc, report: C.warn, quant: C.ok, memo: C.ink3 };
-
-function ResearchItemCard({ item }) {
-  const ytEmbed = item.type === "youtube" ? toYtEmbed(item.url) : null;
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 8, overflow: "hidden", marginBottom: 12 }}>
-      <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, borderBottom: ytEmbed ? `1px solid ${C.line}` : "none" }}>
-        <span style={{
-          fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
-          background: (TYPE_COLOR[item.type] || C.ink3) + "18",
-          color: TYPE_COLOR[item.type] || C.ink3, border: `1px solid ${(TYPE_COLOR[item.type] || C.ink3)}33`,
-        }}>{TYPE_LABEL[item.type] || item.type}</span>
-        {item.url ? (
-          <a href={item.url} target="_blank" rel="noopener noreferrer"
-            style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, textDecoration: "none", flex: 1 }}>
-            {item.title}
-          </a>
-        ) : (
-          <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, flex: 1 }}>{item.title}</span>
-        )}
-        <span className="mono" style={{ fontSize: 9.5, color: C.ink3, flexShrink: 0 }}>{item.addedAt}</span>
-        {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: C.acc, textDecoration: "none", flexShrink: 0 }}>↗</a>}
-      </div>
-      {ytEmbed && (
-        <div style={{ position: "relative", paddingBottom: "56.25%", background: "#000" }}>
-          <iframe
-            src={ytEmbed}
-            title={item.title}
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
-        </div>
-      )}
-      {item.note && (
-        <div style={{ padding: "8px 14px", fontSize: 12.5, color: C.ink2, lineHeight: 1.55, background: C.surface2 }}>
-          {item.note}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function Research({ D, nav }) {
   const allTickers = D.stocks.map((s) => s.t);
   const withItems = D.stocks.filter((s) => (s.researchItems || []).length > 0);
@@ -326,7 +274,7 @@ export function Research({ D, nav }) {
                 📄 리포트 검색 ({s?.mk === "KR" ? "네이버" : "TipRanks"})
               </a>
             )}
-            <span style={{ fontSize: 11, color: C.ink3 }}>리서치 항목은 관리 도구에서 추가할 수 있습니다.</span>
+            <span style={{ fontSize: 11, color: C.ink3 }}>리서치 항목은 종목 상세의 '리서치' 섹션에서 추가·삭제할 수 있습니다.</span>
           </div>
         </Panel>
       </div>
@@ -346,7 +294,7 @@ export function Research({ D, nav }) {
                   background: active ? C.acc : C.surface, color: active ? "#fff" : C.ink2,
                   borderRadius: 999, padding: "4px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer",
                 }}>
-                  {t === "all" ? "전체" : TYPE_LABEL[t]}{t !== "all" ? ` ${typeCounts[t]}` : ""}
+                  {t === "all" ? "전체" : RESEARCH_TYPE_LABEL[t]}{t !== "all" ? ` ${typeCounts[t]}` : ""}
                 </button>
               );
             })}
@@ -356,7 +304,7 @@ export function Research({ D, nav }) {
         {filtered.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center", color: C.ink3, fontSize: 13, background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10 }}>
             {items.length === 0
-              ? "리서치 항목이 없습니다. 관리 도구에서 추가할 수 있습니다."
+              ? "리서치 항목이 없습니다. 종목 상세의 '리서치' 섹션에서 추가할 수 있습니다."
               : "해당 유형의 항목이 없습니다."}
           </div>
         ) : (

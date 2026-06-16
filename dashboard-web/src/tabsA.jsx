@@ -453,113 +453,241 @@ function StockDropdown({ stocks, currentTicker, onSelect }) {
 const API = "http://127.0.0.1:8765";
 const HORIZON_LABEL = { short: "단기 트레이딩", long: "장기 보유", watch: "관망" };
 
-function InvestmentNoteCard({ ticker, initialNote }) {
-  const [note, setNote] = useState(initialNote || { horizon: null, attractiveness: null, thesis: "" });
-  const [loaded, setLoaded] = useState(!!initialNote);
+// ── PR-2: 리서치 항목 (종목상세·리서치 탭 공용) ──────────────────────
+export function toYtEmbed(url) {
+  if (!url) return null;
+  const m = url.match(/(?:youtu\.be\/|[?&]v=)([\w-]{11})/);
+  return m ? `https://www.youtube.com/embed/${m[1]}` : null;
+}
+export const RESEARCH_TYPE_LABEL = { youtube: "유튜브", article: "기사", report: "리포트", quant: "퀀트", memo: "메모" };
+export const RESEARCH_TYPE_COLOR = { youtube: C.bad, article: C.acc, report: C.warn, quant: C.ok, memo: C.ink3 };
+
+export function ResearchItemCard({ item, onDelete }) {
+  const ytEmbed = item.type === "youtube" ? toYtEmbed(item.url) : null;
+  const col = RESEARCH_TYPE_COLOR[item.type] || C.ink3;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 8, overflow: "hidden", marginBottom: 12 }}>
+      <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, borderBottom: ytEmbed ? `1px solid ${C.line}` : "none" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: col + "18", color: col, border: `1px solid ${col}33` }}>{RESEARCH_TYPE_LABEL[item.type] || item.type}</span>
+        {item.url ? (
+          <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, textDecoration: "none", flex: 1 }}>{item.title}</a>
+        ) : (
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, flex: 1 }}>{item.title}</span>
+        )}
+        <span className="mono" style={{ fontSize: 9.5, color: C.ink3, flexShrink: 0 }}>{item.addedAt}</span>
+        {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: C.acc, textDecoration: "none", flexShrink: 0 }}>↗</a>}
+        {onDelete && <button onClick={() => onDelete(item.id)} title="삭제" style={{ border: "none", background: "none", cursor: "pointer", color: C.ink3, fontSize: 13, flexShrink: 0, padding: 0 }}>✕</button>}
+      </div>
+      {ytEmbed && (
+        <div style={{ position: "relative", paddingBottom: "56.25%", background: "#000" }}>
+          <iframe src={ytEmbed} title={item.title} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+        </div>
+      )}
+      {item.note && <div style={{ padding: "8px 14px", fontSize: 12.5, color: C.ink2, lineHeight: 1.55, background: C.surface2 }}>{item.note}</div>}
+    </div>
+  );
+}
+
+// PR-2: 종목상세 리서치 섹션 — 유형별 표시 + 빠른 추가(해당 ticker 프리필)
+export function StockResearchSection({ s }) {
+  const [items, setItems] = useState(s.researchItems || []);
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ item_type: "youtube", title: "", url: "", note: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => { setItems(s.researchItems || []); setOpen(false); setForm({ item_type: "youtube", title: "", url: "", note: "" }); }, [s.t, s.researchItems]);
+
+  const refetch = async () => {
+    try { const r = await fetch(`${API}/api/research/${s.t}`); if (r.ok) setItems(await r.json()); } catch (_) {}
+  };
+  const add = async () => {
+    if (!form.title.trim()) { setErr("제목을 입력하세요."); return; }
+    setBusy(true); setErr("");
+    try {
+      const r = await fetch(`${API}/api/research`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, ticker: s.t }) });
+      if (!r.ok) throw new Error();
+      setForm({ item_type: "youtube", title: "", url: "", note: "" }); setOpen(false);
+      await refetch();
+    } catch (_) { setErr("추가 실패 — 데이터 서버 연결을 확인하세요."); }
+    setBusy(false);
+  };
+  const del = async (id) => { try { await fetch(`${API}/api/research/${id}`, { method: "DELETE" }); await refetch(); } catch (_) {} };
+
+  const order = ["report", "youtube", "article", "quant", "memo"];
+  const grouped = order.map((t) => [t, items.filter((i) => i.type === t)]).filter(([, v]) => v.length > 0);
+
+  return (
+    <Panel title="리서치" sub="전문가 보고서 · 내가 조사한 자료"
+      right={<button onClick={() => setOpen((o) => !o)} style={{ ...btnGhost }}>{open ? "닫기 −" : "+ 추가"}</button>}>
+      {open && (
+        <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.line}`, background: C.surface2, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select value={form.item_type} onChange={(e) => setForm((f) => ({ ...f, item_type: e.target.value }))}
+              style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "var(--sans)", color: C.ink, background: C.surface, cursor: "pointer" }}>
+              {Object.entries(RESEARCH_TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <input value={form.title} placeholder="제목 (예: 3Q 실적 리뷰)" onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              style={{ flex: 1, minWidth: 160, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, outline: "none", color: C.ink }} />
+          </div>
+          <input value={form.url} placeholder="URL (유튜브/기사/리포트 링크, 선택)" onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
+            style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, outline: "none", color: C.ink }} />
+          <textarea value={form.note} placeholder="메모 (선택)" onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
+            style={{ minHeight: 50, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "var(--sans)", resize: "vertical", outline: "none", color: C.ink, boxSizing: "border-box" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button onClick={add} disabled={busy} style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 12.5, fontWeight: 600, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}>{busy ? "추가 중…" : "추가"}</button>
+            <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>{s.name} ({s.t})</span>
+            {err && <span style={{ fontSize: 11.5, color: C.bad }}>{err}</span>}
+          </div>
+        </div>
+      )}
+      <div style={{ padding: "14px 16px" }}>
+        {items.length === 0 ? (
+          <div style={{ padding: "18px 0", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>등록된 리서치가 없습니다. "+ 추가"로 전문가 보고서·유튜브·메모를 정리하세요.</div>
+        ) : grouped.map(([t, list]) => (
+          <div key={t} style={{ marginBottom: 8 }}>
+            <MonoCaps style={{ fontSize: 9, marginBottom: 6, display: "block" }} color={RESEARCH_TYPE_COLOR[t]}>{RESEARCH_TYPE_LABEL[t]} · {list.length}</MonoCaps>
+            {list.map((it) => <ResearchItemCard key={it.id} item={it} onDelete={del} />)}
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+// ── PR-1+3: 매력도 3축 카드 (퀀트·컨센서스·내 판단 나란히, 단일점수 금지) ──
+function _upsideGrade(up) {
+  if (up == null) return null;
+  if (up >= 20) return { label: "높음", col: C.ok };
+  if (up >= 5) return { label: "보통", col: C.warn };
+  return { label: "낮음", col: C.bad };
+}
+function _level(kind, v) {
+  if (v == null) return null;
+  if (kind === "quant") return v >= 60 ? "높음" : v < 40 ? "낮음" : "보통";
+  if (kind === "cons") return v >= 20 ? "높음" : v < 5 ? "낮음" : "보통";
+  return v >= 4 ? "높음" : v <= 2 ? "낮음" : "보통";  // my (attractiveness)
+}
+
+function AxesCard({ s }) {
+  const [note, setNote] = useState(s.note || { horizon: null, attractiveness: null, thesis: "" });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  useEffect(() => { setNote(s.note || { horizon: null, attractiveness: null, thesis: "" }); setSaved(false); }, [s.t, s.note]);
   useEffect(() => {
-    setNote(initialNote || { horizon: null, attractiveness: null, thesis: "" });
-    setLoaded(true); setSaved(false);
-  }, [ticker, initialNote]);
+    fetch(`${API}/api/notes/${s.t}`).then((r) => r.json()).then((d) => { if (d) setNote(d); }).catch(() => {});
+  }, [s.t]);
 
-  // 로컬 API에서 최신값 로드 (API 없으면 조용히 실패)
-  useEffect(() => {
-    fetch(`${API}/api/notes/${ticker}`)
-      .then((r) => r.json())
-      .then((d) => { if (d) setNote(d); setLoaded(true); })
-      .catch(() => setLoaded(true));
-  }, [ticker]);
-
-  const handleSave = async () => {
-    setSaving(true);
+  const saveNote = async (next) => {
+    setNote(next); setSaving(true);
     try {
-      await fetch(`${API}/api/notes/${ticker}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ horizon: note.horizon, attractiveness: note.attractiveness, thesis: note.thesis }),
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      await fetch(`${API}/api/notes/${s.t}`, { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ horizon: next.horizon, attractiveness: next.attractiveness, thesis: next.thesis }) });
+      setSaved(true); setTimeout(() => setSaved(false), 1800);
     } catch (_) {}
     setSaving(false);
   };
 
+  const hasCons = s.tp != null || s.up != null || s.rating;
+  const ug = _upsideGrade(s.up);
+  const qLevel = _level("quant", s.comp);
+  const cLevel = hasCons ? _level("cons", s.up) : null;
+  const mLevel = note.attractiveness != null ? _level("my", note.attractiveness) : null;
+
+  // 축 간 괴리(확인편향 방지): 한 축 '높음' & 다른 축 '낮음'이면 표시
+  const pairs = [[qLevel, cLevel, "퀀트", "컨센서스"], [qLevel, mLevel, "퀀트", "내 판단"], [cLevel, mLevel, "컨센서스", "내 판단"]];
+  const diverge = pairs.filter(([a, b]) => a && b && ((a === "높음" && b === "낮음") || (a === "낮음" && b === "높음")))
+    .map(([a, b, an, bn]) => `${an}(${a}) vs ${bn}(${b})`);
+
+  const AxisHead = ({ label, src, col }) => (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 800, color: col || C.ink }}>{label}</div>
+      <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>{src}</MonoCaps>
+    </div>
+  );
+  const colStyle = { flex: 1, minWidth: 0, padding: "16px 16px", borderRight: `1px solid ${C.line}` };
+
   return (
-    <Panel
-      title="내 투자 판단"
-      sub="로컬 저장 · 투자 자문 아님"
-      right={
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {saved && <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>✓ 저장됨</MonoCaps>}
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: saving ? 0.6 : 1 }}
-          >
-            {saving ? "저장 중…" : "저장"}
-          </button>
+    <Panel title="매력도 — 3축 비교" sub="합산하지 않음 · 축 간 괴리를 그대로 표시 (확인편향 방지)"
+      right={<div style={{ display: "flex", gap: 8, alignItems: "center" }}>{saved && <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>✓ 저장됨</MonoCaps>}{saving && <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>저장 중…</MonoCaps>}</div>}>
+      <div style={{ display: "flex", flexWrap: "wrap" }}>
+        {/* 축 1: 퀀트 */}
+        <div style={colStyle}>
+          <AxisHead label="퀀트" src="데이터 기반 · COMPOSITE" col={C.acc} />
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <Num size={30} weight={800} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num>
+            <span style={{ fontSize: 11, color: C.ink3 }}>/100</span>
+            {qLevel && <span style={{ fontSize: 11, fontWeight: 700, color: qLevel === "높음" ? C.ok : qLevel === "낮음" ? C.bad : C.ink2 }}>{qLevel}</span>}
+          </div>
+          <div style={{ display: "flex", gap: 4, marginTop: 12, flexWrap: "wrap" }}>
+            {[["모", s.f.m], ["가", s.f.v], ["퀄", s.f.q], ["성", s.f.g], ["감", s.f.s]].map(([k, v]) => (
+              <span key={k} style={{ fontSize: 10.5, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "3px 6px" }}>{k} <b style={{ color: C.ink }}>{v}</b></span>
+            ))}
+          </div>
         </div>
-      }
-    >
-      <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
-        {/* horizon */}
-        <div>
-          <MonoCaps style={{ fontSize: 9.5, marginBottom: 8, display: "block" }}>투자 방향</MonoCaps>
-          <div style={{ display: "flex", gap: 8 }}>
+
+        {/* 축 2: 컨센서스 */}
+        <div style={colStyle}>
+          <AxisHead label="컨센서스" src="전문가 목표가 기반" col={C.warn} />
+          {hasCons ? (
+            <>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <Num size={30} weight={800} color={ug ? ug.col : C.ink2}>{s.up != null ? `${s.up >= 0 ? "+" : ""}${s.up}%` : "—"}</Num>
+                {ug && <span style={{ fontSize: 11, fontWeight: 700, color: ug.col }}>{ug.label}</span>}
+              </div>
+              <div style={{ height: 6, borderRadius: 3, background: C.line, marginTop: 10, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${Math.max(0, Math.min(100, ((s.up ?? 0) + 10) / 60 * 100))}%`, background: ug ? ug.col : C.ink3 }} />
+              </div>
+              <div style={{ marginTop: 12, fontSize: 11.5, color: C.ink2, lineHeight: 1.7 }}>
+                {s.tp != null && <div>목표가 <b style={{ color: C.ink }}>{s.cur}{Math.round(s.tp).toLocaleString()}</b></div>}
+                {s.rating && <div>투자의견 <b style={{ color: C.ink }}>{s.rating}</b></div>}
+              </div>
+            </>
+          ) : (
+            <div style={{ padding: "18px 0", color: C.ink3, fontSize: 12.5 }}>컨센서스 없음<div style={{ fontSize: 10.5, marginTop: 4 }}>애널리스트 목표가 데이터가 없습니다.</div></div>
+          )}
+        </div>
+
+        {/* 축 3: 내 판단 (인라인 편집) */}
+        <div style={{ ...colStyle, borderRight: "none" }}>
+          <AxisHead label="내 판단" src="내 주관 · 직접 입력" col={C.ink} />
+          {/* horizon */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
             {["short", "long", "watch"].map((h) => (
-              <button
-                key={h}
-                onClick={() => setNote((n) => ({ ...n, horizon: n.horizon === h ? null : h }))}
-                style={{
-                  border: `1px solid ${note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.line2}`,
+              <button key={h} onClick={() => saveNote({ ...note, horizon: note.horizon === h ? null : h })}
+                style={{ border: `1px solid ${note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.line2}`,
                   background: note.horizon === h ? (h === "short" ? C.accTint : h === "long" ? C.okBg : C.surface2) : C.surface,
                   color: note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.ink2,
-                  borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer",
-                }}
-              >
-                {HORIZON_LABEL[h]}
+                  borderRadius: 6, padding: "5px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}>
+                {HORIZON_LABEL[h].replace(" 트레이딩", "").replace(" 보유", "")}
               </button>
             ))}
           </div>
-        </div>
-
-        {/* attractiveness */}
-        <div>
-          <MonoCaps style={{ fontSize: 9.5, marginBottom: 8, display: "block" }}>매력도</MonoCaps>
-          <div style={{ display: "flex", gap: 6 }}>
+          {/* attractiveness (별점) */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {[1, 2, 3, 4, 5].map((n) => (
-              <button
-                key={n}
-                onClick={() => setNote((prev) => ({ ...prev, attractiveness: prev.attractiveness === n ? null : n }))}
-                style={{
-                  border: "none", background: "none", cursor: "pointer", padding: 0,
-                  fontSize: 22, color: (note.attractiveness || 0) >= n ? "#F59E0B" : C.line2,
-                }}
-              >
-                ★
-              </button>
+              <button key={n} onClick={() => saveNote({ ...note, attractiveness: note.attractiveness === n ? null : n })}
+                style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontSize: 22, lineHeight: 1, color: (note.attractiveness || 0) >= n ? "#F59E0B" : C.line2 }}>★</button>
             ))}
-            {note.attractiveness && <span style={{ fontSize: 12, color: C.ink3, alignSelf: "center" }}>{note.attractiveness}/5</span>}
+            <span style={{ fontSize: 11, color: C.ink3, marginLeft: 4 }}>{note.attractiveness != null ? `${note.attractiveness}/5` : "내 판단 미입력"}</span>
           </div>
-        </div>
-
-        {/* thesis */}
-        <div>
-          <MonoCaps style={{ fontSize: 9.5, marginBottom: 8, display: "block" }}>투자 논거</MonoCaps>
-          <textarea
-            value={note.thesis || ""}
-            onChange={(e) => setNote((n) => ({ ...n, thesis: e.target.value }))}
-            placeholder="유튜브·리포트에서 본 내용, 나만의 투자 근거를 자유롭게 기록하세요…"
-            style={{
-              width: "100%", minHeight: 90, border: `1px solid ${C.line2}`, borderRadius: 8,
-              padding: "10px 12px", fontSize: 13.5, fontFamily: "var(--sans)", lineHeight: 1.6,
-              color: C.ink, resize: "vertical", outline: "none", boxSizing: "border-box",
-            }}
-          />
+          {/* thesis */}
+          <textarea value={note.thesis || ""} onChange={(e) => setNote((n) => ({ ...n, thesis: e.target.value }))}
+            onBlur={() => saveNote(note)}
+            placeholder="투자 논거를 기록하세요 (자동 저장)…"
+            style={{ width: "100%", minHeight: 60, marginTop: 10, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, fontFamily: "var(--sans)", lineHeight: 1.55, color: C.ink, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
         </div>
       </div>
+
+      {/* 축 간 괴리 코멘트 */}
+      {diverge.length > 0 && (
+        <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.line}`, background: C.warnBg, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 13 }}>⚠️</span>
+          <span style={{ fontSize: 12, color: C.warn, fontWeight: 600 }}>축이 엇갈립니다 — {diverge.join(" · ")}. 확인 필요(한 축만 보고 판단하지 마세요).</span>
+        </div>
+      )}
     </Panel>
   );
 }
@@ -804,11 +932,14 @@ export function StockDetail({ D, ticker, nav }) {
         </div>
       </Panel>
 
+      {/* PR-1+3: 매력도 3축 카드 (퀀트·컨센서스·내 판단 나란히, 단일점수 금지) */}
+      <AxesCard s={s} />
+
       {/* PR-2: 재무 추이 (매출·영업이익·순이익·OCF·FCF + 추세 + 컨센서스) */}
       <FinancialsCard s={s} />
 
-      {/* PR-4: 내 투자 판단 카드 */}
-      <InvestmentNoteCard ticker={s.t} initialNote={s.note} />
+      {/* PR-2: 리서치 (전문가 보고서·내 조사자료, 종목상세 통합 + 빠른추가) */}
+      <StockResearchSection s={s} />
 
       {/* PR-2: 내 보유 정보 카드 (is_holding=true 종목만) */}
       {s.holding && (
