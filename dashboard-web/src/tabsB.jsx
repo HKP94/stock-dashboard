@@ -136,8 +136,21 @@ function MarketColumn({ title, m, regimes }) {
   // PR-4: summaryMd(시장 전용 전체 시황)를 불릿으로. 없으면 summary 폴백.
   const bullets = (m.summaryMd || "")
     .split("\n").map((l) => l.replace(/^[-*]\s*/, "").trim()).filter(Boolean);
+  // PR-2: 시장 매력도(진입 환경) — 레짐·시장폭·변동성 종합. 단일 점수 아님, 환경 평가.
+  const att = m.attractiveness;
+  const envCol = att ? (att.env === "우호" ? C.ok : att.env === "비우호" ? C.bad : C.ink2) : C.ink3;
   return <Panel title={title} right={<RegimeBadge regime={m.regime} regimes={regimes} />}>
     <div style={{ padding: "16px 18px" }}>
+      {att && (
+        <div style={{ border: `1px solid ${envCol}33`, background: envCol + "0E", borderRadius: 9, padding: "12px 14px", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>진입 환경</MonoCaps>
+            <span style={{ fontSize: 15, fontWeight: 800, color: envCol }}>{att.env}</span>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: C.ink2 }}>{att.basis}</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>{att.note}</div>
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 18 }}>
         {m.idx.map((ix) => <div key={ix.k} style={{ border: `1px solid ${C.line2}`, borderRadius: 8, padding: "11px 14px" }}>
           <MonoCaps style={{ fontSize: 9.5 }}>{ix.k}</MonoCaps>

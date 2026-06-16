@@ -169,6 +169,44 @@ const flagDesc = (f, s) => {
 const isDataQuality = (f) => /데이터 부족|사전필터 제외|발행주식수 데이터 없음|데이터 없음/.test(f);
 
 // ============================ OVERVIEW ============================
+// PR-1: 오버뷰 최상단 "오늘의 요약 밴드" — 30초 스캔용 합성 인사이트 (정보·관찰용)
+function DailyBriefBand({ b, regimes, nav }) {
+  if (!b) return null;
+  const regimeMeta = (regimes && regimes[b.regime]) || {};
+  const Chip = ({ item, color }) => (
+    <button onClick={() => nav(item.t)} className="row-hover"
+      style={{ display: "block", width: "100%", textAlign: "left", border: "none", background: "none", cursor: "pointer", padding: "5px 8px", borderRadius: 6 }}>
+      <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{item.name}</span>
+      <span style={{ fontSize: 11, color: C.ink2, marginLeft: 6 }}>{item.why}</span>
+    </button>
+  );
+  const Col = ({ label, color, items, empty }) => (
+    <div style={{ flex: 1, minWidth: 0, padding: "10px 10px", borderLeft: `3px solid ${color}` }}>
+      <MonoCaps style={{ fontSize: 9, marginLeft: 8, marginBottom: 4, display: "block" }} color={color}>{label}</MonoCaps>
+      {items && items.length > 0 ? items.map((it) => <Chip key={it.t} item={it} color={color} />)
+        : <div style={{ fontSize: 11, color: C.ink3, padding: "5px 8px" }}>{empty}</div>}
+    </div>
+  );
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 12, boxShadow: "0 1px 2px rgba(15,23,42,0.04)", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", borderBottom: `1px solid ${C.line}`, background: C.surface2 }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>오늘의 요약</span>
+        <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>30초 스캔 · 정보·관찰용</MonoCaps>
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <RegimeBadge regime={b.regime} regimes={regimes} />
+          <span style={{ fontSize: 11.5, color: C.ink2, maxWidth: 420, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={`${b.krLine}\n${b.usLine}`}>{b.usLine || b.krLine || b.marketLine}</span>
+        </span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap" }}>
+        <Col label="▲ 주목 (퀀트 상위·신선 신호)" color={C.ok} items={b.highlights} empty="해당 종목 없음" />
+        <Col label="▼ 주의 (위험 신호)" color={C.bad} items={b.cautions} empty="오늘 두드러진 주의 신호 없음" />
+        <Col label="⚠ 3축 괴리 (확인 필요)" color={C.warn} items={b.diverge} empty="퀀트·컨센서스 큰 괴리 없음" />
+      </div>
+      <div style={{ padding: "7px 16px", borderTop: `1px solid ${C.line}`, fontSize: 10, color: C.ink3 }}>{b.disclaimer}</div>
+    </div>
+  );
+}
+
 export function Overview({ D, nav, goNews }) {
   const [filter, setFilter] = useState("all");
   const [qualityOpen, setQualityOpen] = useState(false);
@@ -209,6 +247,9 @@ export function Overview({ D, nav, goNews }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* PR-1: 오늘의 요약 밴드 (최상단, 지수 스트립 위) */}
+      <DailyBriefBand b={D.dailyBrief} regimes={D.regimes} nav={nav} />
+
       {/* 지수 스트립 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 10 }}>
         {D.market.indices.map((ix) => {

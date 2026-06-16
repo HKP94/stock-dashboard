@@ -20,7 +20,10 @@ export default function App() {
     else if (t) { setTab(t); }
     window.scrollTo({ top: 0, behavior: "instant" });
   };
-  const goNews = (tk) => { if (tk) setNewsFilter(tk); setTab("news"); window.scrollTo({ top: 0 }); };
+  const goNews = (tk) => { if (tk) { setNewsFilter(tk); setTicker(tk); } setTab("news"); window.scrollTo({ top: 0 }); };
+  // PR-3: 종목 컨텍스트 연속성 — 뉴스에서 종목을 고르면 전역 selectedTicker(ticker)도 갱신,
+  //       이후 '종목 상세' 탭으로 가도 그 종목이 유지된다.
+  const selectNewsTicker = (tk) => { setNewsFilter(tk); if (tk) setTicker(tk); };
 
   const tabs = [
     { k: "overview", label: "오버뷰" },
@@ -97,7 +100,7 @@ export default function App() {
     <div style={{ maxWidth: 1280, margin: "0 auto", padding: "20px 24px 32px" }}>
       {tab === "overview" && <Overview D={D} nav={nav} goNews={goNews} />}
       {tab === "detail" && <StockDetail D={D} ticker={ticker} nav={nav} />}
-      {tab === "news" && <NewsTab D={D} filterTicker={newsFilter} setFilterTicker={setNewsFilter} nav={nav} />}
+      {tab === "news" && <NewsTab D={D} filterTicker={newsFilter} setFilterTicker={selectNewsTicker} nav={nav} />}
       {tab === "screener" && <Screener D={D} nav={nav} />}
       {tab === "market" && <Market D={D} />}
       {tab === "research" && <Research D={D} nav={nav} />}

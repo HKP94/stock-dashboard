@@ -622,6 +622,131 @@ def _build_financials(conn, annual_n: int = 6, quarter_n: int = 8) -> dict[str, 
     return out
 
 
+# ── PR-1: 오늘의 요약 밴드 (규칙 기반 합성) ──────────────────────────
+_POS_FLAG_KEYS = ("골든크로스", "RSI 침체")   # 추세 전환·과매도 반등 신호(목표가근접은 부호 모호 → 제외)
+_CAUTION_FLAG_KEYS = ("RSI 과열", "데드크로스", "급락", "이격도 과열")
+_REGIME_KO = {"bull": "위험선호", "neutral": "중립", "bear": "위험회피"}
+
+
+def _first_flag(flags: list[str], keys: tuple) -> Optional[str]:
+    for f in flags or []:
+        if any(k in f for k in keys):
+            return f
+    return None
+
+
+def _short_line(text: str, n: int = 90) -> str:
+    """문장 한 줄로 — 소수점에서 안 끊기게 '. '(마침표+공백) 기준 첫 문장 또는 n자."""
+    if not text:
+        return ""
+    t = text.strip().lstrip("- ").strip()
+    for sep in (". ", "다. ", "요. "):
+        if sep in t:
+            return t.split(sep)[0].strip() + ("" if sep == ". " else sep.strip())
+    return t[:n]
+
+
+def _build_daily_brief(stocks: list[dict], market: dict) -> dict:
+    """오버뷰 최상단 30초 스캔용 합성 요약. 전부 '관찰/정보' 서술(매수매도 단정 금지)."""
+    live = [s for s in stocks if s.get("hasData") and s.get("comp") is not None]
+
+    # 3) 3축 괴리(먼저 계산 → 주목에서 제외해 섹션 메시지 분리): 퀀트↔컨센서스 큰 엇갈림
+    diverge_raw = []
+    for s in live:
+        comp, up = s.get("comp"), s.get("up")
+        if up is None:
+            continue
+        if comp >= 60 and up < 5:
+            diverge_raw.append((abs(comp - 50) + abs(up), {"t": s["t"], "name": s["name"],
+                "why": f"퀀트 높음(종합 {comp}) ↔ 컨센서스 낮음(상승여력 {up}%) — 확인 필요"}))
+        elif comp < 40 and up >= 20:
+            diverge_raw.append((abs(comp - 50) + abs(up), {"t": s["t"], "name": s["name"],
+                "why": f"퀀트 낮음(종합 {comp}) ↔ 컨센서스 높음(상승여력 {up}%) — 확인 필요"}))
+    diverge_raw.sort(key=lambda x: -x[0])
+    diverge = [d for _, d in diverge_raw[:2]]
+    diverge_tk = {d["t"] for d in diverge}
+
+    # 1) 주목: composite 상위(괴리 종목 제외) + (있으면) 신선 신호.
+    hi_cand = sorted([s for s in live if s["t"] not in diverge_tk], key=lambda s: -(s.get("comp") or 0))
+    highlights = []
+    for s in hi_cand[:3]:
+        flag = _first_flag(s.get("flagsAction", []), _POS_FLAG_KEYS)
+        why = f"퀀트 종합 {s.get('comp')}(상위)" + (f" · {flag}" if flag else "")
+        highlights.append({"t": s["t"], "name": s["name"], "comp": s.get("comp"), "why": why})
+
+    # 2) 주의: 위험 플래그(과열·데드크로스·급락) 또는 컨센서스 대비 고평가(상승여력 큰 음수)
+    cautions = []
+    for s in live:
+        cflag = _first_flag(s.get("flagsAction", []), _CAUTION_FLAG_KEYS)
+        up = s.get("up")
+        if cflag:
+            cautions.append({"t": s["t"], "name": s["name"], "why": cflag})
+        elif up is not None and up <= -10:
+            cautions.append({"t": s["t"], "name": s["name"], "why": f"컨센서스 목표가 하회(상승여력 {up}%)"})
+    # 위험 강도 순(과열/데드크로스/급락 먼저)
+    cautions.sort(key=lambda c: 0 if any(k in c["why"] for k in ("과열", "데드크로스", "급락")) else 1)
+    cautions = cautions[:3]
+
+    # 4) 시장 한 줄: KR/US 레짐 + 시황 요약(Gemini 생성분 재사용, 없으면 규칙 폴백)
+    overall = market.get("overall", "neutral")
+    kr_sum = (market.get("kr", {}) or {}).get("summary", "")
+    us_sum = (market.get("us", {}) or {}).get("summary", "")
+    market_line = f"시장 레짐 {_REGIME_KO.get(overall, overall)}"
+    krline = _short_line(kr_sum)
+    usline = _short_line(us_sum)
+
+    return {
+        "highlights": highlights,
+        "cautions": cautions,
+        "diverge": diverge,
+        "marketLine": market_line,
+        "krLine": krline,
+        "usLine": usline,
+        "regime": overall,
+        "disclaimer": "정보·관찰용 · 투자 자문 아님 · 원금 손실 가능",
+    }
+
+
+def _attach_market_attractiveness(market: dict, stocks: list[dict]) -> None:
+    """PR-2: KR/US 진입 환경(우호/중립/비우호) + 근거. 레짐·시장폭(정배열율)·변동성 종합.
+    단일 점수 강요 금지 — 환경 평가 + 근거 서술."""
+    def _for(mk_key: str, regime: str, vix: Optional[float]) -> dict:
+        peers = [s for s in stocks if s.get("mk") == mk_key and s.get("hasData")]
+        n = len(peers)
+        aligned = sum(1 for s in peers if s.get("align"))
+        breadth = round(aligned / n * 100) if n else None    # 정배열 비율 = 시장폭 프록시
+        pos = sum(1 for s in peers if (s.get("chg") or 0) > 0)
+        up_rate = round(pos / n * 100) if n else None        # 당일 상승 종목 비율
+
+        score = 0
+        if regime == "bull": score += 1
+        elif regime == "bear": score -= 1
+        if breadth is not None:
+            score += 1 if breadth >= 55 else (-1 if breadth <= 30 else 0)
+        if vix is not None:
+            score += 1 if vix < 18 else (-1 if vix > 25 else 0)
+
+        env = "우호" if score >= 1 else ("비우호" if score <= -1 else "중립")
+        basis_bits = [f"레짐 {_REGIME_KO.get(regime, regime)}"]
+        if breadth is not None: basis_bits.append(f"정배열 {breadth}%")
+        if up_rate is not None: basis_bits.append(f"당일상승 {up_rate}%")
+        if vix is not None: basis_bits.append(f"VIX {vix:.0f}")
+        return {"env": env, "breadth": breadth, "upRate": up_rate,
+                "basis": " · ".join(basis_bits),
+                "note": f"현재 진입 환경은 '{env}'로 관찰됩니다({' · '.join(basis_bits)}). 환경 평가일 뿐 매매 신호가 아닙니다."}
+
+    # VIX 추출(indices에서)
+    vix = None
+    for ix in market.get("indices", []):
+        if ix.get("k") == "VIX":
+            try: vix = float(str(ix.get("v")).replace(",", ""))
+            except (TypeError, ValueError): vix = None
+    if "kr" in market and isinstance(market["kr"], dict):
+        market["kr"]["attractiveness"] = _for("KR", market["kr"].get("regime", "neutral"), vix)
+    if "us" in market and isinstance(market["us"], dict):
+        market["us"]["attractiveness"] = _for("US", market["us"].get("regime", "neutral"), vix)
+
+
 # ── 메인 ─────────────────────────────────────────────────────────────
 def build_data() -> dict:
     _load_secrets()
@@ -957,6 +1082,11 @@ def build_data() -> dict:
         price_asof = {r["market"]: str(r["d"]) for r in cur.fetchall() if r["d"]}
         price_asof_latest = max(price_asof.values()) if price_asof else None
 
+        # PR-1: 오늘의 요약 밴드(규칙 기반 합성 — 키 없어도 동작, 시장 한 줄은 Gemini 시황 재사용)
+        daily_brief = _build_daily_brief(stocks, market)
+        # PR-2: 시장 매력도(진입 환경) — kr/us에 부착
+        _attach_market_attractiveness(market, stocks)
+
         now = datetime.now()
         data = {
             "today":      now.strftime("%Y년 %-m월 %-d일 (%a)").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"),
@@ -968,6 +1098,7 @@ def build_data() -> dict:
             "regimes":    REGIMES,
             "factorMeta": FACTOR_META,
             "stocks":     stocks,
+            "dailyBrief": daily_brief,           # PR-1: 오늘의 요약 밴드
             "news":       news_feed,
             "portfolio":  portfolio_snapshot,   # PR-2: 전체 포트폴리오 요약
             "backtest":   backtest_data,        # PR-7: 백테스트 + 회고
