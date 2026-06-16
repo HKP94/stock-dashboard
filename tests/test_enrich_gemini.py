@@ -15,13 +15,17 @@ from pydantic import ValidationError
 
 from src.enrich_gemini import (
     BODY_CAP,
+    TRANSIENT_RETRIES,
     _build_market_prompt,
     _build_news_prompt,
     _call_gemini_for_market,
     _call_gemini_for_news,
+    _call_gemini_with_backoff,
+    _is_transient,
     _neutral_news_fallback,
     _parse_market_output,
     _parse_news_output,
+    is_fallback_summary,
 )
 
 # ──────────────────────────────────────────────────────────────
@@ -152,6 +156,63 @@ class TestNeutralFallback:
         from src.schemas import NewsSummaryOutput
         result = _neutral_news_fallback()
         assert isinstance(result, NewsSummaryOutput)
+
+    def test_marked_as_fallback_old(self):
+        # PR-1(진단): 폴백은 based_on='fallback_old'로 표식 → export 비노출/재시도 선별
+        result = _neutral_news_fallback()
+        assert result.based_on == "fallback_old"
+        assert is_fallback_summary(result.summary_md, result.based_on)
+
+
+# ──────────────────────────────────────────────────────────────
+# PR-1(진단): is_fallback_summary / 일시오류 지수 백오프
+# ──────────────────────────────────────────────────────────────
+
+class TestIsFallbackSummary:
+    def test_old_marker(self):
+        assert is_fallback_summary("분석 실패") is True
+
+    def test_new_marker(self):
+        assert is_fallback_summary("- 뉴스 자동 요약 일시 보류(생성 실패).") is True
+
+    def test_based_on_signal(self):
+        assert is_fallback_summary("정상 요약 본문", "fallback_old") is True
+
+    def test_empty_is_fallback(self):
+        assert is_fallback_summary("") is True
+        assert is_fallback_summary(None) is True
+
+    def test_real_summary_not_fallback(self):
+        assert is_fallback_summary("- 실적 가이던스 상향 → 모멘텀 강화", "recent") is False
+
+
+class TestTransientBackoff:
+    def test_is_transient_detects_429(self):
+        assert _is_transient(Exception("429 RESOURCE_EXHAUSTED")) is True
+        assert _is_transient(Exception("503 UNAVAILABLE, model overloaded")) is True
+
+    def test_is_transient_false_for_bad_request(self):
+        assert _is_transient(Exception("400 INVALID_ARGUMENT")) is False
+
+    def test_retries_then_succeeds_on_transient(self):
+        with patch("src.enrich_gemini._call_gemini") as mock_call, patch("time.sleep"):
+            mock_call.side_effect = [Exception("429 quota"), Exception("503 overloaded"), "OK"]
+            assert _call_gemini_with_backoff(MagicMock(), "m", "p") == "OK"
+            assert mock_call.call_count == 3
+
+    def test_non_transient_raises_immediately(self):
+        with patch("src.enrich_gemini._call_gemini") as mock_call, patch("time.sleep"):
+            mock_call.side_effect = [Exception("400 bad request")]
+            with pytest.raises(Exception):
+                _call_gemini_with_backoff(MagicMock(), "m", "p")
+            assert mock_call.call_count == 1
+
+    def test_gives_up_after_max_retries(self):
+        with patch("src.enrich_gemini._call_gemini") as mock_call, patch("time.sleep"):
+            mock_call.side_effect = [Exception("429")] * TRANSIENT_RETRIES
+            with pytest.raises(Exception):
+                _call_gemini_with_backoff(MagicMock(), "m", "p")
+            assert mock_call.call_count == TRANSIENT_RETRIES
 
 
 # ──────────────────────────────────────────────────────────────

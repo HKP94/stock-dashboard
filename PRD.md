@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v2.2 |
+| 버전 | v2.3 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -600,6 +600,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-1: 텔레그램 보류 — `TELEGRAM_ENABLED=false`(기본) 플래그로 발송 비활성(코드 보존), auto_run.yml 텔레그램 step 주석. §F5에 활성화 방법 메모.
   - PR-2: 포트폴리오 현금 — `portfolio_cash`(통화별), local_api GET/PUT `/api/cash`, compute_portfolio 총자산=주식+현금(KRW환산), snapshot `cash_total`/`asset_total`, React 포트폴리오 탭 현금입력+요약카드(주식/현금/총자산).
   - PR-3: 관심종목 대시보드 관리 — local_api watchlist CRUD(GET/POST+백그라운드 단일백필/PATCH active토글), `backfill.backfill_single`, React "관심종목 관리" 탭. export/quant active=true만. 검증: 추가→백필→랭킹 등장, 제외→랭킹 제외(데이터 보존).
+- [x] **Gemini "분석 실패" 광범위 노출 진단·수정 PR-0~2** (2026-06-16):
+  - PR-0 진단: 소스에 "분석 실패" 없음(data.json·DB만) → **구버전 폴백이 DB에 남긴 낡은 행**을 export(`DISTINCT ON asof DESC`)가 그대로 노출. 모델명(`gemini-2.5-flash-lite`/`gemini-3.5-flash` 모두 유효)·스키마(라이브 통과)·로컬레이트(버스트 12/12) 정상. **실제 근본원인 = Gemini 키 일일 쿼터 소진(429 RESOURCE_EXHAUSTED "exceeded your quota")** + 파이프라인 미실행(06-14 정체) + 폴백 무기록(runs.errors 미적재) + `.env` 미로딩으로 로컬 enrich 전체사망.
+  - PR-1 수정: ⓐ`_ensure_env()` `.env` 로드(로컬 키 누락 해소). ⓑ`_call_gemini_with_backoff` 일시오류(429/503/타임아웃) **지수 백오프 3회**(파싱 재시도와 분리). ⓒ폴백을 `based_on='fallback_old'`로 표식 + `runs.errors` 기록(추적 가능). ⓓ`_tickers_needing_enrichment` 폴백 행 재시도 포함 + `reenrich_stale_fallbacks`(최신이 폴백인 종목을 최근 뉴스로 복구, run_pipeline Step 7a'·enrich __main__). ⓔexport: 폴백보다 **실제 요약 우선**(낡은 실제 > 새 실패), 실제 없으면 **규칙기반 한 줄 인사이트(수치+해석)** — "분석 실패" 절대 미노출. `is_fallback_summary` 단일 출처.
+  - PR-2 검증: 키 환경 `reenrich` → 20 폴백 중 14 실제요약 복구(나머지 6은 당일 쿼터 소진, 코드 정상). data.json 재생성 후 **"분석 실패" 0·"일시 보류" 0**, GOOG/META/TSM 실제 요약 표시, 쿼터실패 3종목은 규칙기반 한 줄. 단위테스트 +11(272 passed).
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -642,3 +646,4 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v2.0 (2026-06-16) 데이터·UX 정비 PR-0~6: US valuation/analyst 누락 근본수정(글로벌 max(asof)→종목별 DISTINCT ON, ROE %표시, US뉴스쿼리 영문정식명), 내부스크립트명 노출제거, 알림 중복렌더 수정, 추세 nowrap, 포트폴리오 폼 안전장치, 약어/상태 툴팁, 종목상세 empty state + 팩터 중립폴백 구분 — Claude Code.*
 - *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*
 - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
+- *v2.3 (2026-06-16) Gemini "분석 실패" 진단·수정 PR-0~2: 근본원인=Gemini 키 일일쿼터 소진(429)+구버전 폴백행 잔존+파이프라인 정체+폴백 무기록+.env 미로딩. 수정=`_ensure_env`(.env 로드), `_call_gemini_with_backoff`(429/503 지수백오프 3회), 폴백 `based_on='fallback_old'` 표식+runs.errors 기록, `reenrich_stale_fallbacks`(run_pipeline Step 7a'), export 실제요약 우선+규칙기반 한 줄(`is_fallback_summary`). "분석 실패" UI 노출 0. 단위테스트 +11(272 passed) — Claude Code.*

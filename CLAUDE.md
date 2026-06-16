@@ -128,6 +128,10 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - 대량(종목별 뉴스 요약)=저렴 모델, 종합(시황 1회)=상위 모델. 모델명은 config로.
 - 입력 뉴스는 dedupe + 상위 N건 + 본문 길이 캡. 새 뉴스 없으면 호출 스킵(전일 재사용).
 - 항상 `response_mime_type="application/json"` + 스키마 강제. 파싱 실패 핸들링 필수.
+- **키 쿼터(429)가 진짜 병목**: Gemini 키는 일일 쿼터 한계가 있어, 일일 파이프라인(38종목+시황)이 쿼터를 초과하면 **`429 RESOURCE_EXHAUSTED`로 종목별 폴백이 무더기 발생**(과거 "분석 실패" 광범위 노출의 근본원인). 따라서 ① **ad-hoc enrich/진단 호출로 쿼터를 태우지 말 것**(파이프라인이 유일 소비자가 이상적), ② 일시오류는 `_call_gemini_with_backoff`(429/503/타임아웃 **지수 백오프 3회**, 파싱 재시도와 분리)로 흡수, ③ 그래도 실패하면 **폴백을 `based_on='fallback_old'`로 표식**한다.
+- **폴백은 절대 UI에 노출 금지**: 폴백 판정은 단일 출처 `is_fallback_summary(summary_md, based_on)`("분석 실패"/"일시 보류" 마커 + `fallback_old`). export(`export_dashboard_data`)는 **실제 요약을 폴백보다 우선**(낡은 실제 > 새 실패)하고, 실제가 없으면 **규칙기반 한 줄 인사이트(수치+해석)**로 채운다 — 사용자 화면에 "분석 실패" 문자열이 나오면 버그.
+- **폴백 가시성·자가치유**: 폴백 발생 시 `runs.errors`에 사유 기록(과거엔 조용히 묻혀 추적 불가했음). 최신 분석이 폴백인 종목은 `reenrich_stale_fallbacks`(run_pipeline Step 7a')가 최근 뉴스로 재요약해 복구한다.
+- **로컬 키 로딩**: `GEMINI_API_KEY`는 `.env`에 있고, `enrich_gemini._ensure_env()`가 `load_dotenv()`로 로드한다(src 어디에도 load_dotenv가 없어 로컬 enrich가 키 UNSET으로 통째 죽던 문제 수정). DB_*는 `.streamlit/secrets.toml`.
 
 ## 6. 테스트 & 검증
 - `compute_indicators`, `compute_quant`, `rules`는 합성 데이터로 단위 테스트(LLM·네트워크 의존 없이).

@@ -43,7 +43,7 @@ from src.db import (
     upsert_quant_scores,
     upsert_valuation,
 )
-from src.enrich_gemini import enrich_market_summary, enrich_news_batch
+from src.enrich_gemini import enrich_market_summary, enrich_news_batch, reenrich_stale_fallbacks
 from src.ingest_kr import run_kr_ingest
 from src.ingest_market import run_market_ingest
 from src.ingest_news import run_news_ingest
@@ -249,6 +249,17 @@ def _step_enrich_gemini(conn: psycopg.Connection, errors: list) -> None:
         conn.rollback()
         logger.error("Step 7a(news_batch) 실패: %s", exc, exc_info=True)
         errors.append(_err("enrich_news", exc))
+
+    # PR-1(진단): 최신 분석이 폴백인 종목을 최근 뉴스로 복구 — 굳은 '분석 실패' 자가치유
+    try:
+        fixed, fix_errs = reenrich_stale_fallbacks(conn)
+        conn.commit()
+        errors.extend(fix_errs)
+        logger.info("Step 7a' 완료: 폴백 복구 %d종목 (commit)", fixed)
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Step 7a'(reenrich) 실패: %s", exc, exc_info=True)
+        errors.append(_err("reenrich_fallback", exc))
 
     try:
         ok = enrich_market_summary(conn)

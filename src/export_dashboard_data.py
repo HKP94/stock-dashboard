@@ -63,6 +63,29 @@ def _f(v) -> float | None:
         return None
 
 
+# PR-1(진단): 폴백 요약은 단일 출처(enrich_gemini)로 판정 — '분석 실패'/'일시 보류' 비노출.
+from src.enrich_gemini import is_fallback_summary as _is_fallback_summary
+
+
+def _rule_based_insight(close, chg, rsi, comp, sent, has_data) -> str:
+    """실제 뉴스 요약이 없을 때 보여줄 '규칙기반 한 줄 인사이트'(수치+해석).
+    '분석 실패' 원문 대신 결정론적 한 줄을 항상 채운다. 매수/매도 권유 없음(투자 자문 아님)."""
+    if not has_data or close is None:
+        return "데이터 수집 중 — 가격·지표가 채워지면 분석이 표시됩니다."
+    parts: list[str] = []
+    if chg is not None:
+        d = "상승" if chg > 0 else ("하락" if chg < 0 else "보합")
+        parts.append(f"전일대비 {chg:+.1f}%({d})")
+    if rsi is not None:
+        zone = "과열권" if rsi >= 70 else ("침체권" if rsi <= 30 else "중립권")
+        parts.append(f"RSI {rsi:.0f}({zone})")
+    if comp is not None:
+        tier = "상위" if comp >= 60 else ("하위" if comp < 40 else "중간")
+        parts.append(f"퀀트 종합 {comp:.0f}({tier})")
+    head = " · ".join(parts) if parts else "주요 지표 집계 중"
+    return f"뉴스 요약 준비 중 — 현재 {head}, 뉴스 심리 '{sent}'. 원문 기사와 지표를 참고하세요."
+
+
 def _load_secrets() -> None:
     """DB_* 환경변수를 .streamlit/secrets.toml에서 채운다 (이미 env에 있으면 유지)."""
     try:
@@ -489,10 +512,14 @@ def _build_article_map(conn, watchlist_map: dict, limit_per: int = 8) -> dict[st
 def _build_news_timeline(conn, limit_per: int = 5) -> dict[str, list[dict]]:
     """종목별 최근 news_analysis limit_per건(날짜·감성·1줄). 종목상세 분석 타임라인용."""
     cur = conn.cursor()
+    # PR-1(진단): 폴백 행은 타임라인에서 제외 → '분석 실패' 줄이 쌓이지 않게.
     cur.execute("""
-        SELECT ticker, asof, sentiment, sentiment_score, summary_md,
+        SELECT ticker, asof, sentiment, sentiment_score, summary_md, based_on,
                ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY asof DESC) AS rn
         FROM news_analysis
+        WHERE based_on <> 'fallback_old'
+          AND summary_md NOT LIKE '%분석 실패%'
+          AND summary_md NOT LIKE '%일시 보류%'
     """)
     out: dict[str, list] = {}
     for r in cur.fetchall():
@@ -588,10 +615,16 @@ def build_data() -> dict:
 
         # PR-1: 증분 처리로 오늘자 news_analysis가 없는 종목도 빈 카드가 되지 않도록
         # 종목별 "가장 최근 1건"을 조회한다(asof 날짜도 함께 반환).
+        # PR-1(진단): 폴백('분석 실패'/'일시 보류')보다 '실제 요약'을 우선한다.
+        # 더 최신이 폴백이어도, 과거의 실제 요약이 있으면 그쪽을 노출(낡은 실제 > 새 실패).
         cur.execute("""
-            SELECT DISTINCT ON (ticker) ticker, asof, sentiment, sentiment_score, summary_md
+            SELECT DISTINCT ON (ticker) ticker, asof, sentiment, sentiment_score, summary_md, based_on
             FROM news_analysis
-            ORDER BY ticker, asof DESC
+            ORDER BY ticker,
+              (CASE WHEN based_on = 'fallback_old'
+                     OR summary_md LIKE '%분석 실패%'
+                     OR summary_md LIKE '%일시 보류%' THEN 1 ELSE 0 END),
+              asof DESC
         """)
         news_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
 
@@ -704,9 +737,16 @@ def build_data() -> dict:
             n_score = _f(news.get("sentiment_score")) or 0.5
             news_asof = str(news.get("asof")) if news.get("asof") else None
             summary_raw = news.get("summary_md") or ""
+            # PR-1(진단): 폴백('분석 실패'/'일시 보류')은 화면에 절대 노출하지 않는다.
+            # 실제 요약이 없으면 규칙기반 한 줄 인사이트(수치+해석)로 대체. (투자 자문 아님)
+            if _is_fallback_summary(summary_raw, news.get("based_on")):
+                summary_raw = ""
+                news_asof = None
             sum_bullets = [l.lstrip("- ").strip() for l in summary_raw.split("\n") if l.strip().startswith("-")][:3]
             if not sum_bullets and summary_raw:
                 sum_bullets = [summary_raw[:100]]
+            if not sum_bullets:
+                sum_bullets = [_rule_based_insight(close, chg, rsi, comp, n_sent, has_data)]
 
             # PR-6: 팩터별 '중립 폴백(데이터 없음→50)' 여부 — quant 플래그로 판별
             factor_fallback = {"m": False, "v": False, "q": False, "g": False, "s": False}

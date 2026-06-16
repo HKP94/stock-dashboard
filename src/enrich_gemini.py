@@ -51,10 +51,43 @@ MAX_NEWS_PER_TICKER: int = 15
 BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
 
+# PR-1(진단): 네트워크/일시오류(429·503·타임아웃) 지수 백오프 재시도. 파싱/스키마 실패와 구분.
+TRANSIENT_RETRIES: int = 3        # _call_gemini 일시오류 재시도 횟수 (CLAUDE.md §3)
+TRANSIENT_BACKOFF_BASE: float = 2.0   # 백오프 기준(초): 2, 4, 8 ...
+_TRANSIENT_MARKERS: tuple[str, ...] = (
+    "429", "503", "500", "resource_exhausted", "rate limit", "ratelimit",
+    "quota", "unavailable", "overloaded", "deadline", "timeout", "timed out",
+    "internal error", "try again",
+)
+
+# PR-1(진단): 폴백(요약 생성 실패) 식별 마커. 구버전("분석 실패")·신버전("일시 보류") 모두 포함.
+# export가 이 마커를 화면에 노출하지 않도록 공용으로 사용한다.
+FALLBACK_MARKERS: tuple[str, ...] = ("분석 실패", "일시 보류", "자동 요약을 일시")
+
+
+def is_fallback_summary(summary_md: Optional[str], based_on: Optional[str] = None) -> bool:
+    """요약이 '생성 실패 폴백'인지 판정. based_on='fallback_old'(신표식) 또는 마커 문자열로."""
+    if based_on == "fallback_old":
+        return True
+    if not summary_md:
+        return True
+    return any(m in summary_md for m in FALLBACK_MARKERS)
+
+
 _SOURCE_TAGS: dict[str, str] = {
     "yahoo": "[야후/핵심팩트]",
     "naver": "[네이버/시장트렌드]",
 }
+
+
+def _ensure_env() -> None:
+    """PR-1(진단): .env를 환경변수로 로드(이미 있으면 유지). 로컬 실행 시 GEMINI_API_KEY 누락 방지.
+    (src 어디에도 load_dotenv가 없어 로컬 enrich가 키 UNSET으로 통째 실패하던 문제 수정.)"""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=False)
+    except Exception:
+        pass
 
 
 # ──────────────────────────────────────────────────────────────
@@ -62,6 +95,7 @@ _SOURCE_TAGS: dict[str, str] = {
 # ──────────────────────────────────────────────────────────────
 
 def _get_api_key() -> str:
+    _ensure_env()  # PR-1: .env 로드(로컬)
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
@@ -96,6 +130,33 @@ def _call_gemini(client, model: str, prompt: str) -> str:
     return response.text
 
 
+def _is_transient(exc: Exception) -> bool:
+    """일시적(재시도 가치 있는) 오류인지 — 429/503/타임아웃/쿼터 등."""
+    msg = str(exc).lower()
+    return any(m in msg for m in _TRANSIENT_MARKERS)
+
+
+def _call_gemini_with_backoff(client, model: str, prompt: str) -> str:
+    """PR-1(진단): _call_gemini를 지수 백오프로 감싼다.
+    429/503/타임아웃 등 '일시오류'만 재시도(최대 TRANSIENT_RETRIES). 그 외(잘못된 요청 등)는 즉시 전파.
+    이게 종목별 폴백 사고(production ~60%)를 줄이는 핵심 — 단건 일시오류를 흡수.
+    파싱/스키마 실패는 여기서 다루지 않는다(상위 _call_gemini_for_*가 별도 재시도)."""
+    last: Optional[Exception] = None
+    for attempt in range(TRANSIENT_RETRIES):
+        try:
+            return _call_gemini(client, model, prompt)
+        except Exception as exc:
+            last = exc
+            if not _is_transient(exc) or attempt == TRANSIENT_RETRIES - 1:
+                raise
+            wait = TRANSIENT_BACKOFF_BASE * (2 ** attempt)
+            logger.warning("Gemini 일시오류(%s) — %.0fs 후 재시도 %d/%d",
+                           str(exc)[:80], wait, attempt + 2, TRANSIENT_RETRIES)
+            time.sleep(wait)
+    assert last is not None
+    raise last
+
+
 # ──────────────────────────────────────────────────────────────
 # 파싱·검증 헬퍼 (테스트 단위로 노출)
 # ──────────────────────────────────────────────────────────────
@@ -107,14 +168,16 @@ def _parse_news_output(text: str) -> NewsSummaryOutput:
 
 
 def _neutral_news_fallback() -> NewsSummaryOutput:
-    """Gemini 2회 실패 시 저장할 중립 기본값. PR-3: '빈약한 실패' 대신 안내 문구."""
+    """Gemini 2회 실패 시 저장할 중립 기본값. PR-3: '빈약한 실패' 대신 안내 문구.
+    PR-1(진단): based_on='fallback_old'로 표식 → enrich가 runs.errors에 기록하고,
+    export가 화면에 노출하지 않으며, 다음 실행 때 재시도 대상으로 선별된다."""
     return NewsSummaryOutput(
         sentiment="중립",
         sentiment_score=0.0,
         key_points=["뉴스 자동 요약을 일시적으로 생성하지 못함 — 원문 뉴스/지표를 참고하세요."],
         summary_md="- 뉴스 자동 요약 일시 보류(생성 실패). 종목상세의 원문 뉴스와 가격·지표를 참고하세요.",
         confidence="하",
-        based_on="recent",
+        based_on="fallback_old",
     )
 
 
@@ -140,11 +203,11 @@ def _call_gemini_for_news(
     """
     for attempt in range(2):
         try:
-            text = _call_gemini(client, model, prompt)
+            text = _call_gemini_with_backoff(client, model, prompt)
             return _parse_news_output(text)
         except Exception as exc:
             if attempt == 0:
-                logger.warning("%s: 뉴스 요약 파싱 실패 (재시도): %s", ticker, exc)
+                logger.warning("%s: 뉴스 요약 파싱/호출 실패 (재시도): %s", ticker, exc)
                 time.sleep(API_SLEEP)
             else:
                 logger.error("%s: 뉴스 요약 2회 실패 — 중립값 저장: %s", ticker, exc)
@@ -162,11 +225,11 @@ def _call_gemini_for_market(
     """
     for attempt in range(2):
         try:
-            text = _call_gemini(client, model, prompt)
+            text = _call_gemini_with_backoff(client, model, prompt)
             return _parse_market_output(text)
         except Exception as exc:
             if attempt == 0:
-                logger.warning("시황 종합 파싱 실패 (재시도): %s", exc)
+                logger.warning("시황 종합 파싱/호출 실패 (재시도): %s", exc)
                 time.sleep(API_SLEEP)
             else:
                 logger.error("시황 종합 2회 실패 — 스킵: %s", exc)
@@ -288,9 +351,11 @@ def _tickers_needing_enrichment(
     conn: psycopg.Connection,
     asof: date,
 ) -> list[str]:
-    """오늘 fetched_at 기준 새 뉴스가 있고, 아직 news_analysis 없는 ticker 목록.
-    PR-4: watchlist 종목만(=_MARKET_* pseudo-ticker 제외)."""
-    sql = """
+    """오늘 fetched_at 기준 새 뉴스가 있고, 아직 '성공' news_analysis가 없는 ticker 목록.
+    PR-4: watchlist 종목만(=_MARKET_* pseudo-ticker 제외).
+    PR-1(진단): 오늘 행이 '폴백'(생성 실패)이면 재시도 대상에 포함 — 낡은 '분석 실패'가 굳지 않게."""
+    markers = "(" + " OR ".join(["na.summary_md LIKE %s"] * len(FALLBACK_MARKERS)) + ")"
+    sql = f"""
         SELECT DISTINCT nr.ticker
         FROM news_raw nr
         WHERE nr.fetched_at::date = %s
@@ -298,11 +363,14 @@ def _tickers_needing_enrichment(
         AND NOT EXISTS (
             SELECT 1 FROM news_analysis na
             WHERE na.ticker = nr.ticker AND na.asof = %s
+            AND na.based_on <> 'fallback_old'
+            AND NOT {markers}
         )
         ORDER BY nr.ticker
     """
+    params = [asof, asof] + [f"%{m}%" for m in FALLBACK_MARKERS]
     with conn.cursor() as cur:
-        cur.execute(sql, (asof, asof))
+        cur.execute(sql, params)
         return [row["ticker"] for row in cur.fetchall()]
 
 
@@ -416,6 +484,16 @@ def enrich_news_batch(
 
             output = _call_gemini_for_news(client, model, prompt, ticker)
 
+            # PR-1(진단): 폴백이면 runs.errors에 사유 기록 — 종전엔 폴백이 조용히 묻혀
+            # production 실패율(~60%)을 추적할 수 없었다.
+            if is_fallback_summary(output.summary_md, output.based_on):
+                errors.append({
+                    "ticker": ticker,
+                    "step": "enrich_news_fallback",
+                    "error": "Gemini 요약 생성 실패 — 중립 폴백 저장(로그의 직전 오류 참조)",
+                    "ts": datetime.utcnow().isoformat(),
+                })
+
             analysis_row = NewsAnalysisRow(
                 ticker=ticker,
                 asof=asof,
@@ -444,6 +522,91 @@ def enrich_news_batch(
 
     logger.info("뉴스 요약 완료: %d/%d 종목", enriched, len(tickers))
     return enriched, errors
+
+
+def _tickers_with_stale_fallback(conn: psycopg.Connection) -> list[str]:
+    """최신 news_analysis가 '폴백'(생성 실패)인 watchlist(active) 종목."""
+    markers = "(" + " OR ".join(["summary_md LIKE %s"] * len(FALLBACK_MARKERS)) + ")"
+    sql = f"""
+        WITH latest AS (
+            SELECT DISTINCT ON (ticker) ticker, summary_md, based_on
+            FROM news_analysis ORDER BY ticker, asof DESC
+        )
+        SELECT l.ticker FROM latest l
+        JOIN watchlist w USING (ticker)
+        WHERE w.active = TRUE
+        AND (l.based_on = 'fallback_old' OR {markers})
+        ORDER BY l.ticker
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, [f"%{m}%" for m in FALLBACK_MARKERS])
+        return [r["ticker"] for r in cur.fetchall()]
+
+
+def _get_recent_ticker_news(conn: psycopg.Connection, ticker: str) -> list[dict]:
+    """ticker의 '가장 최근' 뉴스 최대 MAX_NEWS_PER_TICKER건 (날짜 무관)."""
+    sql = """
+        SELECT title, body, published_at, source
+        FROM news_raw WHERE ticker = %s
+        ORDER BY published_at DESC NULLS LAST, fetched_at DESC
+        LIMIT %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (ticker, MAX_NEWS_PER_TICKER))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def reenrich_stale_fallbacks(
+    conn: psycopg.Connection,
+    asof: Optional[date] = None,
+) -> tuple[int, list[dict]]:
+    """PR-1(진단): 최신 분석이 '폴백'인 종목을, 보유한 '가장 최근 뉴스'로 다시 요약해
+    오늘자(asof)에 실제 요약을 채운다. 파이프라인 미실행/증분 누락으로 굳은 '분석 실패'를 해소.
+
+    Returns
+    -------
+    (fixed_count, errors)
+    """
+    asof = asof or date.today()
+    client = _get_gemini_client()
+    model = _get_bulk_model()
+    errors: list[dict] = []
+    fixed = 0
+
+    tickers = _tickers_with_stale_fallback(conn)
+    logger.info("폴백 재시도 대상: %d개 종목", len(tickers))
+
+    for ticker in tickers:
+        try:
+            news_items = _get_recent_ticker_news(conn, ticker)
+            if not news_items:
+                logger.debug("%s: 재요약할 뉴스 없음 — 스킵", ticker)
+                continue
+            company_name = _get_company_name(conn, ticker)
+            prompt = _build_news_prompt(ticker, company_name, news_items)
+            output = _call_gemini_for_news(client, model, prompt, ticker)
+
+            if is_fallback_summary(output.summary_md, output.based_on):
+                errors.append({"ticker": ticker, "step": "reenrich_fallback",
+                               "error": "재시도도 폴백", "ts": datetime.utcnow().isoformat()})
+                continue  # 또 폴백이면 굳이 덮어쓰지 않음
+
+            upsert_news_analysis(conn, [NewsAnalysisRow(
+                ticker=ticker, asof=asof,
+                sentiment=output.sentiment, sentiment_score=output.sentiment_score,
+                summary_md=output.summary_md, payload=output.model_dump(),
+                n_articles=len(news_items), model=model, based_on=output.based_on,
+            )])
+            fixed += 1
+            logger.info("%s: 폴백→실제 요약 복구 (sentiment=%s)", ticker, output.sentiment)
+        except Exception as exc:
+            logger.error("%s: 폴백 재시도 실패: %s", ticker, exc, exc_info=True)
+            errors.append({"ticker": ticker, "step": "reenrich_fallback",
+                           "error": str(exc), "ts": datetime.utcnow().isoformat()})
+        time.sleep(API_SLEEP)
+
+    logger.info("폴백 재시도 완료: %d종목 복구", fixed)
+    return fixed, errors
 
 
 # ──────────────────────────────────────────────────────────────
@@ -550,6 +713,11 @@ if __name__ == "__main__":
             enriched_cnt, news_errs = enrich_news_batch(conn)
             all_errors.extend(news_errs)
             logger.info("뉴스 요약: %d종목 완료", enriched_cnt)
+
+            # PR-1(진단): 최신 분석이 폴백인 종목을 최근 뉴스로 복구(굳은 '분석 실패' 해소)
+            fixed_cnt, fix_errs = reenrich_stale_fallbacks(conn)
+            all_errors.extend(fix_errs)
+            logger.info("폴백 복구: %d종목", fixed_cnt)
 
             market_ok = enrich_market_summary(conn)
             logger.info("시황 종합: %s", "완료" if market_ok else "스킵/실패")
