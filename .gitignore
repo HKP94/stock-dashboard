@@ -55,3 +55,7 @@ dashboard-web/dist/
 dashboard-web/node_modules/
 # data.json: DB 결과물(보유종목·개인정보 포함), 빌드 전 재생성
 dashboard-web/src/data.json
+
+# 원클릭 기동 스크립트 로그 (PR-2)
+.local_api.log
+.vite.log

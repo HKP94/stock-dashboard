@@ -1091,6 +1091,9 @@ def build_data() -> dict:
         data = {
             "today":      now.strftime("%Y년 %-m월 %-d일 (%a)").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"),
             "updated":    now.strftime("%H:%M") + " KST",
+            # PR-3: 데이터 신선도 가드 — 생성 시각(파싱용 ISO + 표시용 라벨). 프론트가 현재시각과 비교해 경고.
+            "generatedAt":      now.strftime("%Y-%m-%dT%H:%M"),      # 로컬(KST) naive ISO
+            "generatedAtLabel": now.strftime("%Y-%m-%d %H:%M") + " KST",
             "priceAsof":  price_asof_latest,   # PR-1: 가격 기준일(최신 거래일)
             "priceAsofByMarket": price_asof,   # {"KR": "...", "US": "..."}
             "rulesCount": rules_count,

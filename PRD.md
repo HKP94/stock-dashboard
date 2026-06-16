@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v2.7 |
+| 버전 | v2.8 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -631,6 +631,11 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [x] **관심종목 active 토글 무반응 버그 PR-0~1** (2026-06-17):
   - PR-0 진단: 프론트 PATCH 경로·바디 정상, 백엔드 `@app.patch` 정상(curl 200). **근본원인 = CORS `allow_methods`에 PATCH 누락** → 크로스오리진(5173→8765) PATCH 프리플라이트(OPTIONS)가 400으로 막혀 브라우저가 차단(curl은 CORS 우회라 200). 프론트 `toggleActive`도 try/catch·낙관적 업데이트 없어 실패가 조용히 묻힘.
   - PR-1 수정: CORS `allow_methods`에 **PATCH·OPTIONS 추가**(프리플라이트 200·`allow-methods`에 PATCH). 프론트 `toggleActive` **낙관적 업데이트 + 실패 롤백 + 에러 배너 + 재조회**(새로고침 없이 즉시 반영). 검증: 프리플라이트 200, 토글 OFF→data.json에서 제외(38→37)→ON 복귀(데이터 보존). CORS 회귀 테스트 +3(300 passed).
+- [x] **운영 자동화: CI DB 최신화 + 집 PC 원클릭 + 신선도 가드 PR-0~3** (2026-06-17):
+  - PR-0 진단: auto_run(06시 전체)·news_refresh(18시 경량)이 enrich 포함 DB를 매일 자동 최신화(GEMINI_API_KEY 등 Secrets 등록 확인). `data.json`은 CI 산출이 gitignore라 버려짐 → **화면 최신화는 로컬 수동**(스크립트 부재). auto_run 06-13~15 실패는 **구버전 텔레그램 step 403**(현재 main에서 주석 제거됨)으로, DB 갱신 자체는 성공하고 있었음.
+  - PR-1: 루트 **README.md** — 운영 방식(CI=DB, 집PC=화면), GitHub Secrets 등록 절차(GEMINI_API_KEY 포함), 모델명 유효(gemini-2.5-flash-lite/gemini-3.5-flash) 명시. enrich 성공/실패는 `runs`에 기록(기존).
+  - PR-2: **start_dashboard.sh**(macOS) — .venv→export(DB→data.json)→local_api(8765)+vite(5173) 기동(이미 떠 있으면 재사용)→브라우저 자동 오픈. 실패 시 명확한 에러(DB 접속/데이터 부재 구분). `stop_dashboard.sh`·더블클릭용 `start_dashboard.command` 동봉. 검증: export 38종목→포트 재사용→완료.
+  - PR-3: **데이터 신선도 가드** — export `generatedAt`/`generatedAtLabel`, 헤더에 "데이터 생성: {시각}" 표시, 생성 후 2일+이면 헤더 옅은 경고 배너("스크립트 재실행 권장"). 검증: generatedAt 반영, 300 tests passed.
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -674,6 +679,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*
 - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
 - *v2.3 (2026-06-16) Gemini "분석 실패" 진단·수정 PR-0~2: 근본원인=Gemini 키 일일쿼터 소진(429)+구버전 폴백행 잔존+파이프라인 정체+폴백 무기록+.env 미로딩. 수정=`_ensure_env`(.env 로드), `_call_gemini_with_backoff`(429/503 지수백오프 3회), 폴백 `based_on='fallback_old'` 표식+runs.errors 기록, `reenrich_stale_fallbacks`(run_pipeline Step 7a'), export 실제요약 우선+규칙기반 한 줄(`is_fallback_summary`). "분석 실패" UI 노출 0. 단위테스트 +11(272 passed) — Claude Code.*
+- *v2.8 (2026-06-17) 운영 자동화 PR-0~3: 진단=CI(06·18시)가 enrich 포함 DB 자동 최신화(Secrets 등록 확인), data.json은 로컬 수동(스크립트 부재), auto_run 실패는 구버전 텔레그램 step 403(이미 제거)으로 DB는 갱신되고 있었음. README.md(운영방식·Secrets 등록·모델명), start_dashboard.sh(export→local_api+vite→브라우저, 포트 재사용·에러처리)+stop_dashboard.sh+.command, 신선도 가드(generatedAt·헤더 생성시각·2일+ 경고배너). 300 tests passed — Claude Code.*
 - *v2.7 (2026-06-17) 관심종목 active 토글 무반응 버그 PR-0~1: 근본원인=CORS allow_methods에 PATCH 누락→프리플라이트 400 차단(curl은 우회라 200). 수정=CORS에 PATCH·OPTIONS 추가, 프론트 toggleActive 낙관적 업데이트+롤백+에러배너+재조회. 검증=프리플라이트 200·토글 OFF→랭킹 제외(38→37)→ON 복귀(데이터 보존). CORS 회귀테스트 +3(300 passed) — Claude Code.*
 - *v2.6 (2026-06-17) 오버뷰 요약밴드+시장 매력도+탭 컨텍스트 PR-1~3: 오버뷰 최상단 dailyBrief(주목/주의/3축괴리/시장 한줄, 규칙기반·관찰서술·면책, 괴리종목은 주목서 제외), 시장전망 KR/US 진입환경(attractiveness 우호/중립/비우호=레짐+정배열율+VIX, 단일점수 금지), 탭 간 종목 컨텍스트 연속성(뉴스 선택→전역 ticker 동기화). export _build_daily_brief/_attach_market_attractiveness/_short_line. 단위테스트 +12(297 passed) — Claude Code.*
 - *v2.5 (2026-06-16) 매력도 3축+리서치 통합+내판단 인라인 PR-1~3: 설계원칙=세 축(퀀트/컨센서스/내판단) 단일점수 합산 금지·괴리 노출(확인편향 방지). 종목상세 AxesCard(3축 나란히+엇갈림 경고), StockResearchSection(research_items 유형별+빠른추가, local_api GET/POST/DELETE /api/research+_patch_data_json_research, 공용 ResearchItemCard tabsA 이동), 내판단 인라인 편집(별점 클릭·thesis blur 자동저장 PUT /api/notes·미입력 상태). InvestmentNoteCard→AxesCard 통합. 285 tests passed — Claude Code.*

@@ -40,6 +40,11 @@ export default function App() {
   const overall = D.market.overall;
   const w = D.regimes[overall].w;
 
+  // PR-3: 데이터 신선도 — 생성 시각과 현재 시각 차이가 2일+ 이면 경고(스크립트 재실행 권장)
+  const genAt = D.generatedAt ? new Date(D.generatedAt) : null;
+  const ageHours = genAt && !isNaN(genAt) ? (Date.now() - genAt.getTime()) / 3.6e6 : null;
+  const stale = ageHours != null && ageHours >= 48;
+
   return <div style={{ minHeight: "100vh", paddingBottom: 52 }}>
     {/* sticky chrome */}
     <div style={{ position: "sticky", top: 0, zIndex: 50, background: C.surface, borderBottom: `1px solid ${C.line2}` }}>
@@ -66,13 +71,20 @@ export default function App() {
             </span>
           </div>
 
-          {/* right: 가격 기준일(신선도) + 갱신시각 */}
+          {/* right: 가격 기준일(신선도) + 데이터 생성 시각 */}
           <div style={{ textAlign: "right" }}>
             <MonoCaps style={{ fontSize: 9 }} color={C.ink3} title="대시보드 가격이 기준한 최신 거래일">가격 기준일</MonoCaps>
             <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-              <span style={{ width: 6, height: 6, borderRadius: 999, background: C.ok }}></span>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: stale ? C.warn : C.ok }}></span>
               <span className="mono tnum" style={{ fontSize: 12, fontWeight: 600, color: C.ink }}>{D.priceAsof || D.updated}</span>
             </div>
+            {/* PR-3: 데이터 생성 시각 + 오래됨 경고 */}
+            {D.generatedAtLabel && (
+              <div className="mono" style={{ fontSize: 9, color: stale ? C.warn : C.ink3, marginTop: 1 }}
+                   title="이 화면 데이터가 생성된 시각. 최신화하려면 start_dashboard 스크립트를 다시 실행하세요.">
+                데이터 생성: {D.generatedAtLabel}
+              </div>
+            )}
             {D.priceAsofByMarket && (
               <div className="mono" style={{ fontSize: 9, color: C.ink3, marginTop: 1 }}>
                 KR {D.priceAsofByMarket.KR || "—"} · US {D.priceAsofByMarket.US || "—"}
@@ -95,6 +107,18 @@ export default function App() {
         </div>
       </div>
     </div>
+
+    {/* PR-3: 데이터 오래됨 경고(생성 후 2일+) */}
+    {stale && (
+      <div style={{ background: C.warnBg, borderBottom: `1px solid ${C.warn}33` }}>
+        <div style={{ maxWidth: 1280, margin: "0 auto", padding: "8px 24px", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12 }}>⚠️</span>
+          <span style={{ fontSize: 12, color: C.warn }}>
+            데이터가 오래되었을 수 있습니다(생성: {D.generatedAtLabel}). 최신 데이터로 보려면 <b>start_dashboard</b> 스크립트를 다시 실행하세요.
+          </span>
+        </div>
+      </div>
+    )}
 
     {/* content */}
     <div style={{ maxWidth: 1280, margin: "0 auto", padding: "20px 24px 32px" }}>
