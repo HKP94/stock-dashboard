@@ -681,6 +681,7 @@ def compute_quant_universe(
                 growth=round(grow, 2),
                 sentiment=round(sent, 2),
                 composite=round(composite, 2) if composite is not None else None,
+                fscore=fscore_map.get(ticker),  # PR-1: 스크리너 안전마진 입력으로 영속화
                 flags=flags_map[ticker],
             )
         )

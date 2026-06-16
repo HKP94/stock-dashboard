@@ -36,6 +36,10 @@ PRICE_PERIOD: str = "2y"  # SMA200 계산에 최소 200봉 필요
 _YF_REVENUE_LABELS: list[str] = ["Total Revenue", "Operating Revenue"]
 _YF_OP_INCOME_LABELS: list[str] = ["Operating Income", "Operating Income Loss"]
 _YF_NET_INCOME_LABELS: list[str] = ["Net Income", "Net Income Common Stockholders"]
+# PR-2: 현금흐름 계정과목 후보
+_YF_OCF_LABELS: list[str] = ["Operating Cash Flow", "Total Cash From Operating Activities", "Cash Flow From Continuing Operating Activities"]
+_YF_CAPEX_LABELS: list[str] = ["Capital Expenditure", "Capital Expenditures", "Purchase Of PPE"]
+_YF_FCF_LABELS: list[str] = ["Free Cash Flow"]
 
 
 def _safe_float(val) -> Optional[float]:
@@ -132,12 +136,54 @@ def _yf_financials(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     return stock.financials, stock.quarterly_financials
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def _yf_cashflow(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """PR-2: 연간·분기 현금흐름표."""
+    stock = yf.Ticker(ticker)
+    return stock.cashflow, stock.quarterly_cashflow
+
+
+def _cashflow_for(cf_df: Optional[pd.DataFrame], period_end: date) -> tuple[Optional[float], Optional[float]]:
+    """현금흐름표에서 해당 기말의 (OCF, FCF) 추출. FCF는 직접값 우선, 없으면 OCF+CapEx(음수)."""
+    if cf_df is None or cf_df.empty:
+        return None, None
+    # period_end와 일치하는 컬럼 탐색
+    match_col = None
+    for col in cf_df.columns:
+        try:
+            cd = col.date() if hasattr(col, "date") else date.fromisoformat(str(col)[:10])
+        except (AttributeError, ValueError):
+            continue
+        if cd == period_end:
+            match_col = col
+            break
+    if match_col is None:
+        return None, None
+    ocf = _find_yf_value(cf_df, _YF_OCF_LABELS, match_col)
+    fcf = _find_yf_value(cf_df, _YF_FCF_LABELS, match_col)
+    if fcf is None and ocf is not None:
+        capex = _find_yf_value(cf_df, _YF_CAPEX_LABELS, match_col)
+        if capex is not None:
+            fcf = ocf + capex  # yfinance CapEx는 음수
+    return ocf, fcf
+
+
 def fetch_us_fundamentals(ticker: str) -> list[FundamentalsRow]:
-    """yfinance로 US 종목 연간·분기 재무 수집."""
+    """yfinance로 US 종목 연간·분기 재무 + 현금흐름(OCF/FCF) 수집."""
     ann_df, qtr_df = _yf_financials(ticker)
+    try:
+        ann_cf, qtr_cf = _yf_cashflow(ticker)
+    except Exception as exc:  # 현금흐름 실패가 재무 전체를 막지 않게
+        logger.warning("%s: 현금흐름 수집 실패(무시): %s", ticker, exc)
+        ann_cf, qtr_cf = None, None
     rows: list[FundamentalsRow] = []
 
-    for df, period_type in [(ann_df, "annual"), (qtr_df, "quarter")]:
+    for df, cf_df, period_type in [(ann_df, ann_cf, "annual"), (qtr_df, qtr_cf, "quarter")]:
         if df is None or df.empty:
             continue
         for col in df.columns:
@@ -156,6 +202,7 @@ def fetch_us_fundamentals(ticker: str) -> list[FundamentalsRow]:
                 if revenue and op_income and revenue != 0
                 else None
             )
+            ocf, fcf = _cashflow_for(cf_df, period_end)
 
             rows.append(FundamentalsRow(
                 ticker=ticker,
@@ -165,6 +212,8 @@ def fetch_us_fundamentals(ticker: str) -> list[FundamentalsRow]:
                 op_income=op_income,
                 op_margin=op_margin,
                 net_income=net_income,
+                ocf=ocf,
+                fcf=fcf,
                 source="yfinance",
             ))
 

@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS fundamentals (
     op_income   NUMERIC,
     op_margin   NUMERIC,
     net_income  NUMERIC,
+    ocf         NUMERIC,     -- 영업현금흐름 (PR-2 재무 추이)
+    fcf         NUMERIC,     -- 잉여현금흐름 = OCF + CapEx(음수) (PR-2)
     source      TEXT        NOT NULL,
     PRIMARY KEY (ticker, period_type, period_end)
 );
@@ -148,6 +150,7 @@ CREATE TABLE IF NOT EXISTS quant_scores (
     growth    NUMERIC,
     sentiment NUMERIC,
     composite NUMERIC,
+    fscore    SMALLINT,   -- Piotroski F-Score(0~9, 실질 0~7) — 스크리너 '안전마진' 입력
     flags     JSONB   NOT NULL DEFAULT '[]',
     PRIMARY KEY (ticker, asof)
 );

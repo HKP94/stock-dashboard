@@ -64,6 +64,8 @@ class FundamentalsRow(BaseModel):
     op_income: Optional[float] = None
     op_margin: Optional[float] = None
     net_income: Optional[float] = None
+    ocf: Optional[float] = None   # 영업현금흐름 (PR-2)
+    fcf: Optional[float] = None   # 잉여현금흐름 = OCF + CapEx (PR-2)
     source: str
 
 
@@ -126,6 +128,7 @@ class QuantScoresRow(BaseModel):
     growth: Optional[float] = None
     sentiment: Optional[float] = None
     composite: Optional[float] = None
+    fscore: Optional[int] = None  # Piotroski F-Score(0~9, 실질 0~7) — 스크리너 안전마진 입력
     flags: list[str] = Field(default_factory=list)
 
 

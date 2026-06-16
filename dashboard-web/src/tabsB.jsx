@@ -25,7 +25,12 @@ export function Screener({ D, nav }) {
   const regimeBasis = D.market.kr?.regimeBasis || D.market.us?.regimeBasis || "";
 
   const momentum = [...D.stocks].sort((a, b) => b.f.m - a.f.m).slice(0, 9);
-  const longterm = [...D.stocks].filter((s) => s.fscore >= 7).sort((a, b) => (b.f.q + b.f.v) - (a.f.q + a.f.v)).slice(0, 9);
+  // PR-1: 장기보유 = 안전마진(가치+퀄리티+재무건전성) 복합 기준. 단일 F-Score 7+ 필터 폐기(구조적으로 비어).
+  const SAFETY_FLOOR = 55;
+  const longterm = [...D.stocks]
+    .filter((s) => (s.safety ?? -1) >= SAFETY_FLOOR && s.hasData)
+    .sort((a, b) => (b.safety ?? 0) - (a.safety ?? 0))
+    .slice(0, 9);
 
   const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : s.f[k];
   const unified = [...D.stocks].sort((a, b) => {
@@ -47,7 +52,7 @@ export function Screener({ D, nav }) {
 
     <div style={{ background: C.accTint, border: `1px solid ${C.acc}22`, borderRadius: 10, padding: "13px 18px", display: "flex", gap: 24, alignItems: "center" }}>
       <span style={{ fontSize: 13, color: C.ink, lineHeight: 1.5 }}>
-        <strong style={{ color: C.acc }}>모멘텀 픽</strong> = 타이밍 시그널(언제 사는가) · <strong style={{ color: C.ink }}>장기 보유 후보</strong> = F-Score 7+ 퀄리티 필터(무엇을 오래 들고 가는가)
+        <strong style={{ color: C.acc }}>모멘텀 픽</strong> = 타이밍 시그널(언제 사는가) · <strong style={{ color: C.ink }}>장기 보유 후보</strong> = 안전마진(가치+퀄리티+재무건전성) 종합(무엇을 오래 들고 가는가)
       </span>
     </div>
 
@@ -72,25 +77,35 @@ export function Screener({ D, nav }) {
         </div>
       </Panel>
 
-      <Panel title="장기 보유 후보" sub="퀄리티 필터" right={<MonoCaps style={{ fontSize: 9.5 }}>F-SCORE 7+</MonoCaps>}>
+      <Panel title="장기 보유 후보" sub="안전마진 종합" right={<MonoCaps style={{ fontSize: 9.5 }}>안전마진 ≥ {SAFETY_FLOOR}</MonoCaps>}>
+        {longterm.length === 0 ? (
+          <div style={{ padding: "28px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+            현재 기준(안전마진 {SAFETY_FLOOR}+)을 충족하는 종목이 없습니다.
+          </div>
+        ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-            {["#", "종목", "퀄리티", "가치", "F-Score"].map((h, i) => <th key={i} style={{ padding: "8px 12px", textAlign: i >= 2 ? "right" : "left" }}><MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps></th>)}
+            {["#", "종목", "안전마진", "가치", "퀄리티", "F-Score"].map((h, i) => <th key={i} style={{ padding: "8px 12px", textAlign: i >= 2 ? "right" : "left" }}><MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps></th>)}
           </tr></thead>
           <tbody>
             {longterm.map((s, i) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
-              <td style={{ padding: "10px 12px" }}><Num size={13} weight={700} color={i < 3 ? C.ok : C.ink3}>{i + 1}</Num></td>
-              <td style={{ padding: "10px 12px" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 13, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 10, color: C.ink3 }}>{s.mk}</span></div></td>
-              <td style={{ padding: "10px 12px", textAlign: "right" }}><Num size={13} weight={600} color={gradeCol(s.f.q)}>{s.f.q}</Num></td>
-              <td style={{ padding: "10px 12px", textAlign: "right" }}><Num size={13} weight={600} color={gradeCol(s.f.v)}>{s.f.v}</Num></td>
-              <td style={{ padding: "10px 12px", textAlign: "right" }}>
-                <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, color: s.fscore >= 8 ? C.ok : C.warn }}>{s.fscore ?? "—"}<span style={{ color: C.ink3, fontWeight: 500 }}>/9</span></span>
+              <td style={{ padding: "10px 12px", verticalAlign: "top" }}><Num size={13} weight={700} color={i < 3 ? C.ok : C.ink3}>{i + 1}</Num></td>
+              <td style={{ padding: "10px 12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 13, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 10, color: C.ink3 }}>{s.mk}</span></div>
+                {s.safetyReason && <div style={{ fontSize: 10.5, color: C.ink3, marginTop: 2, lineHeight: 1.35 }}>{s.safetyReason}</div>}
+              </td>
+              <td style={{ padding: "10px 12px", textAlign: "right", verticalAlign: "top" }}><div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}><Num size={13} weight={700} color={gradeCol(s.safety)}>{s.safety}</Num><GradeChip value={s.safety} /></div></td>
+              <td style={{ padding: "10px 12px", textAlign: "right", verticalAlign: "top" }}><Num size={13} weight={600} color={gradeCol(s.f.v)}>{s.f.v}</Num></td>
+              <td style={{ padding: "10px 12px", textAlign: "right", verticalAlign: "top" }}><Num size={13} weight={600} color={gradeCol(s.f.q)}>{s.f.q}</Num></td>
+              <td style={{ padding: "10px 12px", textAlign: "right", verticalAlign: "top" }}>
+                <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, color: (s.fscore ?? 0) >= 6 ? C.ok : C.warn }}>{s.fscore ?? "—"}<span style={{ color: C.ink3, fontWeight: 500 }}>/9</span></span>
               </td>
             </tr>)}
           </tbody>
         </table>
+        )}
         <div style={{ padding: "11px 16px", borderTop: `1px solid ${C.line}`, background: C.surface2, borderRadius: "0 0 10px 10px" }}>
-          <span style={{ fontSize: 11.5, color: C.ink2 }}><strong style={{ color: C.ink }}>선정 기준</strong> · Piotroski F-Score 7+ 통과 후 퀄리티·가치 합산 상위. 재무 건전성 기반 장기 보유.</span>
+          <span style={{ fontSize: 11.5, color: C.ink2 }}><strong style={{ color: C.ink }}>선정 기준</strong> · 안전마진 = 가치(저평가) 40% + 퀄리티 35% + 재무건전성(F-Score, 없으면 ROE·부채비율) 25%. F-Score는 실질 만점 7(2개 신호 미수집).</span>
         </div>
       </Panel>
     </div>

@@ -196,20 +196,22 @@ def upsert_indicators_daily(conn: psycopg.Connection, rows: list[IndicatorDailyR
 def upsert_fundamentals(conn: psycopg.Connection, rows: list[FundamentalsRow]) -> None:
     sql = """
         INSERT INTO fundamentals
-            (ticker, period_type, period_end, revenue, op_income, op_margin, net_income, source)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (ticker, period_type, period_end, revenue, op_income, op_margin, net_income, ocf, fcf, source)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (ticker, period_type, period_end) DO UPDATE SET
             revenue    = EXCLUDED.revenue,
             op_income  = EXCLUDED.op_income,
             op_margin  = EXCLUDED.op_margin,
             net_income = EXCLUDED.net_income,
+            ocf        = EXCLUDED.ocf,
+            fcf        = EXCLUDED.fcf,
             source     = EXCLUDED.source
     """
     with conn.cursor() as cur:
         cur.executemany(
             sql,
             [
-                (r.ticker, r.period_type, r.period_end, r.revenue, r.op_income, r.op_margin, r.net_income, r.source)
+                (r.ticker, r.period_type, r.period_end, r.revenue, r.op_income, r.op_margin, r.net_income, r.ocf, r.fcf, r.source)
                 for r in rows
             ],
         )
@@ -310,8 +312,8 @@ def upsert_news_analysis(conn: psycopg.Connection, rows: list[NewsAnalysisRow]) 
 def upsert_quant_scores(conn: psycopg.Connection, rows: list[QuantScoresRow]) -> None:
     sql = """
         INSERT INTO quant_scores
-            (ticker, asof, momentum, value, quality, growth, sentiment, composite, flags)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            (ticker, asof, momentum, value, quality, growth, sentiment, composite, fscore, flags)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
         ON CONFLICT (ticker, asof) DO UPDATE SET
             momentum  = EXCLUDED.momentum,
             value     = EXCLUDED.value,
@@ -319,6 +321,7 @@ def upsert_quant_scores(conn: psycopg.Connection, rows: list[QuantScoresRow]) ->
             growth    = EXCLUDED.growth,
             sentiment = EXCLUDED.sentiment,
             composite = EXCLUDED.composite,
+            fscore    = EXCLUDED.fscore,
             flags     = EXCLUDED.flags
     """
     with conn.cursor() as cur:
@@ -327,7 +330,7 @@ def upsert_quant_scores(conn: psycopg.Connection, rows: list[QuantScoresRow]) ->
             [
                 (
                     r.ticker, r.asof, r.momentum, r.value, r.quality,
-                    r.growth, r.sentiment, r.composite, _to_json(r.flags),
+                    r.growth, r.sentiment, r.composite, r.fscore, _to_json(r.flags),
                 )
                 for r in rows
             ],

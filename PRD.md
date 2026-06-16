@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v2.3 |
+| 버전 | v2.4 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -188,6 +188,7 @@ CREATE TABLE indicators_daily (
 CREATE TABLE fundamentals (
   ticker TEXT, period_type TEXT, period_end DATE,
   revenue NUMERIC, op_income NUMERIC, op_margin NUMERIC, net_income NUMERIC,
+  ocf NUMERIC, fcf NUMERIC,   -- PR-2: 영업현금흐름·잉여현금흐름(재무 추이)
   source TEXT, PRIMARY KEY (ticker, period_type, period_end)
 );
 
@@ -220,8 +221,9 @@ CREATE TABLE news_analysis (
 -- 퀀트 점수 (이력 누적) ── §F4
 CREATE TABLE quant_scores (
   ticker TEXT, asof DATE, momentum NUMERIC, value NUMERIC, quality NUMERIC,
-  growth NUMERIC, sentiment NUMERIC, composite NUMERIC, flags JSONB,
-  PRIMARY KEY (ticker, asof)
+  growth NUMERIC, sentiment NUMERIC, composite NUMERIC,
+  fscore SMALLINT,   -- PR-1: Piotroski F-Score(0~9, 실질 0~7) — 스크리너 안전마진 입력
+  flags JSONB, PRIMARY KEY (ticker, asof)
 );
 
 -- 포트폴리오 (F1)
@@ -416,6 +418,14 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 > **KR 가치/퀄리티/성장은 이제 실제 값**(네이버+FnGuide로 PER/PBR/ROE/부채/목표가 수집, 2026-06-15). 결측인 종목만 중립(50) 유지. 검증: KR 11종목 전부 value/quality/growth가 50고정 → 실제 분포로 전환(예: 코웨이 V=77.6, KT&G V=62.7).
 
+#### F4-6. 스크리너 '장기 보유 = 안전마진' (PR-1, 2026-06-16)
+
+기존 단일 **Piotroski F-Score 7+** 필터는 신호 7·8(발행주식수·매출총이익률) 미수집으로 실질 만점이 7 → 7+가 구조적으로 0개(리스트 빔). **안전마진 복합점수**로 재정의:
+
+`안전마진 = 0.40 × 가치(value 팩터) + 0.35 × 퀄리티(quality 팩터) + 0.25 × 재무건전성`.
+**재무건전성** = F-Score 있으면 `F-Score/7×100`, 없으면 `ROE`·`debt_ratio` 대체(둘 다 0~100 정규화 평균). → **F-Score 결측 종목도 평가 가능**.
+스크리너 장기보유 패널 = 안전마진 ≥ 55 종목을 점수 내림차순(상위 9), 각 종목에 가치/퀄리티/F-Score + "왜 후보인가" 근거 1줄(저PER·고ROE·저부채 등). 충족 0이면 "현재 기준 충족 종목 없음" 명시. F-Score는 `quant_scores.fscore`에 영속화(과거 export `fscore=None` 하드코딩 버그 동시 수정).
+
 ### F5 — 매일 아침 텔레그램 브리핑
 
 > **⏸ 보류(비활성, 2026-06-16)**: 텔레그램 발송은 현재 끔. 코드(`send_telegram.py`)는 보존.
@@ -604,6 +614,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-0 진단: 소스에 "분석 실패" 없음(data.json·DB만) → **구버전 폴백이 DB에 남긴 낡은 행**을 export(`DISTINCT ON asof DESC`)가 그대로 노출. 모델명(`gemini-2.5-flash-lite`/`gemini-3.5-flash` 모두 유효)·스키마(라이브 통과)·로컬레이트(버스트 12/12) 정상. **실제 근본원인 = Gemini 키 일일 쿼터 소진(429 RESOURCE_EXHAUSTED "exceeded your quota")** + 파이프라인 미실행(06-14 정체) + 폴백 무기록(runs.errors 미적재) + `.env` 미로딩으로 로컬 enrich 전체사망.
   - PR-1 수정: ⓐ`_ensure_env()` `.env` 로드(로컬 키 누락 해소). ⓑ`_call_gemini_with_backoff` 일시오류(429/503/타임아웃) **지수 백오프 3회**(파싱 재시도와 분리). ⓒ폴백을 `based_on='fallback_old'`로 표식 + `runs.errors` 기록(추적 가능). ⓓ`_tickers_needing_enrichment` 폴백 행 재시도 포함 + `reenrich_stale_fallbacks`(최신이 폴백인 종목을 최근 뉴스로 복구, run_pipeline Step 7a'·enrich __main__). ⓔexport: 폴백보다 **실제 요약 우선**(낡은 실제 > 새 실패), 실제 없으면 **규칙기반 한 줄 인사이트(수치+해석)** — "분석 실패" 절대 미노출. `is_fallback_summary` 단일 출처.
   - PR-2 검증: 키 환경 `reenrich` → 20 폴백 중 14 실제요약 복구(나머지 6은 당일 쿼터 소진, 코드 정상). data.json 재생성 후 **"분석 실패" 0·"일시 보류" 0**, GOOG/META/TSM 실제 요약 표시, 쿼터실패 3종목은 규칙기반 한 줄. 단위테스트 +11(272 passed).
+- [x] **스크리너 장기보유 + 종목상세 재무 시계열 PR-0~2** (2026-06-16):
+  - PR-0 진단: 장기보유 "F-Score 7+" 빈 원인 = ① F-Score 구조적 만점 7(신호 7·8 미수집)로 7+ 실제 0개(분포 0:2/2:1/3:8/4:11/5:6/6:10) + ② export `fscore=None` 하드코딩(quant_scores에 fscore 컬럼 부재)으로 React 필터 항상 false.
+  - PR-1: 장기보유=**안전마진 복합점수**(가치40%+퀄리티35%+재무건전성25%, F-Score 없으면 ROE·부채 대체). `quant_scores.fscore` 컬럼 영속화(schema/model/upsert/compute_quant), export 안전마진+구성요소+근거1줄, React 스크리너 패널 재정의(안전마진≥55 상위9·empty state·"왜 후보인가"). 검증: 빈 리스트→22후보(FUTU 76·CELH 74·MSFT 72…), F-Score 38종목 영속화.
+  - PR-2: 종목상세 **재무 추이 카드** — fundamentals에 `ocf`/`fcf` 컬럼 추가 + ingest_us 현금흐름 수집(OCF·CapEx→FCF), US 25종목 백필(OCF 220행), export `financials`(연간/분기 매출·영업이익·순이익·영업이익률·OCF·FCF + 추세), React recharts ComposedChart(막대+라인) + 컨센서스(목표가/상승여력/의견/PER) + KR 결측 empty state. 검증: 36/38 재무보유, AAPL/NVDA 시계열·추세 정상. 단위테스트 +13(285 passed).
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -647,3 +661,4 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*
 - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
 - *v2.3 (2026-06-16) Gemini "분석 실패" 진단·수정 PR-0~2: 근본원인=Gemini 키 일일쿼터 소진(429)+구버전 폴백행 잔존+파이프라인 정체+폴백 무기록+.env 미로딩. 수정=`_ensure_env`(.env 로드), `_call_gemini_with_backoff`(429/503 지수백오프 3회), 폴백 `based_on='fallback_old'` 표식+runs.errors 기록, `reenrich_stale_fallbacks`(run_pipeline Step 7a'), export 실제요약 우선+규칙기반 한 줄(`is_fallback_summary`). "분석 실패" UI 노출 0. 단위테스트 +11(272 passed) — Claude Code.*
+- *v2.4 (2026-06-16) 스크리너 장기보유+재무 시계열 PR-0~2: 장기보유 빈 원인=F-Score 구조적 만점7로 7+ 0개+export fscore=None 하드코딩. 수정=장기보유를 안전마진 복합점수(가치40+퀄리티35+건전성25, F-Score 결측 시 ROE·부채 대체)로 재정의, `quant_scores.fscore` 영속화, 스크리너 패널 재정의(≥55 상위9·empty state·근거1줄). 종목상세 재무추이: `fundamentals.ocf/fcf` 추가+ingest_us 현금흐름 수집+US25 백필, export `financials` 시계열, React recharts 카드(매출·이익·OCF·FCF+추세+컨센서스). §5.1 quant_scores.fscore·fundamentals.ocf/fcf, §F4-6 안전마진 명문화. 단위테스트 +13(285 passed) — Claude Code.*

@@ -67,6 +67,48 @@ def _f(v) -> float | None:
 from src.enrich_gemini import is_fallback_summary as _is_fallback_summary
 
 
+# PR-1: 스크리너 '장기 보유 = 안전마진' 복합 기준 (PRD §F4-스크리너)
+# F-Score 단일 7+ 필터가 구조적으로 비어(실질 만점 7) 단일필터 폐기 → 가치·퀄리티·재무건전성 가중합.
+SAFETY_WEIGHTS = {"value": 0.40, "quality": 0.35, "soundness": 0.25}
+FSCORE_MAX_EFF = 7   # 신호 7·8(발행주식수·매출총이익률) 미수집 → 실질 만점 7
+SAFETY_FLOOR = 55    # 장기보유 후보 최소 안전마진(미만이면 후보 제외)
+
+
+def _soundness_score(fscore, roe, debt_ratio) -> float:
+    """재무건전성 0~100. F-Score 있으면 우선(fscore/7*100), 없으면 ROE·부채비율로 대체."""
+    if fscore is not None:
+        return max(0.0, min(100.0, fscore / FSCORE_MAX_EFF * 100.0))
+    # 대체: ROE(높을수록↑, 20%→100) + 부채비율(낮을수록↑, 0%→100·200%→0) 평균
+    sub = []
+    if roe is not None:
+        sub.append(max(0.0, min(100.0, (roe / 0.20) * 100.0)))
+    if debt_ratio is not None:
+        sub.append(max(0.0, min(100.0, 100.0 - (debt_ratio / 200.0) * 100.0)))
+    return round(sum(sub) / len(sub), 1) if sub else 50.0
+
+
+def _safety_margin(value_f, quality_f, fscore, roe, debt_ratio):
+    """안전마진 점수(0~100)와 구성요소. value/quality는 팩터점수(0~100, 높을수록 저평가/우량)."""
+    v = float(value_f) if value_f is not None else 50.0
+    q = float(quality_f) if quality_f is not None else 50.0
+    s = _soundness_score(fscore, roe, debt_ratio)
+    score = SAFETY_WEIGHTS["value"] * v + SAFETY_WEIGHTS["quality"] * q + SAFETY_WEIGHTS["soundness"] * s
+    return round(score, 1), {"v": round(v), "q": round(q), "s": round(s)}
+
+
+def _safety_reason(per, pbr, roe, debt_ratio, fscore) -> str:
+    """'왜 장기보유 후보인가' 근거 1줄 — 충족 항목만 자연어로."""
+    bits = []
+    if per is not None and per > 0 and per < 15: bits.append(f"저PER {per:.1f}")
+    if pbr is not None and pbr > 0 and pbr < 1.5: bits.append(f"저PBR {pbr:.2f}")
+    if roe is not None and roe >= 0.15: bits.append(f"고ROE {roe*100:.0f}%")
+    if debt_ratio is not None and debt_ratio < 100: bits.append(f"저부채 {debt_ratio:.0f}%")
+    if fscore is not None and fscore >= 6: bits.append(f"F-Score {fscore}")
+    if not bits:
+        return "가치·퀄리티·재무건전성 종합 상위"
+    return " · ".join(bits) + " 기반 안전마진 우위"
+
+
 def _rule_based_insight(close, chg, rsi, comp, sent, has_data) -> str:
     """실제 뉴스 요약이 없을 때 보여줄 '규칙기반 한 줄 인사이트'(수치+해석).
     '분석 실패' 원문 대신 결정론적 한 줄을 항상 채운다. 매수/매도 권유 없음(투자 자문 아님)."""
@@ -536,6 +578,50 @@ def _build_news_timeline(conn, limit_per: int = 5) -> dict[str, list[dict]]:
     return out
 
 
+def _build_financials(conn, annual_n: int = 6, quarter_n: int = 8) -> dict[str, dict]:
+    """PR-2: 종목별 재무 시계열(매출·영업이익·순이익·영업이익률·OCF·FCF).
+    종목상세 '재무 추이' 카드용. annual/quarter 분리, 오래된→최근 순."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT ticker, period_type, period_end, revenue, op_income, op_margin, net_income, ocf, fcf
+        FROM fundamentals
+        ORDER BY ticker, period_type, period_end
+    """)
+    tmp: dict[str, dict[str, list]] = {}
+    for r in cur.fetchall():
+        pt = r["period_type"]
+        rev = _f(r["revenue"])
+        op = _f(r["op_income"])
+        item = {
+            "period": str(r["period_end"]),
+            "rev": rev,
+            "op": op,
+            "ni": _f(r["net_income"]),
+            "opm": round(_f(r["op_margin"]) * 100, 1) if _f(r["op_margin"]) is not None else None,
+            "ocf": _f(r["ocf"]),
+            "fcf": _f(r["fcf"]),
+        }
+        tmp.setdefault(r["ticker"], {"annual": [], "quarter": []})[pt].append(item)
+    out: dict[str, dict] = {}
+    for tk, d in tmp.items():
+        ann = [x for x in d["annual"] if x["rev"] is not None][-annual_n:]
+        qtr = [x for x in d["quarter"] if x["rev"] is not None][-quarter_n:]
+        # 최근 추세 방향(연간 매출·영업이익 마지막 2개 비교)
+        def _trend(series, key):
+            vals = [x[key] for x in series if x[key] is not None]
+            if len(vals) < 2 or vals[-2] in (None, 0):
+                return None
+            return round((vals[-1] - vals[-2]) / abs(vals[-2]) * 100, 1)
+        out[tk] = {
+            "annual": ann,
+            "quarter": qtr,
+            "revTrend": _trend(ann, "rev"),
+            "opTrend": _trend(ann, "op"),
+            "hasData": bool(ann or qtr),
+        }
+    return out
+
+
 # ── 메인 ─────────────────────────────────────────────────────────────
 def build_data() -> dict:
     _load_secrets()
@@ -594,7 +680,7 @@ def build_data() -> dict:
             ind_map[tk2]["chg_pct"] = _f(r["chg_pct"])
 
         cur.execute("""
-            SELECT DISTINCT ON (ticker) ticker, momentum, value, quality, growth, sentiment, composite, flags
+            SELECT DISTINCT ON (ticker) ticker, momentum, value, quality, growth, sentiment, composite, fscore, flags
             FROM quant_scores ORDER BY ticker, asof DESC
         """)
         quant_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
@@ -602,7 +688,7 @@ def build_data() -> dict:
         # PR-0: 종목별 최신 valuation/analyst (글로벌 max(asof) 사용 시 KR/US 수집일이
         # 달라 한쪽이 통째로 누락되는 버그 — indicators/quant와 동일하게 DISTINCT ON으로 수정).
         cur.execute("""
-            SELECT DISTINCT ON (ticker) ticker, per_f, per_t, pbr, roe
+            SELECT DISTINCT ON (ticker) ticker, per_f, per_t, pbr, roe, debt_ratio
             FROM valuation ORDER BY ticker, asof DESC
         """)
         val_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
@@ -679,6 +765,7 @@ def build_data() -> dict:
         news_feed = _build_news_feed(conn, watchlist_map, sentiment_by_ticker)
         article_map = _build_article_map(conn, watchlist_map)       # 종목별 최근 원문 기사
         timeline_map = _build_news_timeline(conn)                   # 종목별 최근 5건 분석
+        financials_map = _build_financials(conn)                    # PR-2: 종목별 재무 시계열
 
         # ── stocks 배열 구성 ──────────────────────────────────
         stocks = []
@@ -724,8 +811,14 @@ def build_data() -> dict:
             per  = _f(val.get("per_f")) or _f(val.get("per_t"))  # PR-0: KR은 per_t 폴백
             pbr  = _f(val.get("pbr"))
             roe  = _f(val.get("roe"))
+            debt = _f(val.get("debt_ratio"))
             rev  = _f(fund.get("op_margin"))
-            fscore = None
+            # PR-1: F-Score를 quant_scores에서 실제로 읽는다(과거 None 하드코딩 버그 수정)
+            fscore = q.get("fscore")
+            fscore = int(fscore) if fscore is not None else None
+            # PR-1: 안전마진 복합점수(가치+퀄리티+재무건전성) — 장기보유 후보 선정 기준
+            safety, safety_parts = _safety_margin(value, qual, fscore, roe, debt)
+            safety_reason = _safety_reason(per, pbr, roe, debt, fscore)
 
             # 애널리스트
             tp     = _f(ana.get("target_price"))
@@ -810,6 +903,9 @@ def build_data() -> dict:
                 "roe":    round(roe * 100, 1) if roe is not None else None,  # PR-0: 비율→% 표시(US/KR 모두 ratio 저장)
                 "rev":    round(rev * 100, 1) if rev else None,
                 "fscore": fscore,
+                "safety":       round(safety),           # PR-1: 안전마진 복합점수(0~100)
+                "safetyParts":  safety_parts,            # {v,q,s} 구성요소
+                "safetyReason": safety_reason,           # 왜 장기보유 후보인가 1줄
                 "tp":     round(tp) if tp else None,
                 "up":     round(upside, 1) if upside else None,
                 "rating": rating,
@@ -841,6 +937,8 @@ def build_data() -> dict:
                     "pnl_pct":     hold_info.get("pnl_pct"),
                     "currency":    hold_info.get("currency", "KRW"),
                 } if hold_info else None,
+                # PR-2: 재무 시계열(매출·영업이익·순이익·OCF·FCF + 추세)
+                "financials": financials_map.get(tk, {"annual": [], "quarter": [], "hasData": False}),
                 # PR-4: 리서치 항목
                 "researchItems": research_items_map.get(tk, []),
                 # PR-4(이번): 투자 판단 메모

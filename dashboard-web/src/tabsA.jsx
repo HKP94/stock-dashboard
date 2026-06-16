@@ -6,6 +6,101 @@ import {
   CompositeCell, MiniBars, FactorBar, Sparkline, PriceChart,
   SentStack, Pill, RegimeBadge, btnGhost,
 } from './ui.jsx';
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from 'recharts';
+
+// PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
+function fmtBig(v, cur) {
+  if (v == null) return "—";
+  const neg = v < 0 ? "-" : "";
+  const a = Math.abs(v);
+  if (cur === "₩") {
+    if (a >= 1e12) return `${neg}${(a / 1e12).toFixed(1)}조`;
+    if (a >= 1e8) return `${neg}${(a / 1e8).toFixed(0)}억`;
+    return `${neg}${(a / 1e4).toFixed(0)}만`;
+  }
+  if (a >= 1e9) return `${neg}$${(a / 1e9).toFixed(1)}B`;
+  if (a >= 1e6) return `${neg}$${(a / 1e6).toFixed(0)}M`;
+  return `${neg}$${a.toFixed(0)}`;
+}
+
+// PR-2: 종목상세 재무 추이 카드 (매출·영업이익·순이익·OCF·FCF + 추세 + 컨센서스)
+function FinancialsCard({ s }) {
+  const fin = s.financials || {};
+  const cur = s.cur || "$";
+  const ann = (fin.annual || []).map((a) => ({ ...a, yr: (a.period || "").slice(0, 4) }));
+
+  if (!fin.hasData || ann.length === 0) {
+    return (
+      <Panel title="재무 추이" sub="매출·이익·현금흐름">
+        <div style={{ padding: "28px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+          재무 데이터가 없습니다. (KR 일부 종목은 공시 수집 제약으로 비어 있을 수 있습니다.)
+        </div>
+      </Panel>
+    );
+  }
+
+  const TrendTag = ({ label, v }) => v == null ? null : (
+    <span style={{ fontSize: 11, color: v >= 0 ? C.ok : C.bad, fontWeight: 600 }}>
+      {label} {v >= 0 ? "▲" : "▼"} {Math.abs(v).toFixed(1)}%
+    </span>
+  );
+
+  const tip = (val) => fmtBig(val, cur);
+  const hasCF = ann.some((a) => a.ocf != null || a.fcf != null);
+
+  return (
+    <Panel title="재무 추이" sub="연간 · 매출·이익·현금흐름"
+      right={<div style={{ display: "flex", gap: 12 }}><TrendTag label="매출" v={fin.revTrend} /><TrendTag label="영업이익" v={fin.opTrend} /></div>}>
+      <div style={{ padding: "14px 12px 4px" }}>
+        <MonoCaps style={{ fontSize: 9, marginLeft: 6 }} color={C.ink3}>매출 · 영업이익 · 순이익 (막대) / 영업이익률 % (선)</MonoCaps>
+        <ResponsiveContainer width="100%" height={210}>
+          <ComposedChart data={ann} margin={{ top: 12, right: 8, left: 4, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+            <XAxis dataKey="yr" tick={{ fontSize: 11, fill: C.ink3 }} axisLine={{ stroke: C.line2 }} tickLine={false} />
+            <YAxis yAxisId="l" tick={{ fontSize: 10, fill: C.ink3 }} tickFormatter={(v) => fmtBig(v, cur)} axisLine={false} tickLine={false} width={52} />
+            <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10, fill: C.acc }} tickFormatter={(v) => v + "%"} axisLine={false} tickLine={false} width={36} />
+            <Tooltip formatter={(val, name) => name === "영업이익률" ? [val + "%", name] : [tip(val), name]} labelStyle={{ fontWeight: 700 }} contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line2}` }} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar yAxisId="l" dataKey="rev" name="매출" fill={C.ink2} radius={[3, 3, 0, 0]} maxBarSize={26} />
+            <Bar yAxisId="l" dataKey="op" name="영업이익" fill={C.acc} radius={[3, 3, 0, 0]} maxBarSize={26} />
+            <Bar yAxisId="l" dataKey="ni" name="순이익" fill={C.ok} radius={[3, 3, 0, 0]} maxBarSize={26} />
+            <Line yAxisId="r" type="monotone" dataKey="opm" name="영업이익률" stroke={C.warn} strokeWidth={2} dot={{ r: 3 }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {hasCF && (
+        <div style={{ padding: "4px 12px 10px", borderTop: `1px solid ${C.line}` }}>
+          <MonoCaps style={{ fontSize: 9, marginLeft: 6, marginTop: 8, display: "block" }} color={C.ink3}>영업현금흐름(OCF) · 잉여현금흐름(FCF)</MonoCaps>
+          <ResponsiveContainer width="100%" height={150}>
+            <ComposedChart data={ann} margin={{ top: 10, right: 8, left: 4, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+              <XAxis dataKey="yr" tick={{ fontSize: 11, fill: C.ink3 }} axisLine={{ stroke: C.line2 }} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: C.ink3 }} tickFormatter={(v) => fmtBig(v, cur)} axisLine={false} tickLine={false} width={52} />
+              <Tooltip formatter={(val, name) => [tip(val), name]} contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line2}` }} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar dataKey="ocf" name="영업현금흐름" fill={C.acc} radius={[3, 3, 0, 0]} maxBarSize={26} />
+              <Bar dataKey="fcf" name="잉여현금흐름" fill={C.ink3} radius={[3, 3, 0, 0]} maxBarSize={26} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* 컨센서스 전망 (있으면) */}
+      {(s.tp || s.up != null || s.rating || s.per) && (
+        <div style={{ padding: "11px 16px", borderTop: `1px solid ${C.line}`, background: C.surface2, borderRadius: "0 0 10px 10px", display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
+          <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>컨센서스 전망</MonoCaps>
+          {s.tp != null && <span style={{ fontSize: 12, color: C.ink2 }}>목표가 <b style={{ color: C.ink }}>{s.cur}{Math.round(s.tp).toLocaleString()}</b></span>}
+          {s.up != null && <span style={{ fontSize: 12, color: C.ink2 }}>상승여력 <b style={{ color: s.up >= 0 ? C.ok : C.bad }}>{s.up >= 0 ? "+" : ""}{s.up}%</b></span>}
+          {s.rating && <span style={{ fontSize: 12, color: C.ink2 }}>투자의견 <b style={{ color: C.ink }}>{s.rating}</b></span>}
+          {s.per != null && <span style={{ fontSize: 12, color: C.ink2 }}>PER <b style={{ color: C.ink }}>{s.per}</b></span>}
+        </div>
+      )}
+    </Panel>
+  );
+}
 
 export function Panel({ title, sub, right, children, style, bodyStyle }) {
   return (
@@ -708,6 +803,9 @@ export function StockDetail({ D, ticker, nav }) {
           ))}
         </div>
       </Panel>
+
+      {/* PR-2: 재무 추이 (매출·영업이익·순이익·OCF·FCF + 추세 + 컨센서스) */}
+      <FinancialsCard s={s} />
 
       {/* PR-4: 내 투자 판단 카드 */}
       <InvestmentNoteCard ticker={s.t} initialNote={s.note} />
