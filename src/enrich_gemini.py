@@ -8,7 +8,7 @@ enrich_gemini.py — Gemini 호출 래퍼 (뉴스 요약 + 시황 종합)
 환경변수:
   GEMINI_API_KEY
   GEMINI_BULK_MODEL   기본값 "gemini-2.5-flash-lite"  종목별 뉴스 요약 (대량·저렴)
-  GEMINI_SYNTH_MODEL  기본값 "gemini-3.5-flash"       시황 종합 1회 (상위 티어)
+  GEMINI_SYNTH_MODEL  기본값 "gemini-2.5-flash"       시황 종합 1회 (상위 티어, 2.5-flash 계열)
 
 프롬프트 템플릿: prompt/GEMINI_PROMPT.md §A (뉴스), §B (시황)
 
@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 
 # ── 상수 ─────────────────────────────────────────────────────────
 GEMINI_BULK_MODEL_DEFAULT: str = "gemini-2.5-flash-lite"
-GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-3.5-flash"
+# 시황 종합(1회/일)·상위 티어. 2.5-flash 계열로 통일(실호출 검증 2026-06-17). 무효 모델명이면 전량 실패.
+GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-2.5-flash"
 MAX_NEWS_PER_TICKER: int = 15
 BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
@@ -344,6 +345,155 @@ def _build_region_market_prompt(
 
 
 # ──────────────────────────────────────────────────────────────
+# PR-2: 종목별 중요 뉴스 큐레이션 (2단계, 모델 분리)
+#   STEP A 선별/스코어링 = Flash-Lite(저렴), STEP B 인사이트 = 2.5 Flash(상위)
+#   비용 가드: 입력 뉴스 건수 캡 + STEP B는 임계값 통과분만.
+# ──────────────────────────────────────────────────────────────
+
+from pydantic import BaseModel, Field  # noqa: E402
+
+CURATION_THRESHOLD: int = 60          # impact_score 임계값(이상만 인사이트 대상)
+CURATION_MAX_NEWS: int = 12           # STEP A 입력 뉴스 캡(비용 가드)
+CURATION_TOP_K: int = 6               # 종목당 큐레이션 최대 보존 건수
+_CATEGORIES = ("실적", "가이던스", "M&A·계약", "규제·정책", "애널리스트변경", "제품·기술", "거시", "기타")
+_DIRECTIONS = ("호재", "악재", "중립")
+
+
+class CurationScoreItem(BaseModel):
+    idx: int
+    impact_score: int = Field(ge=0, le=100)
+    category: str
+    direction: str
+
+
+class CurationScoreOutput(BaseModel):
+    items: list[CurationScoreItem] = Field(default_factory=list)
+
+
+class CuratedInsightItem(BaseModel):
+    idx: int
+    insight: str
+
+
+class CurationInsightOutput(BaseModel):
+    insights: list[CuratedInsightItem] = Field(default_factory=list)
+
+
+def _build_curation_score_prompt(company_name: str, ticker: str, news_items: list[dict]) -> str:
+    """STEP A: 종목 뉴스에 impact_score·category·direction 부여(저렴 모델)."""
+    lines = []
+    for i, it in enumerate(news_items):
+        pub = it.get("published_at")
+        d = pub.strftime("%Y-%m-%d") if pub else "날짜미상"
+        title = (it.get("title") or "")[:120]
+        body = (it.get("body") or "")[:120]
+        lines.append(f"[{i}] {d} | {title} — {body}")
+    news_text = "\n".join(lines)
+    return (
+        f"너는 [{company_name}({ticker})] 담당 애널리스트의 뉴스 선별 보조다. "
+        "아래 뉴스 각각이 이 종목 주가·심리에 줄 '영향도'를 평가하라.\n\n"
+        "★ 중요도 기준(반드시 적용):\n"
+        "- 고영향(70~100): 실적 발표, 가이던스 변경, M&A·대형 계약·수주, 규제·정책·소송, "
+        "애널리스트 투자의견/목표가 변경.\n"
+        "- 중영향(40~69): 제품·기술 발표, 파트너십, 거시(금리·환율) 직접 연관.\n"
+        "- 저영향(0~39): 단순 시황 반복, 홍보·보도자료, 중복·일반론, 주가 등락 단순 보도.\n\n"
+        "각 뉴스에 impact_score(0~100), category, direction(호재|악재|중립)을 매겨라.\n"
+        f"category는 다음 중 하나: {'|'.join(_CATEGORIES)}\n\n"
+        "JSON으로만 답하라(설명·코드펜스 금지):\n"
+        '{"items":[{"idx":0,"impact_score":0-100,"category":"...","direction":"호재|악재|중립"}]}\n\n'
+        f"[뉴스 목록]\n{news_text}"
+    )
+
+
+def _build_curation_insight_prompt(company_name: str, ticker: str, passing: list[dict]) -> str:
+    """STEP B: 임계값 통과 뉴스에 '핵심 사실 + 왜 중요한가' 한 줄 인사이트(상위 모델)."""
+    lines = []
+    for it in passing:
+        pub = it.get("published_at")
+        d = pub.strftime("%Y-%m-%d") if pub else "날짜미상"
+        lines.append(f"[{it['idx']}] ({it['category']}/{it['direction']}) {d} | {(it.get('title') or '')[:140]} — {(it.get('body') or '')[:160]}")
+    news_text = "\n".join(lines)
+    return (
+        f"너는 월스트리트 수석 애널리스트다. 아래 [{company_name}({ticker})]의 '중요 뉴스'만 골라낸 목록에 대해, "
+        "각 뉴스의 '핵심 사실 + 그것이 이 종목에 주는 의미(왜 중요한가)'를 한 줄 인사이트로 작성하라.\n"
+        "- 사실과 해석을 한 문장으로(예: '실적 가이던스 상향 → 컨센서스 상회로 단기 모멘텀 강화로 해석').\n"
+        "- 매수/매도 의견·목표가 생성 금지. 관찰·해석만. 투자 자문 아님.\n\n"
+        "JSON으로만: {\"insights\":[{\"idx\":0,\"insight\":\"한 줄 인사이트\"}]}\n\n"
+        f"[중요 뉴스]\n{news_text}"
+    )
+
+
+def _parse_curation_scores(text: str) -> CurationScoreOutput:
+    return CurationScoreOutput.model_validate(json.loads(text))
+
+
+def _parse_curation_insights(text: str) -> CurationInsightOutput:
+    return CurationInsightOutput.model_validate(json.loads(text))
+
+
+def curate_ticker_news(client, ticker: str, company_name: str, news_items: list[dict]) -> list[dict]:
+    """종목 중요 뉴스 큐레이션(STEP A 스코어링 → 임계값 필터 → STEP B 인사이트).
+    실패/빈 결과는 [] 반환(빈 큐레이션도 정상). 비용 가드: 입력 캡 + 통과분만 인사이트."""
+    items = news_items[:CURATION_MAX_NEWS]
+    if not items:
+        return []
+
+    # STEP A: 스코어링 (Flash-Lite)
+    scores: dict[int, CurationScoreItem] = {}
+    for attempt in range(2):
+        try:
+            text = _call_gemini_with_backoff(client, _get_bulk_model(), _build_curation_score_prompt(company_name, ticker, items))
+            out = _parse_curation_scores(text)
+            scores = {s.idx: s for s in out.items if 0 <= s.idx < len(items)}
+            break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s: 큐레이션 STEP A 실패(%d): %s", ticker, attempt, str(exc)[:80])
+            if attempt == 0:
+                time.sleep(API_SLEEP)
+    if not scores:
+        return []
+
+    # 임계값 통과분
+    passing = []
+    for idx, sc in scores.items():
+        if sc.impact_score >= CURATION_THRESHOLD:
+            it = items[idx]
+            passing.append({"idx": idx, "title": it.get("title"), "body": it.get("body"),
+                            "url": it.get("url"), "source": it.get("source"),
+                            "published_at": it.get("published_at"),
+                            "category": sc.category, "direction": sc.direction,
+                            "impact_score": sc.impact_score})
+    if not passing:
+        return []  # 주목할 만한 중요 뉴스 없음(정상)
+    passing.sort(key=lambda x: -x["impact_score"])
+    passing = passing[:CURATION_TOP_K]
+
+    # STEP B: 인사이트 (2.5 Flash) — 통과분만
+    insight_map: dict[int, str] = {}
+    try:
+        text = _call_gemini_with_backoff(client, _get_synth_model(), _build_curation_insight_prompt(company_name, ticker, passing))
+        ins = _parse_curation_insights(text)
+        insight_map = {i.idx: i.insight for i in ins.insights}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("%s: 큐레이션 STEP B 실패(인사이트 생략): %s", ticker, str(exc)[:80])
+
+    curated = []
+    for p in passing:
+        pub = p.get("published_at")
+        curated.append({
+            "title": (p.get("title") or "")[:160],
+            "url": p.get("url") or "",
+            "source": p.get("source") or "",
+            "published_at": pub.strftime("%Y-%m-%d %H:%M") if hasattr(pub, "strftime") else (str(pub)[:16] if pub else ""),
+            "category": p["category"], "direction": p["direction"],
+            "impact_score": p["impact_score"],
+            "insight": insight_map.get(p["idx"], ""),
+        })
+    logger.info("%s: 큐레이션 %d건(통과 %d/%d)", ticker, len(curated), len(passing), len(items))
+    return curated
+
+
+# ──────────────────────────────────────────────────────────────
 # DB 조회 헬퍼 (enrich_gemini 전용 쿼리)
 # ──────────────────────────────────────────────────────────────
 
@@ -381,7 +531,7 @@ def _get_ticker_news(
 ) -> list[dict]:
     """ticker의 오늘 뉴스 최대 MAX_NEWS_PER_TICKER건 (최신순)."""
     sql = """
-        SELECT title, body, published_at, source
+        SELECT title, body, published_at, source, url
         FROM news_raw
         WHERE ticker = %s AND fetched_at::date = %s
         ORDER BY published_at DESC NULLS LAST
@@ -486,13 +636,22 @@ def enrich_news_batch(
 
             # PR-1(진단): 폴백이면 runs.errors에 사유 기록 — 종전엔 폴백이 조용히 묻혀
             # production 실패율(~60%)을 추적할 수 없었다.
-            if is_fallback_summary(output.summary_md, output.based_on):
+            is_fallback = is_fallback_summary(output.summary_md, output.based_on)
+            if is_fallback:
                 errors.append({
                     "ticker": ticker,
                     "step": "enrich_news_fallback",
                     "error": "Gemini 요약 생성 실패 — 중립 폴백 저장(로그의 직전 오류 참조)",
                     "ts": datetime.utcnow().isoformat(),
                 })
+
+            # PR-2: 중요 뉴스 큐레이션(2단계). 요약이 폴백이면 스킵(LLM 불가 상태로 간주).
+            curated: list[dict] = []
+            if not is_fallback:
+                try:
+                    curated = curate_ticker_news(client, ticker, company_name, news_items)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("%s: 큐레이션 실패(비치명적): %s", ticker, str(exc)[:80])
 
             analysis_row = NewsAnalysisRow(
                 ticker=ticker,
@@ -504,6 +663,7 @@ def enrich_news_batch(
                 n_articles=len(news_items),
                 model=model,
                 based_on=output.based_on,
+                curated=curated,
             )
             upsert_news_analysis(conn, [analysis_row])
             enriched += 1

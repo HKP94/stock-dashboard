@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v2.9 |
+| 버전 | v3.0 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -215,6 +215,7 @@ CREATE TABLE news_raw (
 CREATE TABLE news_analysis (
   ticker TEXT, asof DATE, sentiment TEXT, sentiment_score NUMERIC,
   summary_md TEXT, payload JSONB, n_articles INT, model TEXT, based_on TEXT,
+  curated JSONB DEFAULT '[]',  -- PR: 중요뉴스 큐레이션 [{title,url,source,published_at,category,direction,impact_score,insight}]
   PRIMARY KEY (ticker, asof)
 );
 
@@ -648,6 +649,11 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-2: `portfolio_advice` 테이블(§5.1), local_api **POST/GET `/api/portfolio/advice`**(POST=force 재생성+data.json 갱신, GET=최근+stale), export `portfolioAdvice` 포함(읽기만, 호출 안 함).
   - PR-3: 포트폴리오 탭 **"전략 조언(참고용)"** 카드 — 종합 관찰 상단 강조 + 질문, ①②③ 펼침 섹션, source 뱃지(Gemini/규칙기반), "다시 분석" 버튼, 생성시각·면책, 보유 없으면 안내, 보유 변경 시 stale 경고.
   - 검증: 규칙기반·Gemini 경로 모두 동작, **금지어 0**, 단계 간 데이터 전달, 캐시 재사용. 단위테스트 +13(313 passed). (참고: 현재 Gemini 키는 선불 크레딧 소진 상태라 규칙기반으로 폴백 — 크레딧 충전 시 CoT 자동 활성.)
+- [x] **Gemini 재활성 + 종목별 중요뉴스 큐레이션 PR-1~3** (2026-06-17):
+  - PR-1: 크레딧 충전 후 **실호출 검증** — enrich(based_on=recent 실제 요약)·CoT(source=gemini) 정상. 모델 정리: `GEMINI_SYNTH_MODEL` `gemini-3.5-flash`→**`gemini-2.5-flash`**(2.5 계열, 실호출 OK), bulk=`gemini-2.5-flash-lite`. 워크플로 env 동기화. (flash-lite 503은 일시 과부하 — 백오프가 처리.)
+  - PR-2: **2단계 큐레이션**(`enrich_gemini.curate_ticker_news`) — STEP A 선별/스코어링=**Flash-Lite**(impact_score 0~100·category 8종·direction 호재/악재/중립, 중요도 기준 명문화), 임계값(≥60) 통과분만 STEP B 인사이트=**2.5-Flash**(핵심사실+왜 중요한가 한 줄). `news_analysis.curated`(JSONB) 저장, 증분(enrich 종목만)·입력 캡(12)·top-K(6). 빈 큐레이션도 정상.
+  - PR-3: export `curatedNews`(종목별)·`curatedFeed`(전체 영향도순), React 종목상세 **"중요 뉴스" 카드**(category 뱃지+direction 색상+영향도+인사이트+원문링크), 뉴스 탭 **"중요도순"** 토글. 빈 상태 처리.
+  - 검증: 큐레이션 라이브(네이버 공정위 규제 75·알파벳 AI 75 등), 21종목·curatedFeed 60건, 금지어 0, 단위테스트 +8(321 passed).
 - [ ] Hermes 브리핑 스킬(현재 Python 템플릿 → Hermes 전환), 대화형 Q&A(F6-4)
 - [ ] 실적 캘린더·리스크 요약(F6), Sheets 미러 + 뷰어 연계
 - [x] **백테스트** `src/backtest.py` (§F7) — 모멘텀 진짜 백테스트 + 회고, `backtest_results`, run_pipeline Step 10, 단위테스트 13개, React "전략 비교" 탭(recharts)
@@ -691,6 +697,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*
 - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
 - *v2.3 (2026-06-16) Gemini "분석 실패" 진단·수정 PR-0~2: 근본원인=Gemini 키 일일쿼터 소진(429)+구버전 폴백행 잔존+파이프라인 정체+폴백 무기록+.env 미로딩. 수정=`_ensure_env`(.env 로드), `_call_gemini_with_backoff`(429/503 지수백오프 3회), 폴백 `based_on='fallback_old'` 표식+runs.errors 기록, `reenrich_stale_fallbacks`(run_pipeline Step 7a'), export 실제요약 우선+규칙기반 한 줄(`is_fallback_summary`). "분석 실패" UI 노출 0. 단위테스트 +11(272 passed) — Claude Code.*
+- *v3.0 (2026-06-17) Gemini 재활성+중요뉴스 큐레이션 PR-1~3: 크레딧 충전 실호출 검증(enrich/CoT 실제경로), GEMINI_SYNTH_MODEL 3.5-flash→2.5-flash 정리(워크플로 동기화). 2단계 큐레이션(STEP A 스코어링=Flash-Lite·impact/category/direction, 임계값≥60 통과분만 STEP B 인사이트=2.5-Flash), news_analysis.curated 저장·증분·캡. export curatedNews/curatedFeed, React 종목상세 중요뉴스 카드+뉴스탭 중요도순. 라이브 검증(네이버/알파벳), 21종목·feed 60건, 단위테스트 +8(321 passed). §5.1 news_analysis.curated 추가 — Claude Code.*
 - *v2.9 (2026-06-17) 포트폴리오 전략조언(단계분리 CoT) PR-1~3: src/portfolio_advice.py — 절대원칙(투자자문 금지·관찰형) 주입, CoT 4단계(구성/리스크/레짐/종합) 코드 분리·단계간 전달, response_mime_type=json+pydantic 검증, 키없음/STEP1실패 시 전체 규칙기반 단락, cache_key 증분캐시. portfolio_advice 테이블, local_api POST/GET /api/portfolio/advice, export portfolioAdvice, React 포트폴리오 탭 전략조언 카드(펼침 4단계·다시분석·면책·stale). 금지어 0, 단위테스트 +13(313 passed). Gemini 크레딧 소진 시 규칙기반 폴백 — §5.1 portfolio_advice 추가 — Claude Code.*
 - *v2.8 (2026-06-17) 운영 자동화 PR-0~3: 진단=CI(06·18시)가 enrich 포함 DB 자동 최신화(Secrets 등록 확인), data.json은 로컬 수동(스크립트 부재), auto_run 실패는 구버전 텔레그램 step 403(이미 제거)으로 DB는 갱신되고 있었음. README.md(운영방식·Secrets 등록·모델명), start_dashboard.sh(export→local_api+vite→브라우저, 포트 재사용·에러처리)+stop_dashboard.sh+.command, 신선도 가드(generatedAt·헤더 생성시각·2일+ 경고배너). 300 tests passed — Claude Code.*
 - *v2.7 (2026-06-17) 관심종목 active 토글 무반응 버그 PR-0~1: 근본원인=CORS allow_methods에 PATCH 누락→프리플라이트 400 차단(curl은 우회라 200). 수정=CORS에 PATCH·OPTIONS 추가, 프론트 toggleActive 낙관적 업데이트+롤백+에러배너+재조회. 검증=프리플라이트 200·토글 OFF→랭킹 제외(38→37)→ON 복귀(데이터 보존). CORS 회귀테스트 +3(300 passed) — Claude Code.*

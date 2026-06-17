@@ -829,7 +829,7 @@ def build_data() -> dict:
         # PR-1(진단): 폴백('분석 실패'/'일시 보류')보다 '실제 요약'을 우선한다.
         # 더 최신이 폴백이어도, 과거의 실제 요약이 있으면 그쪽을 노출(낡은 실제 > 새 실패).
         cur.execute("""
-            SELECT DISTINCT ON (ticker) ticker, asof, sentiment, sentiment_score, summary_md, based_on
+            SELECT DISTINCT ON (ticker) ticker, asof, sentiment, sentiment_score, summary_md, based_on, curated
             FROM news_analysis
             ORDER BY ticker,
               (CASE WHEN based_on = 'fallback_old'
@@ -838,6 +838,14 @@ def build_data() -> dict:
               asof DESC
         """)
         news_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
+        # PR-2: 큐레이션은 '가장 최근에 큐레이션이 있는 행'에서 가져온다(최신 행이 비어도 직전 보존분 사용)
+        cur.execute("""
+            SELECT DISTINCT ON (ticker) ticker, curated
+            FROM news_analysis
+            WHERE curated <> '[]'::jsonb
+            ORDER BY ticker, asof DESC
+        """)
+        curated_map = {r["ticker"]: r["curated"] for r in cur.fetchall()}
 
         cur.execute("""
             SELECT ticker, revenue, op_income, op_margin FROM fundamentals
@@ -1046,6 +1054,8 @@ def build_data() -> dict:
                 "newsAsof": news_asof,             # PR-1: 뉴스 분석 기준일
                 "articles": article_map.get(tk, []),       # PR-2: 원문 기사 + URL
                 "newsTimeline": timeline_map.get(tk, []),  # PR-2: 최근 5건 분석 타임라인
+                "curatedNews": curated_map.get(tk, []),    # PR-2: 중요 뉴스 큐레이션
+                "newsCuratedCount": len(curated_map.get(tk, [])),
                 "cat":    [],
                 "series":       ser or [],
                 "volumeSeries": vol_ser or [],     # PR-4
@@ -1088,6 +1098,18 @@ def build_data() -> dict:
         price_asof = {r["market"]: str(r["d"]) for r in cur.fetchall() if r["d"]}
         price_asof_latest = max(price_asof.values()) if price_asof else None
 
+        # PR-2: 전체 중요 뉴스 피드(뉴스 탭 '중요도순') — 종목별 큐레이션 평탄화 + 영향도 내림차순
+        curated_feed = []
+        for tk_c, items_c in curated_map.items():
+            if tk_c not in watchlist_map:
+                continue
+            for c in (items_c or []):
+                curated_feed.append({**c, "t": tk_c,
+                                     "name": watchlist_map[tk_c].get("name") or tk_c,
+                                     "mk": watchlist_map[tk_c].get("market") or "US"})
+        curated_feed.sort(key=lambda x: -(x.get("impact_score") or 0))
+        curated_feed = curated_feed[:60]
+
         # PR-1: 오늘의 요약 밴드(규칙 기반 합성 — 키 없어도 동작, 시장 한 줄은 Gemini 시황 재사용)
         daily_brief = _build_daily_brief(stocks, market)
         # PR-2: 시장 매력도(진입 환경) — kr/us에 부착
@@ -1109,6 +1131,7 @@ def build_data() -> dict:
             "stocks":     stocks,
             "dailyBrief": daily_brief,           # PR-1: 오늘의 요약 밴드
             "news":       news_feed,
+            "curatedFeed": curated_feed,         # PR-2: 중요 뉴스(영향도순) — 뉴스 탭 정렬옵션
             "portfolio":  portfolio_snapshot,   # PR-2: 전체 포트폴리오 요약
             "portfolioAdvice": portfolio_advice,  # 전략 조언(CoT) 최근 캐시(+stale)
             "backtest":   backtest_data,        # PR-7: 백테스트 + 회고

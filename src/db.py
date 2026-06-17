@@ -284,8 +284,8 @@ def insert_news_raw(conn: psycopg.Connection, rows: list[NewsRawRow]) -> int:
 def upsert_news_analysis(conn: psycopg.Connection, rows: list[NewsAnalysisRow]) -> None:
     sql = """
         INSERT INTO news_analysis
-            (ticker, asof, sentiment, sentiment_score, summary_md, payload, n_articles, model, based_on)
-        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+            (ticker, asof, sentiment, sentiment_score, summary_md, payload, n_articles, model, based_on, curated)
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb)
         ON CONFLICT (ticker, asof) DO UPDATE SET
             sentiment       = EXCLUDED.sentiment,
             sentiment_score = EXCLUDED.sentiment_score,
@@ -293,7 +293,10 @@ def upsert_news_analysis(conn: psycopg.Connection, rows: list[NewsAnalysisRow]) 
             payload         = EXCLUDED.payload,
             n_articles      = EXCLUDED.n_articles,
             model           = EXCLUDED.model,
-            based_on        = EXCLUDED.based_on
+            based_on        = EXCLUDED.based_on,
+            -- 빈 큐레이션([])으로 덮어쓰지 않음(요약-only/폴백 재시도가 기존 큐레이션 보존)
+            curated         = CASE WHEN EXCLUDED.curated = '[]'::jsonb
+                                   THEN news_analysis.curated ELSE EXCLUDED.curated END
     """
     with conn.cursor() as cur:
         cur.executemany(
@@ -301,7 +304,7 @@ def upsert_news_analysis(conn: psycopg.Connection, rows: list[NewsAnalysisRow]) 
             [
                 (
                     r.ticker, r.asof, r.sentiment, r.sentiment_score, r.summary_md,
-                    _to_json(r.payload), r.n_articles, r.model, r.based_on,
+                    _to_json(r.payload), r.n_articles, r.model, r.based_on, _to_json(r.curated),
                 )
                 for r in rows
             ],

@@ -117,6 +117,7 @@ class NewsAnalysisRow(BaseModel):
     n_articles: int
     model: str
     based_on: Literal["recent", "fallback_old"]
+    curated: list[dict] = Field(default_factory=list)  # 중요뉴스 큐레이션 결과
 
 
 class QuantScoresRow(BaseModel):

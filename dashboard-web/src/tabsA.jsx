@@ -733,6 +733,46 @@ function AxesCard({ s }) {
   );
 }
 
+// PR-2: 중요 뉴스 방향 색상 (호재 초록 / 악재 빨강 / 중립 회색)
+export const dirColor = (d) => d === "호재" ? C.ok : d === "악재" ? C.bad : C.ink3;
+
+// PR-2: 종목상세 중요 뉴스 카드
+export function CuratedNews({ items }) {
+  const list = items || [];
+  return (
+    <Panel title="중요 뉴스" sub="Gemini 큐레이션 · 영향도순"
+      right={<MonoCaps style={{ fontSize: 9 }} color={C.ink3}>참고용 · 투자 자문 아님</MonoCaps>}>
+      {list.length === 0 ? (
+        <div style={{ padding: "22px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+          주목할 만한 중요 뉴스가 없습니다.
+        </div>
+      ) : (
+        <div>
+          {list.map((c, i) => {
+            const col = dirColor(c.direction);
+            return (
+              <div key={i} style={{ padding: "12px 16px", borderBottom: i < list.length - 1 ? `1px solid ${C.line}` : "none", borderLeft: `3px solid ${col}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: col + "18", color: col, border: `1px solid ${col}33` }}>{c.direction}</span>
+                  <span style={{ fontSize: 10.5, fontWeight: 600, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 4, padding: "2px 7px" }}>{c.category}</span>
+                  <span className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: col }}>영향도 {c.impact_score}</span>
+                  <span className="mono" style={{ fontSize: 9.5, color: C.ink3, marginLeft: "auto" }}>{c.source} · {c.published_at}</span>
+                </div>
+                {c.url ? (
+                  <a href={c.url} target="_blank" rel="noopener noreferrer" style={{ display: "block", fontSize: 13, fontWeight: 700, color: C.ink, textDecoration: "none", marginTop: 6 }}>{c.title} ↗</a>
+                ) : (
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginTop: 6 }}>{c.title}</div>
+                )}
+                {c.insight && <div style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55, marginTop: 4 }}>{c.insight}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export function StockDetail({ D, ticker, nav }) {
   const sorted = useMemo(() => [...D.stocks].sort((a, b) => (b.comp ?? 0) - (a.comp ?? 0)), [D.stocks]);
   const s = D.stocks.find((x) => x.t === ticker) || D.stocks[0];
@@ -1052,6 +1092,9 @@ export function StockDetail({ D, ticker, nav }) {
         </Panel>
       </div>
 
+      {/* 중요 뉴스 큐레이션 (Gemini 2단계: 영향도 스코어링 → 인사이트) */}
+      <CuratedNews items={s.curatedNews} />
+
       {/* PR-2: 원문 뉴스 (news_raw, 링크 포함) */}
       {(s.articles && s.articles.length > 0) && (
         <Panel title="원문 뉴스" sub={`최근 ${s.articles.length}건 · 클릭 시 원문`}>
@@ -1078,6 +1121,16 @@ export function NewsTab({ D, filterTicker, setFilterTicker, nav }) {
   const [mkt, setMkt] = useState("all");
   const [sent, setSent] = useState("all");
   const [q, setQ] = useState("");
+  const [sortMode, setSortMode] = useState("recent");  // PR-2: recent | impact(중요도순)
+
+  // PR-2: 중요도순 피드(큐레이션) — 종목/시장 필터 적용
+  const curatedView = useMemo(() => {
+    let f = [...(D.curatedFeed || [])];
+    if (filterTicker) f = f.filter((n) => n.t === filterTicker);
+    if (mkt !== "all") f = f.filter((n) => { const st = D.stocks.find((s) => s.t === n.t); return mkt === "hold" ? st && st.hold : st && st.mk === mkt; });
+    if (q) f = f.filter((n) => { const st = D.stocks.find((s) => s.t === n.t); return (st && st.name.includes(q)) || n.t.includes(q) || (n.title || "").includes(q); });
+    return f;
+  }, [filterTicker, mkt, q, D]);
 
   const sentCounts = useMemo(() => {
     return D.stocks.map((s) => {
@@ -1116,8 +1169,39 @@ export function NewsTab({ D, filterTicker, setFilterTicker, nav }) {
       >
         <div style={{ display: "flex", gap: 10, padding: "11px 16px", borderBottom: `1px solid ${C.line}`, alignItems: "center" }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="종목 검색…" style={{ flex: 1, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "7px 11px", fontSize: 12.5, fontFamily: "var(--sans)", outline: "none", color: C.ink }} />
-          <FilterTabs value={sent} onChange={setSent} options={[{ k: "all", label: "전체" }, { k: "긍정", label: "긍정" }, { k: "부정", label: "부정" }]} />
+          <FilterTabs value={sortMode} onChange={setSortMode} options={[{ k: "recent", label: "최신순" }, { k: "impact", label: "중요도순" }]} />
+          {sortMode === "recent" && <FilterTabs value={sent} onChange={setSent} options={[{ k: "all", label: "전체" }, { k: "긍정", label: "긍정" }, { k: "부정", label: "부정" }]} />}
         </div>
+        {/* PR-2: 중요도순 = 큐레이션 피드 */}
+        {sortMode === "impact" ? (
+          <div style={{ maxHeight: 620, overflowY: "auto" }}>
+            {curatedView.length === 0 ? (
+              <div style={{ padding: "30px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>중요 뉴스가 아직 없습니다.</div>
+            ) : curatedView.map((c, i) => {
+              const st = D.stocks.find((s) => s.t === c.t);
+              const col = dirColor(c.direction);
+              return (
+                <div key={i} style={{ padding: "13px 16px", borderBottom: `1px solid ${C.line}`, borderLeft: `3px solid ${col}` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => nav(c.t)} className="chip-hover" style={{ border: `1px solid ${C.line2}`, background: C.surface, borderRadius: 999, padding: "2px 9px", fontSize: 11, fontWeight: 700, color: C.ink, cursor: "pointer", display: "flex", gap: 5, alignItems: "center" }}>
+                      <HoldDot on={st && st.hold} />{st ? st.name : c.t}
+                    </button>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: col + "18", color: col, border: `1px solid ${col}33` }}>{c.direction}</span>
+                    <span style={{ fontSize: 10.5, fontWeight: 600, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 4, padding: "2px 7px" }}>{c.category}</span>
+                    <span className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: col }}>영향도 {c.impact_score}</span>
+                    <span className="mono" style={{ fontSize: 9.5, color: C.ink3, marginLeft: "auto" }}>{c.source} · {c.published_at}</span>
+                  </div>
+                  {c.url ? (
+                    <a href={c.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 14, fontWeight: 700, color: C.ink, textDecoration: "none", display: "block", lineHeight: 1.4 }}>{c.title} <span style={{ fontSize: 11, color: C.acc }}>↗</span></a>
+                  ) : (
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, lineHeight: 1.4 }}>{c.title}</div>
+                  )}
+                  {c.insight && <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.55, marginTop: 5 }}>{c.insight}</div>}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
         <div style={{ maxHeight: 620, overflowY: "auto" }}>
           {feed.map((n, i) => {
             const st = D.stocks.find((s) => s.t === n.t);
@@ -1146,6 +1230,7 @@ export function NewsTab({ D, filterTicker, setFilterTicker, nav }) {
           })}
           {feed.length === 0 && <div style={{ padding: 40, textAlign: "center", color: C.ink3, fontSize: 13 }}>해당 조건의 뉴스가 없습니다.</div>}
         </div>
+        )}
       </Panel>
 
       <Panel title="종목별 감성" sub="최근 7일 · 클릭 시 필터">

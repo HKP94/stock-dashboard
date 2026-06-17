@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS news_analysis (
     n_articles      INT     NOT NULL,
     model           TEXT    NOT NULL,
     based_on        TEXT    NOT NULL CHECK (based_on IN ('recent', 'fallback_old')),
+    curated         JSONB   NOT NULL DEFAULT '[]',  -- 중요뉴스 큐레이션(2단계): [{title,url,source,published_at,category,direction,impact_score,insight}]
     PRIMARY KEY (ticker, asof)
 );
 

@@ -136,7 +136,8 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 14. Sheets 미러 + 기존 Apps Script 뷰어 연계(`report_url`).
 
 ## 5. Gemini 호출 규칙 (토큰 절약)
-- 대량(종목별 뉴스 요약)=저렴 모델, 종합(시황 1회)=상위 모델. 모델명은 config로.
+- 대량(종목별 뉴스 요약)=저렴 모델, 종합(시황 1회)=상위 모델. 모델명은 config로. **현행 유효 모델**(2026-06-17 실호출 검증): `GEMINI_BULK_MODEL=gemini-2.5-flash-lite`, `GEMINI_SYNTH_MODEL=gemini-2.5-flash`(3.5-flash에서 2.5 계열로 정리). 무효 모델명이면 호출 전량 실패하므로 변경 시 반드시 실호출 검증.
+- **중요뉴스 큐레이션 = 2단계·모델 분리로 비용 관리**(`curate_ticker_news`): **STEP A 선별/스코어링 = Flash-Lite**(impact_score·category·direction), 임계값(`CURATION_THRESHOLD=60`) 통과분만 **STEP B 인사이트 = 2.5-Flash**. 비용 가드: 입력 뉴스 캡(`CURATION_MAX_NEWS=12`)·top-K(6)·증분(enrich 종목만). 예상 비용 월 1만원 안쪽(36종목·하루 2회). 빈 큐레이션도 정상("중요 뉴스 없음"). 요약이 폴백이면 큐레이션 스킵. 결과는 `news_analysis.curated`(빈 []로 기존값 덮어쓰지 않음).
 - 입력 뉴스는 dedupe + 상위 N건 + 본문 길이 캡. 새 뉴스 없으면 호출 스킵(전일 재사용).
 - 항상 `response_mime_type="application/json"` + 스키마 강제. 파싱 실패 핸들링 필수.
 - **키 쿼터(429)가 진짜 병목**: Gemini 키는 일일 쿼터 한계가 있어, 일일 파이프라인(38종목+시황)이 쿼터를 초과하면 **`429 RESOURCE_EXHAUSTED`로 종목별 폴백이 무더기 발생**(과거 "분석 실패" 광범위 노출의 근본원인). 따라서 ① **ad-hoc enrich/진단 호출로 쿼터를 태우지 말 것**(파이프라인이 유일 소비자가 이상적), ② 일시오류는 `_call_gemini_with_backoff`(429/503/타임아웃 **지수 백오프 3회**, 파싱 재시도와 분리)로 흡수, ③ 그래도 실패하면 **폴백을 `based_on='fallback_old'`로 표식**한다.
