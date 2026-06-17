@@ -262,6 +262,16 @@ CREATE TABLE IF NOT EXISTS stock_notes (
 );
 
 -- =============================================================
+-- 포트폴리오 전략 조언 (CoT 결과 캐시) — cache_key = 보유·현금·레짐 시그니처
+-- 투자 자문 아님 / 관찰·정보. 보유 변경 시 cache_key가 달라져 stale 판정.
+-- =============================================================
+CREATE TABLE IF NOT EXISTS portfolio_advice (
+    cache_key    TEXT        PRIMARY KEY,
+    payload      JSONB       NOT NULL,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =============================================================
 -- 백테스트 / 회고 결과 (PR-5)
 -- metric_type: 'true_backtest'(과거 시점 데이터만, 미래정보 없음)
 --            | 'retrospective'(오늘 스냅샷 기반 회고 — 선정시점편향 주의, 백테스트 아님)

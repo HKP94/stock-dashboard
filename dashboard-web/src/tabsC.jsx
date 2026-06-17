@@ -329,6 +329,128 @@ export function Portfolio({ D, nav }) {
           </div>
         </div>
       </Panel>
+
+      {/* CoT 전략 조언 (참고용) */}
+      <PortfolioAdvice D={D} hasHoldings={(rows || []).length > 0} />
     </div>
+  );
+}
+
+// ── CoT 포트폴리오 전략 조언 (참고용) ─────────────────────────────────
+function AdviceSection({ label, color, open, onToggle, children }) {
+  return (
+    <div style={{ borderTop: `1px solid ${C.line}` }}>
+      <button onClick={onToggle} style={{ width: "100%", textAlign: "left", border: "none", background: "none", cursor: "pointer", padding: "11px 16px", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 3, height: 14, background: color, borderRadius: 2 }}></span>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{label}</span>
+        <span style={{ marginLeft: "auto", color: C.ink3, fontSize: 12 }}>{open ? "−" : "+"}</span>
+      </button>
+      {open && <div style={{ padding: "0 16px 14px 27px" }}>{children}</div>}
+    </div>
+  );
+}
+
+function Bullets({ items, color }) {
+  return (
+    <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
+      {(items || []).map((t, i) => (
+        <li key={i} style={{ display: "flex", gap: 8, fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>
+          <span style={{ color: color || C.ink3, flexShrink: 0 }}>·</span><span>{t}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function PortfolioAdvice({ D, hasHoldings }) {
+  const [advice, setAdvice] = useState(D.portfolioAdvice || null);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState({ s1: false, s2: true, s3: false });
+
+  useEffect(() => {
+    fetch(`${API}/api/portfolio/advice`).then((r) => r.json()).then((d) => { if (d) setAdvice(d); }).catch(() => {});
+  }, []);
+
+  const regenerate = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`${API}/api/portfolio/advice`, { method: "POST" });
+      if (r.ok) setAdvice(await r.json());
+    } catch (_) {}
+    setLoading(false);
+  };
+
+  const srcBadge = advice && (
+    <span style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+      background: advice.source === "gemini" ? C.accTint : C.surface2,
+      color: advice.source === "gemini" ? C.acc : C.ink3, border: `1px solid ${C.line2}` }}>
+      {advice.source === "gemini" ? "Gemini CoT" : "규칙기반"}
+    </span>
+  );
+
+  return (
+    <Panel title="전략 조언 (참고용)" sub="투자 자문 아님 · 단계분리 관찰"
+      right={
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {srcBadge}
+          <button onClick={regenerate} disabled={loading || !hasHoldings} style={{ ...btnGhost, opacity: (loading || !hasHoldings) ? 0.5 : 1 }}>
+            {loading ? "분석 중…" : "다시 분석"}
+          </button>
+        </div>
+      }>
+      {!hasHoldings ? (
+        <div style={{ padding: "26px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+          보유종목을 추가하면 포트폴리오 전략 조언(구성·리스크·레짐 정합성·종합 관찰)을 볼 수 있습니다.
+        </div>
+      ) : !advice || advice.empty ? (
+        <div style={{ padding: "26px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+          아직 분석이 없습니다. <b>다시 분석</b>을 눌러 생성하세요.
+        </div>
+      ) : (
+        <>
+          {advice.stale && (
+            <div style={{ padding: "8px 16px", background: C.warnBg, fontSize: 11.5, color: C.warn }}>
+              보유가 바뀐 뒤 분석이 갱신되지 않았습니다 — <b>다시 분석</b>을 권장합니다.
+            </div>
+          )}
+          {/* STEP4 종합 관찰 (상단 강조) */}
+          <div style={{ padding: "14px 16px" }}>
+            <MonoCaps style={{ fontSize: 9, marginBottom: 6, display: "block" }} color={C.acc}>종합 관찰</MonoCaps>
+            <div style={{ fontSize: 13.5, color: C.ink, lineHeight: 1.65 }}>{advice.step4?.summary}</div>
+            {(advice.step4?.questions || []).length > 0 && (
+              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
+                {advice.step4.questions.map((q, i) => (
+                  <div key={i} style={{ fontSize: 12, color: C.ink2, display: "flex", gap: 7 }}>
+                    <span style={{ color: C.acc }}>?</span><span>{q}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* 펼침 3단계 */}
+          <AdviceSection label="① 구성 분석" color={C.ink} open={open.s1} onToggle={() => setOpen((o) => ({ ...o, s1: !o.s1 }))}>
+            <Bullets items={advice.step1?.facts} />
+            <div style={{ marginTop: 8, fontSize: 12, color: C.ink3, lineHeight: 1.6 }}>
+              {advice.step1?.concentration_note} {advice.step1?.allocation_note} {advice.step1?.cash_note}
+            </div>
+          </AdviceSection>
+          <AdviceSection label="② 리스크 식별" color={C.bad} open={open.s2} onToggle={() => setOpen((o) => ({ ...o, s2: !o.s2 }))}>
+            <Bullets items={advice.step2?.risks} color={C.bad} />
+          </AdviceSection>
+          <AdviceSection label="③ 레짐 정합성" color={C.warn} open={open.s3} onToggle={() => setOpen((o) => ({ ...o, s3: !o.s3 }))}>
+            <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.6 }}>
+              <div>현재 레짐: <b style={{ color: C.ink }}>{advice.regime}</b></div>
+              <div style={{ marginTop: 5 }}>{advice.step3?.tilt_note}</div>
+              <div style={{ marginTop: 5 }}>{advice.step3?.alignment_note}</div>
+            </div>
+          </AdviceSection>
+          {/* 면책 + 생성시각 */}
+          <div style={{ padding: "9px 16px", borderTop: `1px solid ${C.line}`, background: C.surface2, borderRadius: "0 0 10px 10px", display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, color: C.ink3 }}>{advice.disclaimer}</span>
+            <span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>생성: {advice.generatedAtLabel}</span>
+          </div>
+        </>
+      )}
+    </Panel>
   );
 }

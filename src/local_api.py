@@ -417,6 +417,40 @@ def delete_research(item_id: int):
     return {"ok": True, "id": item_id, "ticker": row["ticker"]}
 
 
+# ── 포트폴리오 전략 조언 엔드포인트 (CoT) ──────────────────────────
+
+def _patch_data_json_advice(advice: dict) -> None:
+    """data.json의 portfolioAdvice 필드만 갱신."""
+    if not _DATA_JSON.exists():
+        return
+    try:
+        with open(_DATA_JSON, encoding="utf-8") as f:
+            data = json.load(f)
+        data["portfolioAdvice"] = advice
+        with open(_DATA_JSON, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+    except Exception as exc:
+        logger.warning("data.json advice 갱신 실패: %s", exc)
+
+
+@app.get("/api/portfolio/advice")
+def get_portfolio_advice():
+    """최근 전략 조언 + 보유 변경 시 stale 표시(없으면 null)."""
+    from src.portfolio_advice import load_latest
+    with get_conn() as conn:
+        return load_latest(conn)
+
+
+@app.post("/api/portfolio/advice", status_code=200)
+def make_portfolio_advice():
+    """전략 조언 재생성(CoT, force) → data.json 갱신 + 결과 반환. 투자 자문 아님."""
+    from src.portfolio_advice import analyze_portfolio
+    with get_conn() as conn:
+        advice = analyze_portfolio(conn, force=True)
+    _patch_data_json_advice(advice)
+    return advice
+
+
 # ── 관심종목(watchlist) 관리 엔드포인트 (PR-3) ──────────────────
 
 def _regenerate_data_json() -> None:

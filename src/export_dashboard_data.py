@@ -875,6 +875,12 @@ def build_data() -> dict:
         # PR-2: 보유종목 평가
         holdings_map = _load_portfolio(conn)
         portfolio_snapshot = _load_portfolio_snapshot(conn)
+        # 포트폴리오 전략 조언(CoT) 최근 캐시 — 없으면 None. 호출은 하지 않음(읽기만).
+        try:
+            from src.portfolio_advice import load_latest as _load_advice
+            portfolio_advice = _load_advice(conn)
+        except Exception:
+            portfolio_advice = None
 
         # PR-4: 리서치 항목
         research_items_map = _load_research_items(conn)
@@ -1104,6 +1110,7 @@ def build_data() -> dict:
             "dailyBrief": daily_brief,           # PR-1: 오늘의 요약 밴드
             "news":       news_feed,
             "portfolio":  portfolio_snapshot,   # PR-2: 전체 포트폴리오 요약
+            "portfolioAdvice": portfolio_advice,  # 전략 조언(CoT) 최근 캐시(+stale)
             "backtest":   backtest_data,        # PR-7: 백테스트 + 회고
             "research":   {
                 "files": {}, "notes": {},
