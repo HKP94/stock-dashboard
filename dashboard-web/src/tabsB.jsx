@@ -192,6 +192,7 @@ export function Market({ D }) {
   const overall = D.market.overall;
   const w = D.regimes[overall].w;
   const newsSummary = D.market.newsSummary || {};
+  const refreshContext = D.refreshContext || D.market.refreshContext || {};
   const interp = overall === "bull"
     ? "강세 국면 — 모멘텀 비중을 최대(45%)로 끌어올려 추세에 올라타되, 심리·과열 신호로 진입 타이밍을 조절합니다."
     : overall === "neutral"
@@ -199,6 +200,18 @@ export function Market({ D }) {
       : "약세 국면 — 우량성(45%)·가치(35%)에 무게를 실어 방어합니다. 모멘텀 비중을 최소화하고 재무 건전성 높은 종목으로 포트폴리오를 압축합니다.";
 
   return <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    {refreshContext.label && (
+      <div style={{ border: `1px solid ${C.line2}`, background: C.surface2, borderRadius: 10, padding: "12px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>업데이트 기준</MonoCaps>
+          <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{refreshContext.label}</span>
+        </div>
+        {refreshContext.note && (
+          <div style={{ marginTop: 6, fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>{refreshContext.note}</div>
+        )}
+      </div>
+    )}
+
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
       <MarketColumn title="🇰🇷 한국 시장" m={D.market.kr} regimes={D.regimes} />
       <MarketColumn title="🇺🇸 미국 시장" m={D.market.us} regimes={D.regimes} />

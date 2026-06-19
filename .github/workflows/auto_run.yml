@@ -1,4 +1,4 @@
-name: ATLAS 일일 파이프라인 (06:00 KST)
+name: ATLAS 미국 종가 기준 전체 파이프라인 (06:00 KST)
 
 on:
   workflow_dispatch:   # 수동 실행 유지
