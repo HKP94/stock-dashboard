@@ -17,6 +17,7 @@ from src.enrich_gemini import (
     BODY_CAP,
     TRANSIENT_RETRIES,
     _build_market_prompt,
+    _build_region_market_prompt,
     _build_market_news_digest_prompt,
     _build_news_prompt,
     _call_gemini_for_market,
@@ -257,6 +258,20 @@ class TestParseMarketOutput:
         del missing["headline"]
         with pytest.raises(ValidationError):
             _parse_market_output(json.dumps(missing))
+
+
+class TestPromptFormattingGuidance:
+    def test_news_prompt_asks_for_plain_emphasis(self):
+        prompt = _build_news_prompt("AAPL", "Apple", SAMPLE_NEWS_ITEMS)
+        assert "과도한 강조 표시(*, **)" in prompt
+
+    def test_region_market_prompt_asks_for_plain_emphasis(self):
+        prompt = _build_region_market_prompt("한국", {"kospi": 3000}, [])
+        assert "과도한 강조 표시(*, **)" in prompt
+
+    def test_market_digest_prompt_asks_for_plain_emphasis(self):
+        prompt = _build_market_news_digest_prompt({"KR": [], "US": [], "GLOBAL": []})
+        assert "과도한 강조 표시(*, **)" in prompt
 
 
 # ──────────────────────────────────────────────────────────────

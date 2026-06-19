@@ -9,7 +9,7 @@ import {
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { filterStocks, portfolioAssetTotal, sortStocksBySentiment } from './display.js';
+import { cleanDisplayText, extractBullets, filterStocks, portfolioAssetTotal, sortStocksBySentiment } from './display.js';
 
 // PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
 function fmtBig(v, cur) {
@@ -240,9 +240,7 @@ export function Overview({ D, nav, goNews }) {
 
   // PR-2: 시장 코멘트
   const summaryMd = D.market?.summaryMd || D.market?.kr?.summaryMd || "";
-  const summaryText = summaryMd
-    ? summaryMd.split("\n").filter(l => l.trim().startsWith("-")).slice(0, 2).map(l => l.replace(/^-+\s*/, "")).join(" / ")
-    : "";
+  const summaryText = extractBullets(summaryMd, { limit: 2 }).join(" / ");
   const overall = D.market.overall;
 
   return (
@@ -1061,7 +1059,7 @@ export function StockDetail({ D, ticker, nav }) {
           <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 7 }}>
             {s.sum.map((b, i) => (
               <li key={i} style={{ display: "flex", gap: 9, fontSize: 13, color: C.ink, lineHeight: 1.5 }}>
-                <span style={{ color: sentMeta(s.sent).c, fontWeight: 800, flexShrink: 0 }}>—</span><span>{b}</span>
+                <span style={{ color: sentMeta(s.sent).c, fontWeight: 800, flexShrink: 0 }}>—</span><span>{cleanDisplayText(b)}</span>
               </li>
             ))}
           </ul>

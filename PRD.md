@@ -702,6 +702,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
 
 ### 안정화 (운영 중 발견·수정)
+- [x] **Wave 4-A 긴급 버그·정리** (2026-06-19): 관심종목 관리 섹터 입력이 매 글자마다 행 리마운트로 포커스/스크롤을 잃던 문제를 top-level 행 컴포넌트 + local draft 저장 구조로 안정화했다. KR 일봉 조회 종료일을 KST 장마감 기준으로 명시하고, 18시 경량 갱신은 실제 적재된 마지막 거래일을 로그로 남기도록 해 `priceAsofByMarket["KR"]`와의 정합을 강화했다. 뉴스 요약·시장 시황·포트폴리오 조언은 렌더 단계에서 raw `*`/`**`를 정리하고, Gemini/조언 프롬프트에도 과도한 강조 자제 지침을 추가했다.
 - [x] **Wave 3 백필 재계산 핫픽스** (2026-06-19): `backfill.py`의 5년 백필 경로가 W3-A 변경 중 `recompute_indicators_to_db` import 누락으로 partial run을 내던 문제를 수정했다. `python -m src.backfill` / `--5y` 단독 실행이 다시 가격 백필 → 영향 종목 지표 재계산 → active 유니버스 퀀트 재계산까지 한 번에 마치며, `recompute.py`는 수동 수복 도구로만 남긴다. 회귀 테스트로 NameError 재발을 차단했다.
 - [x] **Wave 3-C 현재 국면 추천 전략** (2026-06-19): export가 backtest_results의 국면별 성과를 읽어 현재 레짐에서 상대우위인 true track 전략을 계산하고, 신뢰도·한 줄 근거와 함께 `strategyGuidance`로 내보낸다. 시장전망 탭은 이를 최상단 카드로 노출하고, retrospective 참고 전략은 선택편향 경고와 함께 한 단계 낮춰 표시한다. 제언은 화면 표시 전용이며 주문 실행 경로가 없다.
 - [x] **Wave 3-B 전략 라이브러리 + 확장 백테스트** (2026-06-19): `strategies.py`에 true(`momentum_12_1`, `low_vol`, `equal_weight_bh`)와 retrospective(`value`, `quality`, `multifactor`) 전략 레지스트리를 추가하고, `backtest_results`를 `(strategy, track, horizon)` 저장 형식으로 확장했다. export/UI는 1Y/3Y/5Y 표·선택 전략 리베이스100 지수 비교·국면별 성과를 true/retrospective 분리 섹션으로 노출하며, retrospective에는 선택편향 경고를 고정한다.
@@ -732,6 +733,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v4.2 (2026-06-19) Wave 4-A: 관심종목 섹터 입력 포커스 튐을 top-level 행 컴포넌트와 로컬 draft 저장 구조로 수정하고, KR 일봉 종료일을 KST 장마감 기준으로 명시·로깅, UI/프롬프트의 과도한 markdown 강조를 정리 — Codex.*
 - *v4.1 (2026-06-19) Wave 3 backfill hotfix: `backfill.py`의 indicators 재계산 import 누락을 복구해 `python -m src.backfill` / `--5y`가 다시 가격→지표→퀀트까지 단독 완결되도록 수정하고, NameError 회귀 테스트를 추가 — Codex.*
 - *v4.0 (2026-06-19) Wave 3-C: 현재 레짐의 국면별 성과를 읽어 true track 우선 전략 제언과 retrospective 참고 전략을 시장전망 탭에 표시하는 `strategyGuidance` 경로를 추가 — Codex.*
 - *v3.9 (2026-06-19) Wave 3-B: true/retrospective 전략 레지스트리와 1Y/3Y/5Y backtest_results 저장 형식, 전략비교 탭의 분리 표/라인차트/국면 막대차트를 추가 — Codex.*

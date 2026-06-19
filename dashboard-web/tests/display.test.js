@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import {
+  cleanDisplayText,
+  extractBullets,
   filterStocks,
   factorLabel,
   isCompleteSignal,
@@ -71,4 +73,24 @@ test('maps internal factor and regime keys to Korean display labels', () => {
 test('rejects standalone signal labels', () => {
   assert.equal(isCompleteSignal({ label: '매수' }), false);
   assert.equal(isCompleteSignal({ label: '매수', reason: '종합 백분위 80위', confidence: 67 }), true);
+});
+
+
+test('flattens excessive markdown emphasis for display text', () => {
+  assert.equal(cleanDisplayText('**강조** *남발* ***정리***'), '강조 남발 정리');
+  assert.equal(cleanDisplayText('포트폴리오 *리스크*와 **국면** 체크'), '포트폴리오 리스크와 국면 체크');
+});
+
+
+test('extracts bullet lines while removing raw emphasis markers', () => {
+  const bullets = extractBullets('- **실적** 개선\n* *과도한 강조* 자제\n일반 문장', { limit: 2 });
+  assert.deepEqual(bullets, ['실적 개선', '과도한 강조 자제']);
+});
+
+
+test('watchlist rows stay top-level and keyed by ticker to preserve input focus', () => {
+  const source = readFileSync(new URL('../src/tabsE.jsx', import.meta.url), 'utf8');
+  assert.match(source, /function WatchlistRow\(/);
+  assert.doesNotMatch(source, /const Row\s*=\s*\(/);
+  assert.match(source, /<WatchlistRow key=\{w\.ticker\}/);
 });

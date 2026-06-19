@@ -6,6 +6,7 @@ import {
   GaugeBar, RegimeBadge, SignalCard, WeightBars, btnGhost,
 } from './ui.jsx';
 import { Panel, ResearchItemCard, RESEARCH_TYPE_LABEL } from './tabsA.jsx';
+import { cleanDisplayText, extractBullets } from './display.js';
 
 const grade = (v) => v >= 88 ? "A+" : v >= 80 ? "A" : v >= 72 ? "B+" : v >= 64 ? "B" : v >= 56 ? "C+" : v >= 48 ? "C" : "D";
 const gradeCol = (v) => v >= 80 ? C.ok : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C.bad;
@@ -136,8 +137,7 @@ export function Screener({ D, nav }) {
 // ============================ MARKET ============================
 function MarketColumn({ title, m, regimes }) {
   // PR-4: summaryMd(시장 전용 전체 시황)를 불릿으로. 없으면 summary 폴백.
-  const bullets = (m.summaryMd || "")
-    .split("\n").map((l) => l.replace(/^[-*]\s*/, "").trim()).filter(Boolean);
+  const bullets = extractBullets(m.summaryMd || "");
   // PR-2: 시장 매력도(진입 환경) — 레짐·시장폭·변동성 종합. 단일 점수 아님, 환경 평가.
   const att = m.attractiveness;
   const envCol = att ? (att.env === "우호" ? C.ok : att.env === "비우호" ? C.bad : C.ink2) : C.ink3;
@@ -182,7 +182,7 @@ function MarketColumn({ title, m, regimes }) {
             ))}
           </ul>
         ) : (
-          <p style={{ margin: "8px 0 0", fontSize: 13, color: C.ink3, lineHeight: 1.65 }}>{m.summary || "시황 분석 준비 중입니다."}</p>
+          <p style={{ margin: "8px 0 0", fontSize: 13, color: C.ink3, lineHeight: 1.65 }}>{cleanDisplayText(m.summary || "시황 분석 준비 중입니다.")}</p>
         )}
       </div>
     </div>

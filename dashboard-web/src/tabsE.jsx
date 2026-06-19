@@ -6,6 +6,36 @@ import { Panel } from './tabsA.jsx';
 
 const API = "http://127.0.0.1:8765";
 
+function WatchlistRow({ w, sectorValue, sectorSaving, collecting, hasData, onSectorChange, onSectorSave, onToggleActive }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: `1px solid ${C.line}` }}>
+      <HoldDot on={w.is_holding} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{w.name}</span>
+        <span className="mono" style={{ fontSize: 10, color: C.ink3, marginLeft: 7 }}>{w.ticker} · {w.market}</span>
+      </div>
+      <input value={sectorValue} placeholder="섹터"
+        onChange={(event) => onSectorChange(w.ticker, event.target.value)}
+        style={{ width: 110, border: `1px solid ${C.line2}`, borderRadius: 6, padding: "6px 8px", fontSize: 11.5, color: C.ink }} />
+      <button onClick={() => onSectorSave(w)} disabled={sectorSaving === w.ticker}
+        style={{ border: `1px solid ${C.line2}`, background: C.surface, color: C.acc, borderRadius: 6, padding: "5px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+        {sectorSaving === w.ticker ? "저장 중" : "저장"}
+      </button>
+      {collecting.includes(w.ticker) || !hasData ? (
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.warn, background: C.warnBg, border: `1px solid ${C.warn}33`, borderRadius: 5, padding: "2px 8px" }}>데이터 수집 중</span>
+      ) : (
+        <span style={{ fontSize: 10.5, fontWeight: 600, color: C.ok }}>준비됨</span>
+      )}
+      <button onClick={() => onToggleActive(w.ticker, !w.active)}
+        title={w.active ? "관심 제외(데이터 보존)" : "관심 추가"}
+        style={{ width: 44, height: 24, borderRadius: 999, border: "none", cursor: "pointer", position: "relative",
+          background: w.active ? C.acc : C.line2, transition: "background .15s" }}>
+        <span style={{ position: "absolute", top: 3, left: w.active ? 23 : 3, width: 18, height: 18, borderRadius: 999, background: "#fff", transition: "left .15s" }}></span>
+      </button>
+    </div>
+  );
+}
+
 export function WatchlistAdmin({ D }) {
   const [list, setList] = useState(null);     // null=로딩
   const [apiOk, setApiOk] = useState(true);
@@ -95,35 +125,7 @@ export function WatchlistAdmin({ D }) {
 
   const active = (list || []).filter((w) => w.active);
   const inactive = (list || []).filter((w) => !w.active);
-
-  const Row = ({ w }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: `1px solid ${C.line}` }}>
-      <HoldDot on={w.is_holding} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{w.name}</span>
-        <span className="mono" style={{ fontSize: 10, color: C.ink3, marginLeft: 7 }}>{w.ticker} · {w.market}</span>
-      </div>
-      <input value={sectorDrafts[w.ticker] ?? w.sector ?? ""} placeholder="섹터"
-        onChange={(event) => setSectorDrafts((prev) => ({ ...prev, [w.ticker]: event.target.value }))}
-        style={{ width: 110, border: `1px solid ${C.line2}`, borderRadius: 6, padding: "6px 8px", fontSize: 11.5, color: C.ink }} />
-      <button onClick={() => saveSector(w)} disabled={sectorSaving === w.ticker}
-        style={{ border: `1px solid ${C.line2}`, background: C.surface, color: C.acc, borderRadius: 6, padding: "5px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-        {sectorSaving === w.ticker ? "저장 중" : "저장"}
-      </button>
-      {collecting.includes(w.ticker) || !w.has_data ? (
-        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.warn, background: C.warnBg, border: `1px solid ${C.warn}33`, borderRadius: 5, padding: "2px 8px" }}>데이터 수집 중</span>
-      ) : (
-        <span style={{ fontSize: 10.5, fontWeight: 600, color: C.ok }}>준비됨</span>
-      )}
-      {/* active 토글 스위치 */}
-      <button onClick={() => toggleActive(w.ticker, !w.active)}
-        title={w.active ? "관심 제외(데이터 보존)" : "관심 추가"}
-        style={{ width: 44, height: 24, borderRadius: 999, border: "none", cursor: "pointer", position: "relative",
-          background: w.active ? C.acc : C.line2, transition: "background .15s" }}>
-        <span style={{ position: "absolute", top: 3, left: w.active ? 23 : 3, width: 18, height: 18, borderRadius: 999, background: "#fff", transition: "left .15s" }}></span>
-      </button>
-    </div>
-  );
+  const onSectorChange = (ticker, value) => setSectorDrafts((prev) => ({ ...prev, [ticker]: value }));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -168,13 +170,29 @@ export function WatchlistAdmin({ D }) {
       <Panel title="관심종목" sub={`${active.length}종목 · 활성`}>
         {list == null ? <div style={{ padding: 32, textAlign: "center", color: C.ink3 }}>로딩중…</div>
           : active.length === 0 ? <div style={{ padding: 32, textAlign: "center", color: C.ink3 }}>관심종목이 없습니다.</div>
-          : active.map((w) => <Row key={w.ticker} w={w} />)}
+          : active.map((w) => <WatchlistRow key={w.ticker} w={w}
+              sectorValue={sectorDrafts[w.ticker] ?? w.sector ?? ""}
+              sectorSaving={sectorSaving}
+              collecting={collecting}
+              hasData={w.has_data}
+              onSectorChange={onSectorChange}
+              onSectorSave={saveSector}
+              onToggleActive={toggleActive}
+            />)}
       </Panel>
 
       {/* 비활성 목록 */}
       {inactive.length > 0 && (
         <Panel title="제외된 종목" sub={`${inactive.length}종목 · 비활성(데이터 보존)`}>
-          {inactive.map((w) => <Row key={w.ticker} w={w} />)}
+          {inactive.map((w) => <WatchlistRow key={w.ticker} w={w}
+            sectorValue={sectorDrafts[w.ticker] ?? w.sector ?? ""}
+            sectorSaving={sectorSaving}
+            collecting={collecting}
+            hasData={w.has_data}
+            onSectorChange={onSectorChange}
+            onSectorSave={saveSector}
+            onToggleActive={toggleActive}
+          />)}
         </Panel>
       )}
     </div>
