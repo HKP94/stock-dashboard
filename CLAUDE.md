@@ -85,6 +85,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **시장 뉴스 pseudo-ticker**: 시장 시황 뉴스는 `_MARKET_KR`/`_MARKET_US` ticker로 `news_raw`에 저장. 이들은 watchlist에 없으므로 종목 카드/enrich 종목요약 대상에서 제외(`enrich_news_batch`는 watchlist 종목만 처리).
 - **시장 뉴스 영속화(W2-B)**: 종목 뉴스와 별도로 `market_news`(원천)와 `market_news_summary`(일일 KR/US/Global 요약)를 유지한다. 시장전망 탭의 "오늘의 시장 뉴스 요약"은 이 테이블만 읽는다.
 - **누적 인사이트 영속화(W2-C)**: Gemini 종목 뉴스 요약은 `ticker_context`에도 `context_type='news_summary'`로 저장한다. 종목상세 "누적 인사이트"는 최근 30일만 보여주고, `valid_until < today` 항목은 삭제하지 말고 조회에서만 제외한다.
+- **신선도 라벨(W2-D)**: export는 `generatedAt`와 시장별 최신 거래일로 `refreshContext`를 계산한다. 헤더/시장전망 탭은 반드시 "미국 종가 기준 (06시 갱신)" 또는 "한국 종가 기준 (18시 갱신)"을 표시하고, 18시 갱신본에서는 KR 가격·뉴스만 최신이며 US 가격은 전날 종가임을 명시한다.
 - **시장 등락률**: `ingest_market`이 거래일 기준 전일대비 등락을 `market_daily.payload.changes`에 저장(주말 carry-over 0.00% 버그 방지). export는 changes 우선, 폴백은 상대오차 1e-5 초과 시만 인정.
 - **KR 밸류/컨센서스 = 네이버금융 + FnGuide 무료 스크래핑** (`ingest_kr.fetch_kr_valuation_analyst`). PER/PBR/현재가/목표가/투자의견=네이버 종목메인, ROE/부채비율=FnGuide `#highlight_D_A`. **yfinance KR 절대 금지**. KIS(`ingest_kis.py`)는 키 있을 때만 활성 보조. ROE는 비율(0.07) 단위로 정규화해 US와 통일(표시 시 ×100 %).
 - **export는 종목별 '최신' 조회만 사용**(`SELECT DISTINCT ON (ticker) ... ORDER BY ticker, asof/date DESC`). 글로벌 `max(asof)`/특정날짜 고정 금지 — KR/US 수집일이 달라 한쪽이 통째로 누락되는 버그의 근원(indicators·quant·price·**valuation·analyst** 전부 적용).

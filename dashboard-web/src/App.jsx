@@ -39,6 +39,7 @@ export default function App() {
 
   const overall = D.market.overall;
   const w = D.regimes[overall].w;
+  const refreshContext = D.refreshContext || D.market.refreshContext || {};
 
   // PR-3: 데이터 신선도 — 생성 시각과 현재 시각 차이가 2일+ 이면 경고(스크립트 재실행 권장)
   const genAt = D.generatedAt ? new Date(D.generatedAt) : null;
@@ -82,7 +83,7 @@ export default function App() {
             {D.generatedAtLabel && (
               <div className="mono" style={{ fontSize: 9, color: stale ? C.warn : C.ink3, marginTop: 1 }}
                    title="이 화면 데이터가 생성된 시각. 최신화하려면 start_dashboard 스크립트를 다시 실행하세요.">
-                데이터 생성: {D.generatedAtLabel}
+                데이터 생성: {D.generatedAtLabel}{refreshContext.label ? ` · ${refreshContext.label}` : ""}
               </div>
             )}
             {D.priceAsofByMarket && (

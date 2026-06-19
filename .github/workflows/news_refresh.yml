@@ -1,4 +1,4 @@
-name: ATLAS 가격·뉴스 리프레시 (18:00 KST)
+name: ATLAS 한국 종가 기준 경량 갱신 (18:00 KST)
 
 # 하루 2회 갱신. 06:00 전체 파이프라인(auto_run.yml)에 더해 18:00에
 # 경량 가격 갱신(prices_daily+indicators/quant) + 뉴스 수집 + Gemini 요약(+시황) + export.
