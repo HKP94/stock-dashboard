@@ -38,7 +38,7 @@ CTX = {
 class TestAbsoluteRulesInPrompts:
     def test_step1_has_rules(self):
         p = PA._prompt_step1(CTX)
-        assert "투자 자문" in p and "매수/매도" in p and "관찰" in p
+        assert "표시 신호" in p and "주문" in p and "실행" in p
 
     def test_all_steps_have_rules(self):
         s1, s2, s3 = PA._rule_step1(CTX), PA._rule_step2(CTX), PA._rule_step3(CTX)
@@ -89,9 +89,9 @@ class TestRuleFallback:
         out = PA._rule_based(CTX)
         assert out["source"] == "rule"
         assert out["holdingsCount"] == 2
-        for k in ("step1", "step2", "step3", "step4", "disclaimer", "cacheKey"):
+        for k in ("step1", "step2", "step3", "step4", "cacheKey"):
             assert k in out
-        assert "자문" in out["disclaimer"]
+        assert "disclaimer" not in out
 
 
 # ── analyze_portfolio: 키 유무에 따른 경로 ─────────────────────────

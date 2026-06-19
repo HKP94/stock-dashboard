@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v3.2 |
+| 버전 | v3.3 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -14,9 +14,9 @@
 
 ---
 
-## ⚠️ 0. 면책 (모든 산출물에 적용)
+## 0. 운영 정책 (모든 산출물에 적용)
 
-이 시스템은 **정보 수집·정리·정량 분석 도구**다. 매수/매도 지시나 투자 자문이 아니다. 모든 점수·플래그·요약은 참고용이며, 투자 판단과 그 결과의 책임은 전적으로 사용자에게 있다. 텔레그램 브리핑을 포함한 모든 출력에는 "투자 자문 아님 / 원금 손실 가능" 문구를 노출한다. **v1 범위는 읽기 전용(조회)이며, 자동 주문/체결은 범위에서 제외한다.**
+이 시스템은 정보 수집·정리·정량 분석 도구다. 근거·신뢰도를 동반한 매수/관망/축소 표시 신호를 허용한다. 신호는 화면과 메시지 표시 전용이며, 주문·체결·이체와 외부 주문 API 호출은 범위에서 제외한다.
 
 ---
 
@@ -62,7 +62,7 @@
 
 ### 2.2 비목표 (v1 제외)
 - 자동 주문/체결(매매 실행) — 안전·리스크상 제외.
-- 개인화된 "사라/팔아라" 추천 — 자문 아님.
+- 자동 주문으로 이어지는 개인화 실행 경로.
 - 실시간 틱 데이터/HFT — 일/분 단위로 충분.
 
 ### 2.3 성공 지표
@@ -279,7 +279,8 @@ CREATE TABLE portfolio_advice (
   "analyst": {"rating": "BUY", "target": 260000, "upside": 0.19},
   "news": {"sentiment": "긍정", "score": 0.4, "summary_md": "- ...", "based_on": "recent"},
   "quant": {"composite": 71, "momentum": 78, "value": 55, "quality": 64, "growth": 70, "sentiment": 66,
-            "flags": ["RSI 모멘텀 양호", "밸류에이션 부담 없음"]},
+            "flags": ["RSI 모멘텀 양호", "밸류에이션 부담 없음"],
+            "signal": {"label": "매수", "percentile": 82, "reason": "퀀트 종합 백분위 82위(상위 18%), 강점 팩터는 모멘텀 78점", "confidence": 70}},
   "is_holding": true
 }
 ```
@@ -344,7 +345,7 @@ LLM은 **반드시 아래 JSON만** 반환한다. 상세 프롬프트는 `prompt
 **서술**: Gemini가 §5.3-B 스키마로 "오늘의 레짐 + 드라이버 + 한·미 온도차 + 체크포인트"를 1회 생성.
 
 ### F4 — 퀀트 팩터 스코어링 (투명·규칙기반, 결정론)
-**LLM 아님. `src/compute_quant.py`에서 순수 Python/pandas/numpy로 계산.** 유니버스 전체 백분위(0~100) 정규화 후 레짐 가중합으로 composite. **점수는 설명용이며 매수/매도 신호가 아님.**
+**LLM 아님. `src/compute_quant.py`에서 순수 Python/pandas/numpy로 계산.** 유니버스 전체 백분위(0~100) 정규화 후 국면 가중합으로 composite. 표시 신호도 결정론적 코드로 계산한다.
 
 ---
 
@@ -433,6 +434,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 데이터 없는 종목·팩터 → **50(중립)** + `flags`에 "데이터 부족" 기록 → N/A 전파 차단. 필터 제외 종목은 `composite = None` 저장.
 
+#### F4-7. Wave 1 표시 신호
+
+활성 종목 중 `composite`가 있는 종목의 횡단면 평균순위 백분위를 사용한다. 백분위 70 이상은 `매수`, 30 이하는 `축소`, 그 사이는 `관망`이다. 동점은 같은 백분위를 부여한다. 모든 신호는 `label`, `percentile`, 가장 높은 팩터를 포함한 `reason`, 경계 여유를 50~100으로 정규화한 `confidence`를 함께 표시한다. `composite`가 없으면 신호는 `null`이다. 신호는 표시 전용이며 주문 실행 경로가 없다.
+
 > **KR 가치/퀄리티/성장은 이제 실제 값**(네이버+FnGuide로 PER/PBR/ROE/부채/목표가 수집, 2026-06-15). 결측인 종목만 중립(50) 유지. 검증: KR 11종목 전부 value/quality/growth가 50고정 → 실제 분포로 전환(예: 코웨이 V=77.6, KT&G V=62.7).
 
 #### F4-6. 스크리너 '장기 보유 = 안전마진' (PR-1, 2026-06-16)
@@ -451,7 +456,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 > 기본값(`TELEGRAM_ENABLED` 미설정)에서는 `run_send`가 발송하지 않고 no-op 성공 반환 → 에러 없음.
 
 **생성·발송 주체: Hermes Agent**(텔레그램 네이티브). DB에서 당일 `portfolio_snapshot`·`quant_scores`·`news_analysis`·`market_daily`를 읽고, Hermes 메모리(보유 이력·관심 변화·이전 브리핑)와 결합해 종합. 템플릿·페르소나는 `prompts/HERMES_PROMPT.md`.
-**구성**: ① 시장 한 줄 + 레짐 ② 내 포트폴리오 손익 요약 ③ 관심종목 퀀트 점수 상·하위 + 변동 ④ 오늘의 알림 플래그 ⑤ 주목 뉴스 3건 ⑥ 면책 1줄.
+**구성**: ① 시장 한 줄 + 국면 ② 내 포트폴리오 손익 요약 ③ 관심종목 퀀트 점수·표시 신호·변동 ④ 오늘의 알림 플래그 ⑤ 주목 뉴스 3건.
 **대안 경로**: Hermes 운영이 부담이면 n8n Telegram 노드로 직접 발송 가능(이 경우 종합 텍스트는 Gemini가 생성, 메모리 기능은 포기).
 
 ### F6 — 추가 기능 (우선순위순)
@@ -466,7 +471,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
    - **탭**: 오버뷰(랭킹·알림·주목뉴스) · 종목상세(차트·팩터·지표) · 뉴스 · 스크리너 · 시장전망 · 리서치노트.
    - **데이터**: `src/export_dashboard_data.py` → `dashboard-web/src/data.json` → React 빌드타임 import. 없으면 mock fallback.
    - **개선**: 종목상세 "섹터 N개 중 순위" 텍스트, 스크리너 레짐 판정 근거 한 줄.
-   - **표시 원칙**: composite·팩터·플래그 등 **점수와 사실만**. 매수/매도 표현 금지, 하단 면책 고정. 결측은 null/None(N/A 금지).
+   - **표시 원칙**: composite·팩터·플래그와 근거·신뢰도를 동반한 신호를 표시한다. 단독 신호 라벨은 금지하며 결측은 null/None(N/A 금지).
    - **로컬 실행**: `cd dashboard-web && npm run dev` → http://localhost:5173.
    - **레거시**: `dashboard/app.py` (Streamlit) — 유지보수 안 함, 참조용으로만 보존.
 
@@ -551,7 +556,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - **(중) KR 컨센서스/목표가 데이터 확보** → 무료 소스 한계. 네이버/에프앤가이드 보조, 없으면 해당 팩터 중립 처리.
 - **(중) 로컬 모델 툴콜 신뢰성** → 검증된 모델·파서 사용, 핵심 호출은 클라우드로.
 - **(중) 무료 데이터 레이트리밋** → n8n에서 배치·캐시·간격 제어.
-- **(저) 자문 규제 리스크** → 출력은 정보·정량 분석에 한정, 면책 상시 노출, 자동매매 제외.
+- **(저) 신호 오해 리스크** → 모든 신호에 근거·신뢰도를 함께 표시하고 자동 주문 경로를 제외.
 
 ---
 
@@ -641,7 +646,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-2: **리서치 종목상세 통합**(`StockResearchSection`) — research_items 유형별 표시(리포트/유튜브 임베드/기사/퀀트/메모) + **빠른 추가(해당 ticker 프리필)**. local_api `GET/POST/DELETE /api/research`(+`_patch_data_json_research`). 공용 `ResearchItemCard` tabsA로 이동(순환 import 회피). 검증: POST→data.json 반영→DELETE 왕복.
   - PR-3: **내 판단 축 인라인 편집** — 3축 카드에서 horizon·별점(클릭)·thesis(blur 자동저장) 즉시 `PUT /api/notes` + 저장 피드백. `attractiveness` 미입력 시 "내 판단 미입력"(0점 아님). 기존 단독 InvestmentNoteCard 폐기·3축으로 통합.
 - [x] **오버뷰 요약밴드 + 시장 매력도 + 탭 컨텍스트 PR-1~3** (2026-06-17):
-  - PR-1: 오버뷰 최상단 **"오늘의 요약 밴드"**(`DailyBriefBand`/`dailyBrief`) — ① 주목(퀀트 상위+신선 신호, 괴리종목 제외) ② 주의(RSI과열·데드크로스·급락·컨센서스 하회) ③ 3축 괴리(퀀트↔컨센서스, 확인 필요) ④ 시장 한 줄(레짐+Gemini 시황 재사용). 규칙 기반(키 없어도 동작), 전부 관찰·정보 서술+면책. 검증: 주목 3·괴리 2(겹침 0)·시장 한 줄 소수점 안 끊김.
+  - PR-1: 오버뷰 최상단 **"오늘의 요약 밴드"**(`DailyBriefBand`/`dailyBrief`) — ① 주목(퀀트 상위+신선 신호, 괴리종목 제외) ② 주의(RSI과열·데드크로스·급락·컨센서스 하회) ③ 3축 괴리(퀀트↔컨센서스, 확인 필요) ④ 시장 한 줄(국면+Gemini 시황 재사용). 규칙 기반(키 없어도 동작). 검증: 주목 3·괴리 2(겹침 0)·시장 한 줄 소수점 안 끊김.
   - PR-2: 시장전망 KR/US **진입 환경**(`attractiveness`: 우호/중립/비우호) — 레짐+시장폭(정배열율)+변동성(VIX) 종합, 근거 서술. **단일 점수 강요 금지**. 검증: KR/US 우호, basis에 레짐·정배열·VIX.
   - PR-3: **탭 간 종목 컨텍스트 연속성** — 뉴스에서 종목 선택 시 전역 `ticker` 동기화(`selectNewsTicker`)+`goNews`에 setTicker → 종목상세 탭으로 가도 유지(스크리너·포트폴리오는 nav로 이미 동기화).
   - 단위테스트 +12(297 passed).
@@ -654,10 +659,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-2: **start_dashboard.sh**(macOS) — .venv→export(DB→data.json)→local_api(8765)+vite(5173) 기동(이미 떠 있으면 재사용)→브라우저 자동 오픈. 실패 시 명확한 에러(DB 접속/데이터 부재 구분). `stop_dashboard.sh`·더블클릭용 `start_dashboard.command` 동봉. 검증: export 38종목→포트 재사용→완료.
   - PR-3: **데이터 신선도 가드** — export `generatedAt`/`generatedAtLabel`, 헤더에 "데이터 생성: {시각}" 표시, 생성 후 2일+이면 헤더 옅은 경고 배너("스크립트 재실행 권장"). 검증: generatedAt 반영, 300 tests passed.
 - [x] **포트폴리오 "전략 조언"(단계분리 CoT) PR-1~3** (2026-06-17):
-  - 절대 원칙(모든 단계 프롬프트 주입): 투자 자문 금지(매수/매도/비중 지시 금지), 관찰·리스크 식별까지만, 매 출력 면책·관찰형 서술.
+  - 절대 원칙(모든 단계 프롬프트 주입): 데이터에 없는 신호 생성 금지, 코드 신호는 근거·신뢰도와 함께 설명, 자동 주문 실행 금지.
   - PR-1 `src/portfolio_advice.py`: enrich_gemini `_call_gemini_with_backoff` 경계 재사용(`_llm_call`, 테스트 격리). **CoT 4단계**(①구성 분석 ②리스크 식별 ③레짐 정합성 ④종합+질문형)를 코드로 분리해 각 단계 출력을 다음 입력으로. 각 단계 `response_mime_type=json`+pydantic 검증, 실패 1회 재시도. **키 없음/STEP1 LLM 실패 시 전체 규칙기반 단락**(코드가 집중도·비중·신호로 관찰 문장 생성). 보유·가격·레짐 시그니처 `cache_key`로 증분 캐시.
   - PR-2: `portfolio_advice` 테이블(§5.1), local_api **POST/GET `/api/portfolio/advice`**(POST=force 재생성+data.json 갱신, GET=최근+stale), export `portfolioAdvice` 포함(읽기만, 호출 안 함).
-  - PR-3: 포트폴리오 탭 **"전략 조언(참고용)"** 카드 — 종합 관찰 상단 강조 + 질문, ①②③ 펼침 섹션, source 뱃지(Gemini/규칙기반), "다시 분석" 버튼, 생성시각·면책, 보유 없으면 안내, 보유 변경 시 stale 경고.
+  - PR-3: 포트폴리오 탭 **"전략 조언"** 카드 — 종합 관찰 상단 강조 + 질문, ①②③ 펼침 섹션, source 뱃지(Gemini/규칙기반), "다시 분석" 버튼, 생성시각, 보유 없으면 안내, 보유 변경 시 stale 경고.
   - 검증: 규칙기반·Gemini 경로 모두 동작, **금지어 0**, 단계 간 데이터 전달, 캐시 재사용. 단위테스트 +13(313 passed). (참고: 현재 Gemini 키는 선불 크레딧 소진 상태라 규칙기반으로 폴백 — 크레딧 충전 시 CoT 자동 활성.)
 - [x] **Gemini 재활성 + 종목별 중요뉴스 큐레이션 PR-1~3** (2026-06-17):
   - PR-1: 크레딧 충전 후 **실호출 검증** — enrich(based_on=recent 실제 요약)·CoT(source=gemini) 정상. 모델 정리: `GEMINI_SYNTH_MODEL` `gemini-3.5-flash`→**`gemini-2.5-flash`**(2.5 계열, 실호출 OK), bulk=`gemini-2.5-flash-lite`. 워크플로 env 동기화. (flash-lite 503은 일시 과부하 — 백오프가 처리.)
@@ -674,6 +679,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
 
 ### 안정화 (운영 중 발견·수정)
+- [x] **Wave 1 T7 표시 신호·정책** (2026-06-19): 활성 유니버스 퀀트 종합 백분위 상/하위 30% 기반 매수/관망/축소 신호를 계약·assemble·export·React에 추가. 근거·신뢰도 동반을 강제하고 자동 주문 금지는 유지. UI·텔레그램·Gemini/Hermes 프롬프트의 기존 보일러플레이트 제거.
 - [x] **Wave 1 T2~T6 UX·라벨** (2026-06-19): 뉴스 종목별 심리를 점수 내림차순으로 정렬, 종목상세 티커/종목명·시장·섹터 즉시 필터, 관심종목 섹터 PATCH 편집, `stock_note_history` 기반 복수 판단 누적·최신순 표시, 8탭의 국면·심리·우량성·5팩터 한글 표시 통일. 내부 키와 매력도 3축 비합산 원칙 유지.
 - [x] **Wave 1 T1 총자산 단일화** (2026-06-19): 오버뷰의 주식 평가액 표시와 포트폴리오의 주식+현금 표시 불일치를 제거. 종목별 최신 가격·동일 최신 환율로 계산한 `portfolio_snapshot.payload.asset_total`을 로컬 API와 두 탭이 공용 함수로 사용하고, 구형 데이터만 평가액+현금 폴백. Python·Node 회귀 테스트 추가.
 - [x] **Decimal/DB 경계 버그**: psycopg3 NUMERIC→Decimal이 float·np.log·나눗셈에 섞여 indicators/quant 0건 → `db.get_conn` float 로더 + 읽기 경계 방어 캐스팅으로 수정
@@ -695,6 +701,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v3.3 (2026-06-19) Wave 1 T7: 근거·신뢰도 동반 표시 신호 계약과 UI 추가, 자동 주문 금지 정책 유지, 기존 출력 보일러플레이트 제거 — Codex.*
 - *v3.2 (2026-06-19) Wave 1 T2~T6: 뉴스 심리 정렬, 종목상세 검색/시장/섹터 필터, 관심종목 섹터 편집, 판단 이력 누적, 표시 레이어 한글 라벨 통일 — Codex.*
 - *v3.1 (2026-06-19) Wave 1 T1: 포트폴리오 총자산을 종목별 최신 평가액+KRW 환산 현금으로 단일화하고 오버뷰·포트폴리오 공용 표시 함수 및 로컬 요약 API 적용 — Codex.*
 - *v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
@@ -712,9 +719,9 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
 - *v2.3 (2026-06-16) Gemini "분석 실패" 진단·수정 PR-0~2: 근본원인=Gemini 키 일일쿼터 소진(429)+구버전 폴백행 잔존+파이프라인 정체+폴백 무기록+.env 미로딩. 수정=`_ensure_env`(.env 로드), `_call_gemini_with_backoff`(429/503 지수백오프 3회), 폴백 `based_on='fallback_old'` 표식+runs.errors 기록, `reenrich_stale_fallbacks`(run_pipeline Step 7a'), export 실제요약 우선+규칙기반 한 줄(`is_fallback_summary`). "분석 실패" UI 노출 0. 단위테스트 +11(272 passed) — Claude Code.*
 - *v3.0 (2026-06-17) Gemini 재활성+중요뉴스 큐레이션 PR-1~3: 크레딧 충전 실호출 검증(enrich/CoT 실제경로), GEMINI_SYNTH_MODEL 3.5-flash→2.5-flash 정리(워크플로 동기화). 2단계 큐레이션(STEP A 스코어링=Flash-Lite·impact/category/direction, 임계값≥60 통과분만 STEP B 인사이트=2.5-Flash), news_analysis.curated 저장·증분·캡. export curatedNews/curatedFeed, React 종목상세 중요뉴스 카드+뉴스탭 중요도순. 라이브 검증(네이버/알파벳), 21종목·feed 60건, 단위테스트 +8(321 passed). §5.1 news_analysis.curated 추가 — Claude Code.*
-- *v2.9 (2026-06-17) 포트폴리오 전략조언(단계분리 CoT) PR-1~3: src/portfolio_advice.py — 절대원칙(투자자문 금지·관찰형) 주입, CoT 4단계(구성/리스크/레짐/종합) 코드 분리·단계간 전달, response_mime_type=json+pydantic 검증, 키없음/STEP1실패 시 전체 규칙기반 단락, cache_key 증분캐시. portfolio_advice 테이블, local_api POST/GET /api/portfolio/advice, export portfolioAdvice, React 포트폴리오 탭 전략조언 카드(펼침 4단계·다시분석·면책·stale). 금지어 0, 단위테스트 +13(313 passed). Gemini 크레딧 소진 시 규칙기반 폴백 — §5.1 portfolio_advice 추가 — Claude Code.*
+- *v2.9 (2026-06-17) 포트폴리오 전략조언(단계분리 CoT) PR-1~3: src/portfolio_advice.py — 당시 관찰형 정책 주입, CoT 4단계(구성/리스크/국면/종합) 코드 분리·단계간 전달, response_mime_type=json+pydantic 검증, 키없음/STEP1실패 시 전체 규칙기반 단락, cache_key 증분캐시. portfolio_advice 테이블, local_api POST/GET /api/portfolio/advice, export portfolioAdvice, React 포트폴리오 탭 전략조언 카드. 단위테스트 +13(313 passed) — §5.1 portfolio_advice 추가 — Claude Code.*
 - *v2.8 (2026-06-17) 운영 자동화 PR-0~3: 진단=CI(06·18시)가 enrich 포함 DB 자동 최신화(Secrets 등록 확인), data.json은 로컬 수동(스크립트 부재), auto_run 실패는 구버전 텔레그램 step 403(이미 제거)으로 DB는 갱신되고 있었음. README.md(운영방식·Secrets 등록·모델명), start_dashboard.sh(export→local_api+vite→브라우저, 포트 재사용·에러처리)+stop_dashboard.sh+.command, 신선도 가드(generatedAt·헤더 생성시각·2일+ 경고배너). 300 tests passed — Claude Code.*
 - *v2.7 (2026-06-17) 관심종목 active 토글 무반응 버그 PR-0~1: 근본원인=CORS allow_methods에 PATCH 누락→프리플라이트 400 차단(curl은 우회라 200). 수정=CORS에 PATCH·OPTIONS 추가, 프론트 toggleActive 낙관적 업데이트+롤백+에러배너+재조회. 검증=프리플라이트 200·토글 OFF→랭킹 제외(38→37)→ON 복귀(데이터 보존). CORS 회귀테스트 +3(300 passed) — Claude Code.*
-- *v2.6 (2026-06-17) 오버뷰 요약밴드+시장 매력도+탭 컨텍스트 PR-1~3: 오버뷰 최상단 dailyBrief(주목/주의/3축괴리/시장 한줄, 규칙기반·관찰서술·면책, 괴리종목은 주목서 제외), 시장전망 KR/US 진입환경(attractiveness 우호/중립/비우호=레짐+정배열율+VIX, 단일점수 금지), 탭 간 종목 컨텍스트 연속성(뉴스 선택→전역 ticker 동기화). export _build_daily_brief/_attach_market_attractiveness/_short_line. 단위테스트 +12(297 passed) — Claude Code.*
+- *v2.6 (2026-06-17) 오버뷰 요약밴드+시장 매력도+탭 컨텍스트 PR-1~3: 오버뷰 최상단 dailyBrief(주목/주의/3축괴리/시장 한줄, 괴리종목은 주목서 제외), 시장전망 KR/US 진입환경(attractiveness 우호/중립/비우호=국면+정배열율+VIX, 단일점수 금지), 탭 간 종목 컨텍스트 연속성. 단위테스트 +12(297 passed) — Claude Code.*
 - *v2.5 (2026-06-16) 매력도 3축+리서치 통합+내판단 인라인 PR-1~3: 설계원칙=세 축(퀀트/컨센서스/내판단) 단일점수 합산 금지·괴리 노출(확인편향 방지). 종목상세 AxesCard(3축 나란히+엇갈림 경고), StockResearchSection(research_items 유형별+빠른추가, local_api GET/POST/DELETE /api/research+_patch_data_json_research, 공용 ResearchItemCard tabsA 이동), 내판단 인라인 편집(별점 클릭·thesis blur 자동저장 PUT /api/notes·미입력 상태). InvestmentNoteCard→AxesCard 통합. 285 tests passed — Claude Code.*
 - *v2.4 (2026-06-16) 스크리너 장기보유+재무 시계열 PR-0~2: 장기보유 빈 원인=F-Score 구조적 만점7로 7+ 0개+export fscore=None 하드코딩. 수정=장기보유를 안전마진 복합점수(가치40+퀄리티35+건전성25, F-Score 결측 시 ROE·부채 대체)로 재정의, `quant_scores.fscore` 영속화, 스크리너 패널 재정의(≥55 상위9·empty state·근거1줄). 종목상세 재무추이: `fundamentals.ocf/fcf` 추가+ingest_us 현금흐름 수집+US25 백필, export `financials` 시계열, React recharts 카드(매출·이익·OCF·FCF+추세+컨센서스). §5.1 quant_scores.fscore·fundamentals.ocf/fcf, §F4-6 안전마진 명문화. 단위테스트 +13(285 passed) — Claude Code.*

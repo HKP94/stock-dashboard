@@ -15,7 +15,7 @@ PR-1: 관심종목이 늘 때마다 신규 종목의 가격 이력이 비어 대
   python -m src.backfill            # 누락분 탐지 후 백필+재계산
   python -m src.backfill --check    # 점검만(읽기 전용, 백필 안 함)
 
-⚠️ 투자 자문 아님 / 원금 손실 가능. 자동 주문 없음.
+자동 주문 없음.
 """
 
 from __future__ import annotations
@@ -234,4 +234,3 @@ if __name__ == "__main__":
         print(f"  - {g['ticker']} ({g['market']}) {g['reason']}")
     if not check:
         print(f"백필 완료: {result['backfilled']}종목 / indicators={result.get('indicators')} quant={result.get('quant')}")
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")

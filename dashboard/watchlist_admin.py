@@ -48,7 +48,7 @@ def _reload():
 # ── 레이아웃 ──────────────────────────────────────────────────────────
 st.set_page_config(page_title="ATLAS Watchlist 관리", layout="wide")
 st.title("ATLAS — Watchlist 관리 도구")
-st.caption("투자 자문 아님 / 원금 손실 가능. 이 도구는 watchlist 메타데이터만 변경하며 주문을 실행하지 않습니다.")
+st.caption("이 도구는 관심종목 메타데이터만 변경하며 주문을 실행하지 않습니다.")
 
 rows = _load_watchlist()
 

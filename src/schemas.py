@@ -213,6 +213,13 @@ class NewsView(BaseModel):
     based_on: Optional[Literal["recent", "fallback_old"]] = None
 
 
+class TradeSignal(BaseModel):
+    label: Literal["매수", "관망", "축소"]
+    percentile: float = Field(ge=0, le=100)
+    reason: str = Field(min_length=1)
+    confidence: int = Field(ge=50, le=100)
+
+
 class QuantView(BaseModel):
     composite: Optional[float] = None
     momentum: Optional[float] = None
@@ -221,6 +228,7 @@ class QuantView(BaseModel):
     growth: Optional[float] = None
     sentiment: Optional[float] = None
     flags: list[str] = Field(default_factory=list)
+    signal: Optional[TradeSignal] = None
 
 
 class StockDailyRecord(BaseModel):
@@ -236,13 +244,6 @@ class StockDailyRecord(BaseModel):
     news: NewsView = Field(default_factory=NewsView)
     quant: QuantView = Field(default_factory=QuantView)
     is_holding: bool = False
-
-    DISCLAIMER: str = Field(
-        default="투자 자문 아님 / 원금 손실 가능",
-        frozen=True,
-        exclude=True,
-    )
-
 
 # ──────────────────────────────────────────────────────────────
 # §5.3-A LLM 출력 — 종목 뉴스 요약 (Gemini, 종목당)

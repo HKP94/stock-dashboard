@@ -1,5 +1,5 @@
 // ATLAS — shared UI primitives + SVG charts
-import { factorLabel, regimeLabel } from './display.js';
+import { factorLabel, isCompleteSignal, regimeLabel } from './display.js';
 
 export const C = {
   ink: "#0F1419", ink2: "#4A5568", ink3: "#94A3B8",
@@ -78,6 +78,21 @@ export function HoldDot({ on }) {
 }
 export function AlignBadge({ on }) {
   return <span style={{ fontSize: 11, fontWeight: 700, color: on ? C.ok : C.ink3, whiteSpace: "nowrap" }}>{on ? "정배열" : "—"}</span>;
+}
+
+export function SignalCard({ signal, compact = false }) {
+  if (!isCompleteSignal(signal)) {
+    return <span style={{ fontSize: 11.5, color: C.ink3 }}>신호 산정 데이터 없음</span>;
+  }
+  const tone = signal.label === "매수" ? C.ok : signal.label === "축소" ? C.bad : C.warn;
+  const bg = signal.label === "매수" ? C.okBg : signal.label === "축소" ? C.badBg : C.warnBg;
+  return <div style={{ padding: compact ? "6px 8px" : "10px 12px", border: `1px solid ${tone}33`, borderRadius: 8, background: bg, minWidth: compact ? 190 : 0 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ fontSize: compact ? 11.5 : 13.5, fontWeight: 800, color: tone }}>{signal.label}</span>
+      <span style={{ fontSize: compact ? 9.5 : 11, color: tone }}>신뢰도 {signal.confidence}</span>
+    </div>
+    <div style={{ marginTop: 3, fontSize: compact ? 9.5 : 11.5, lineHeight: 1.45, color: C.ink2 }}>{signal.reason}</div>
+  </div>;
 }
 
 export function CompositeCell({ value, width = 110 }) {

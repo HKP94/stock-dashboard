@@ -8,11 +8,10 @@ dashboard/app.py — ATLAS 관심종목 대시보드 (Streamlit, 로컬 우선)
   - src.compute_quant.compute_regime    → 상단 레짐 배지
 
 DB 접속: src.db 패턴 재사용 (DB_* 환경변수 또는 .streamlit/secrets.toml).
-모든 출력은 정보·참고용. 투자 자문 표현 금지(점수·사실만).
+신호는 근거·신뢰도와 함께 표시하며 자동 주문을 실행하지 않는다.
 
 실행: streamlit run dashboard/app.py
 
-⚠️ 투자 자문 아님 / 원금 손실 가능
 """
 
 from __future__ import annotations
@@ -28,8 +27,6 @@ import streamlit as st
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
-
-DISCLAIMER = "본 화면은 정보·정량 분석 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다."
 
 _REGIME_BADGE = {
     "bull": ("🟢 강세 (bull)", "#1b5e20"),
@@ -152,10 +149,9 @@ def main() -> None:
         st.markdown(
             f"<div style='text-align:right; margin-top:18px;'>"
             f"<span style='background:{badge_color}; color:white; padding:6px 14px; "
-            f"border-radius:14px; font-weight:600;'>레짐 {badge_text}</span></div>",
+            f"border-radius:14px; font-weight:600;'>국면 {badge_text}</span></div>",
             unsafe_allow_html=True,
         )
-    st.info(f"ℹ️ {DISCLAIMER}")
 
     # ── 2. 시장 스트립 ────────────────────────────────────────
     market = load_market(asof_iso)
@@ -351,7 +347,6 @@ def _factor_chart(quant: dict) -> None:
 
 def _footer() -> None:
     st.divider()
-    st.caption(f"⚠️ {DISCLAIMER}")
 
 
 if __name__ == "__main__":

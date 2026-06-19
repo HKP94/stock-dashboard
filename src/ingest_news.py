@@ -628,5 +628,3 @@ if __name__ == "__main__":
         if errs:
             for e in errs:
                 print(f"  ERROR: {e}")
-
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")

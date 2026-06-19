@@ -15,6 +15,7 @@ mock 포인트:
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from datetime import date
 from unittest.mock import MagicMock, patch
 
@@ -454,3 +455,26 @@ class TestBulkSimple:
         out = _bulk_quant(["AAPL", "MSFT"], _fake_conn(rows), ASOF)
         assert out["AAPL"]["composite"] == 62.0
         assert out["MSFT"] is None
+
+
+def test_assemble_daily_attaches_cross_sectional_signals():
+    watchlist = [
+        {**_WL, "ticker": "HIGH", "name": "상위"},
+        {**_WL, "ticker": "MID", "name": "중간"},
+        {**_WL, "ticker": "LOW", "name": "하위"},
+    ]
+    quant_map = {
+        "HIGH": {**_QUANT, "composite": 90.0},
+        "MID": {**_QUANT, "composite": 60.0},
+        "LOW": {**_QUANT, "composite": 10.0},
+    }
+    patches = _patch_bulk(watchlist=watchlist)
+    patches[-1] = patch("src.assemble._bulk_quant", return_value=quant_map)
+    with ExitStack() as stack:
+        for item in patches:
+            stack.enter_context(item)
+        records = assemble_daily(MagicMock(), ASOF)
+
+    labels = {record.ticker: record.quant.signal.label for record in records}
+    assert labels == {"HIGH": "매수", "MID": "관망", "LOW": "축소"}
+    assert all(record.quant.signal.reason for record in records)

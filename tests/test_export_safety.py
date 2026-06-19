@@ -14,6 +14,19 @@ from src.export_dashboard_data import (
 )
 
 
+def test_export_attaches_complete_display_signals():
+    from src.export_dashboard_data import _attach_display_signals
+
+    stocks = [
+        {"t": "A", "comp": 90, "f": {"m": 80, "v": 50, "q": 60, "g": 55, "s": 40}},
+        {"t": "B", "comp": 60, "f": {"m": 50, "v": 60, "q": 70, "g": 55, "s": 40}},
+        {"t": "C", "comp": 10, "f": {"m": 20, "v": 30, "q": 40, "g": 25, "s": 10}},
+    ]
+    _attach_display_signals(stocks)
+    assert [stock["signal"]["label"] for stock in stocks] == ["매수", "관망", "축소"]
+    assert all(stock["signal"]["reason"] and stock["signal"]["confidence"] for stock in stocks)
+
+
 class TestSoundnessScore:
     def test_fscore_priority_full(self):
         # F-Score 7(실질 만점) → 100

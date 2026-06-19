@@ -1,6 +1,5 @@
 // ATLAS — Tabs C: Portfolio
 // PR-4: 포트폴리오 탭 — GET/POST/DELETE /api/portfolio (127.0.0.1:8765)
-// 투자 자문 아님 / 원금 손실 가능
 
 import { useState, useEffect, useCallback } from 'react';
 import { C, MonoCaps, Num, ChangePct, HoldDot, fmtPrice, btnGhost } from './ui.jsx';
@@ -156,7 +155,7 @@ export function Portfolio({ D, nav }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>포트폴리오</span>
-        <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>투자 자문 아님 / 원금 손실 가능</MonoCaps>
+        <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>보유 현황과 전략 분석</MonoCaps>
       </div>
 
       {/* 합계 (PR-2: 주식 / 현금 / 총자산 분리, ₩ 환산 전체 숫자) */}
@@ -395,7 +394,7 @@ function PortfolioAdvice({ D, hasHoldings }) {
   );
 
   return (
-    <Panel title="전략 조언 (참고용)" sub="투자 자문 아님 · 단계분리 관찰"
+    <Panel title="전략 조언" sub="단계분리 분석"
       right={
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {srcBadge}
@@ -450,9 +449,8 @@ function PortfolioAdvice({ D, hasHoldings }) {
               <div style={{ marginTop: 5 }}>{advice.step3?.alignment_note}</div>
             </div>
           </AdviceSection>
-          {/* 면책 + 생성시각 */}
+          {/* 생성시각 */}
           <div style={{ padding: "9px 16px", borderTop: `1px solid ${C.line}`, background: C.surface2, borderRadius: "0 0 10px 10px", display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: C.ink3 }}>{advice.disclaimer}</span>
             <span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>생성: {advice.generatedAtLabel}</span>
           </div>
         </>

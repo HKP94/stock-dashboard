@@ -1,8 +1,7 @@
 """
 compute_quant.py — 팩터 스코어링 엔진 (PRD §F4)
 
-⚠️ 투자 자문 아님 / 원금 손실 가능
-   출력되는 모든 점수·플래그는 정보·참고용이며 매수/매도 신호가 아닙니다.
+점수·플래그·표시 신호는 결정론적으로 계산되며 자동 주문을 실행하지 않습니다.
    투자 판단과 결과의 책임은 전적으로 사용자에게 있습니다.
 
 설계:
@@ -566,7 +565,7 @@ def compute_quant_universe(
     """
     유니버스 전체 퀀트 점수 계산.
 
-    ⚠️ 반환값은 참고용이며 투자 자문이 아닙니다.
+    반환값은 표시 전용이며 주문 실행 경로가 없습니다.
     """
     asof = asof or date.today()
     if not tickers:
@@ -722,5 +721,3 @@ if __name__ == "__main__":
             status = "failed"
 
         log_run_finish(conn, run_id, status=status, errors=errors)
-
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")

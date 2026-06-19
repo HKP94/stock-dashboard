@@ -3,7 +3,7 @@ import { useState } from 'react';
 import {
   C, compColor, flagTone,
   MonoCaps, Num, SentBadge, HoldDot,
-  GaugeBar, RegimeBadge, WeightBars, btnGhost,
+  GaugeBar, RegimeBadge, SignalCard, WeightBars, btnGhost,
 } from './ui.jsx';
 import { Panel, ResearchItemCard, RESEARCH_TYPE_LABEL } from './tabsA.jsx';
 
@@ -114,12 +114,13 @@ export function Screener({ D, nav }) {
       right={<button onClick={() => setShowAll(!showAll)} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 5 }}>{showAll ? "접기 −" : "펼치기 +"}</button>}>
       {showAll && <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-          <Th label="종목" /><Th k="comp" label="종합" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
+          <Th label="종목" /><Th k="comp" label="종합" /><Th label="신호" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
         </tr></thead>
         <tbody>
           {unified.map((s) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
             <td style={{ padding: "9px 10px" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 12.5, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{s.t}·{s.mk}</span></div></td>
             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={13} weight={700} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num></td>
+            <td style={{ padding: "7px 10px" }}><SignalCard signal={s.signal} compact /></td>
             {["m", "v", "q", "g", "s"].map((k) => <td key={k} style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={sortKey === k ? gradeCol(s.f[k]) : C.ink2}>{s.f[k]}</Num></td>)}
             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>
             <td style={{ padding: "9px 10px", textAlign: "right" }}><span className="mono" style={{ fontSize: 12, fontWeight: 700, color: s.fscore >= 7 ? C.ok : C.ink2 }}>{s.fscore ?? "—"}</span></td>

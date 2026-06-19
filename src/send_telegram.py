@@ -10,7 +10,6 @@ Gemini/Hermes 없이 동작 (Phase 3 후반에 Hermes로 업그레이드 예정)
 
 텔레그램 4096자 제한 → 초과 시 앞부분 우선, 뒤 자르기.
 
-⚠️ 투자 자문 아님 / 원금 손실 가능
 """
 
 from __future__ import annotations
@@ -34,9 +33,6 @@ logger = logging.getLogger(__name__)
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 MAX_LEN = 4096
 _WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
-
-_DISCLAIMER = "ℹ️ 본 정보는 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다."
-
 
 # ──────────────────────────────────────────────────────────────
 # DB 조회 헬퍼
@@ -155,7 +151,7 @@ def _news_section(records: list[StockDailyRecord]) -> str:
     # 긍정/부정 우선, 중립 후순
     news_items.sort(key=lambda r: abs(r.news.score or 0), reverse=True)
 
-    lines = ["📰 주목 뉴스 (감성)"]
+    lines = ["📰 주목 뉴스 (심리)"]
     for r in news_items[:3]:
         sent = r.news.sentiment or "—"
         first_line = (r.news.summary_md or "").split("\n")[0].lstrip("- ").strip()
@@ -173,7 +169,7 @@ def format_brief(
 ) -> str:
     """
     HERMES_PROMPT §2 템플릿을 채워 텔레그램 메시지 문자열 반환.
-    4096자 초과 시 면책 문구는 유지하고 뒤부터 자름.
+    4096자 초과 시 뒤부터 자름.
     """
     asof = asof or date.today()
     wd = _WEEKDAYS[asof.weekday()]
@@ -188,15 +184,11 @@ def format_brief(
         _flags_section(records),
         "",
         _news_section(records),
-        "",
-        _DISCLAIMER,
     ]
 
     text = "\n".join(sections)
     if len(text) > MAX_LEN:
-        # 면책 문구는 반드시 유지
-        keep = MAX_LEN - len(_DISCLAIMER) - 5
-        text = text[:keep] + "\n…\n" + _DISCLAIMER
+        text = text[:MAX_LEN - 2] + "…"
 
     return text
 
@@ -281,5 +273,3 @@ if __name__ == "__main__":
         else:
             logger.error("발송 실패")
             sys.exit(1)
-
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능", file=sys.stderr)

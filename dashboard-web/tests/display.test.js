@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import {
   filterStocks,
   factorLabel,
+  isCompleteSignal,
   portfolioAssetTotal,
   regimeLabel,
   sortStocksBySentiment,
@@ -64,4 +65,10 @@ test('maps internal factor and regime keys to Korean display labels', () => {
   assert.equal(factorLabel('g'), '성장');
   assert.equal(factorLabel('s'), '심리');
   assert.equal(regimeLabel('bull'), '강세');
+});
+
+
+test('rejects standalone signal labels', () => {
+  assert.equal(isCompleteSignal({ label: '매수' }), false);
+  assert.equal(isCompleteSignal({ label: '매수', reason: '종합 백분위 80위', confidence: 67 }), true);
 });
