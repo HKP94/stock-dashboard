@@ -27,6 +27,7 @@ from psycopg.types.numeric import FloatLoader, NumericBinaryLoader
 from src.schemas import (
     AnalystRow,
     FundamentalsRow,
+    IndexDailyRow,
     IndicatorDailyRow,
     MarketDailyRow,
     MarketNewsRow,
@@ -165,6 +166,23 @@ def upsert_price_daily(conn: psycopg.Connection, rows: list[PriceDailyRow]) -> N
             [(r.ticker, r.date, r.open, r.high, r.low, r.close, r.volume, r.source) for r in rows],
         )
     logger.debug("upsert_price_daily: %d rows", len(rows))
+
+
+def upsert_index_daily(conn: psycopg.Connection, rows: list[IndexDailyRow]) -> None:
+    sql = """
+        INSERT INTO index_daily (index_code, asof, close, source)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (index_code, asof) DO UPDATE SET
+            close      = EXCLUDED.close,
+            source     = EXCLUDED.source,
+            fetched_at = now()
+    """
+    with conn.cursor() as cur:
+        cur.executemany(
+            sql,
+            [(r.index_code, r.asof, r.close, r.source) for r in rows],
+        )
+    logger.debug("upsert_index_daily: %d rows", len(rows))
 
 
 def upsert_indicators_daily(conn: psycopg.Connection, rows: list[IndicatorDailyRow]) -> None:

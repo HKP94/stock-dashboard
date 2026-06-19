@@ -141,6 +141,13 @@ class MarketNewsSummaryRow(BaseModel):
     global_summary: str
 
 
+class IndexDailyRow(BaseModel):
+    index_code: str
+    asof: date
+    close: float
+    source: str = "yfinance"
+
+
 class TickerContextRow(BaseModel):
     ticker: str
     context_type: Literal["news_summary", "report", "driver", "macro"]
