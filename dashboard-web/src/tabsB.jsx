@@ -191,6 +191,7 @@ function MarketColumn({ title, m, regimes }) {
 export function Market({ D }) {
   const overall = D.market.overall;
   const w = D.regimes[overall].w;
+  const newsSummary = D.market.newsSummary || {};
   const interp = overall === "bull"
     ? "강세 국면 — 모멘텀 비중을 최대(45%)로 끌어올려 추세에 올라타되, 심리·과열 신호로 진입 타이밍을 조절합니다."
     : overall === "neutral"
@@ -202,6 +203,23 @@ export function Market({ D }) {
       <MarketColumn title="🇰🇷 한국 시장" m={D.market.kr} regimes={D.regimes} />
       <MarketColumn title="🇺🇸 미국 시장" m={D.market.us} regimes={D.regimes} />
     </div>
+
+    <Panel title="오늘의 시장 뉴스 요약" sub={newsSummary.asof ? `${newsSummary.asof} 기준` : "최근 시장 헤드라인 기반"}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, padding: "16px 18px" }}>
+        {[
+          ["한국", newsSummary.krSummary],
+          ["미국", newsSummary.usSummary],
+          ["글로벌", newsSummary.globalSummary],
+        ].map(([label, body]) => (
+          <div key={label} style={{ border: `1px solid ${C.line2}`, borderRadius: 10, padding: "14px 14px 15px", background: C.surface2 }}>
+            <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{label}</MonoCaps>
+            <p style={{ margin: "8px 0 0", fontSize: 13, color: body ? C.ink : C.ink3, lineHeight: 1.65 }}>
+              {body || "시장 뉴스 요약 준비 중입니다."}
+            </p>
+          </div>
+        ))}
+      </div>
+    </Panel>
 
     <Panel title="현재 국면 → 전략 가중치" sub="동적 팩터 모델">
       <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 0 }}>
