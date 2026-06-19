@@ -86,6 +86,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **백테스트 vs 회고 절대 구분 (PRD §F7)**: 모멘텀만 진짜 백테스트(과거 시점 데이터만). 가치·퀄리티·성장·복합은 오늘 스냅샷뿐이라 "회고"(선정시점편향) — 화면·코드에서 절대 혼동 금지, 회고는 "백테스트 아님" 경고 필수.
 - **장기 벤치마크 이력(W3-A)**: KOSPI/S&P500/NASDAQ 5년 일봉은 `index_daily`에 저장한다. `market_daily`는 최신 스냅샷/요약 전용이며, true backtest 비교 시 두 테이블을 혼용하지 않는다.
 - **전략 비교 저장 형식(W3-B)**: `backtest_results`는 `(strategy, track, horizon)` 단위로 1Y/3Y/5Y 결과를 저장한다. `track='true'`와 `track='retrospective'`는 export와 UI에서 별도 섹션으로만 노출하며, retrospective는 항상 선택편향 경고와 함께 보여준다.
+- **전략 제언(W3-C)**: 현재 국면 추천 전략은 `backtest_results`의 국면별 성과를 읽어 **표시 전용**으로만 노출한다. true track이 1차 근거이며, retrospective는 참고용 경고와 함께만 붙인다. 주문 실행 경로는 만들지 않는다.
 - **시장 뉴스 pseudo-ticker**: 시장 시황 뉴스는 `_MARKET_KR`/`_MARKET_US` ticker로 `news_raw`에 저장. 이들은 watchlist에 없으므로 종목 카드/enrich 종목요약 대상에서 제외(`enrich_news_batch`는 watchlist 종목만 처리).
 - **시장 뉴스 영속화(W2-B)**: 종목 뉴스와 별도로 `market_news`(원천)와 `market_news_summary`(일일 KR/US/Global 요약)를 유지한다. 시장전망 탭의 "오늘의 시장 뉴스 요약"은 이 테이블만 읽는다.
 - **누적 인사이트 영속화(W2-C)**: Gemini 종목 뉴스 요약은 `ticker_context`에도 `context_type='news_summary'`로 저장한다. 종목상세 "누적 인사이트"는 최근 30일만 보여주고, `valid_until < today` 항목은 삭제하지 말고 조회에서만 제외한다.

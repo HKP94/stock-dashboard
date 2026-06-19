@@ -100,3 +100,28 @@ def test_load_backtest_groups_by_track_and_horizon():
     assert out["trueTrack"]["strategies"][0]["horizons"]["5y"]["cumReturn"] == 0.8
     assert out["retrospective"]["warning"] == "선택편향 경고"
     assert out["retrospective"]["strategies"][0]["horizons"]["5y"]["selectedTickers"] == ["AAA", "BBB"]
+
+
+def test_build_strategy_guidance_prefers_true_track_and_keeps_retro_as_reference():
+    backtest = {
+        "trueTrack": {
+            "strategies": [
+                {"name": "momentum_12_1", "label": "모멘텀 12-1", "horizons": {"5y": {"regimeReturns": {"bull": 0.42, "neutral": 0.11, "bear": -0.08}}}},
+                {"name": "low_vol", "label": "저변동성", "horizons": {"5y": {"regimeReturns": {"bull": 0.20, "neutral": 0.18, "bear": 0.05}}}},
+            ]
+        },
+        "retrospective": {
+            "warning": "선택편향 경고",
+            "strategies": [
+                {"name": "multifactor", "label": "멀티팩터", "horizons": {"5y": {"regimeReturns": {"bull": 0.55, "neutral": 0.10, "bear": -0.12}}}},
+            ],
+        },
+    }
+
+    out = export_mod._build_strategy_guidance(backtest, {"overall": "bull"})
+
+    assert out["primary"]["track"] == "true"
+    assert out["primary"]["name"] == "momentum_12_1"
+    assert "상승" in out["primary"]["reason"]
+    assert out["reference"]["track"] == "retrospective"
+    assert out["reference"]["warning"] == "선택편향 경고"
