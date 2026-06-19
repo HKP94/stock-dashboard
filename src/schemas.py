@@ -141,6 +141,25 @@ class MarketNewsSummaryRow(BaseModel):
     global_summary: str
 
 
+class MacroIndicatorRow(BaseModel):
+    indicator_code: str
+    indicator_name: str
+    region: Literal["US", "KR", "GLOBAL"]
+    asof: date
+    value: float
+    unit: str
+    source: str
+
+
+class MacroSummaryRow(BaseModel):
+    summary_date: date
+    headline: str
+    support_view: str
+    oppose_view: str
+    watch_points: list[str] = Field(default_factory=list)
+    summary_md: str
+
+
 class IndexDailyRow(BaseModel):
     index_code: str
     asof: date
@@ -339,3 +358,11 @@ class MarketNewsDigestOutput(BaseModel):
     kr_summary: str
     us_summary: str
     global_summary: str
+
+
+class MacroSummaryOutput(BaseModel):
+    headline: str
+    support_view: str
+    oppose_view: str
+    watch_points: list[str] = Field(default_factory=list)
+    summary_md: str

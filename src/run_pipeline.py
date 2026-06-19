@@ -40,12 +40,14 @@ from src.db import (
     upsert_fundamentals,
     upsert_indicators_daily,
     upsert_market_daily,
+    upsert_macro_indicators,
     upsert_price_daily,
     upsert_quant_scores,
     upsert_valuation,
 )
-from src.enrich_gemini import enrich_market_summary, enrich_news_batch, reenrich_stale_fallbacks, summarize_market_news_digest
+from src.enrich_gemini import enrich_market_summary, enrich_news_batch, reenrich_stale_fallbacks, summarize_macro_environment, summarize_market_news_digest
 from src.ingest_kr import run_kr_ingest
+from src.ingest_macro import run_macro_ingest
 from src.ingest_market import run_market_ingest
 from src.ingest_market_news import run_market_news_ingest
 from src.ingest_news import run_news_ingest
@@ -107,6 +109,22 @@ def _step_market(conn: psycopg.Connection, errors: list) -> None:
         conn.rollback()  # abort된 트랜잭션 회복 → 다음 단계 보호
         logger.error("Step 1 실패: %s", exc, exc_info=True)
         errors.append(_err("market", exc))
+
+
+def _step_macro(conn: psycopg.Connection, errors: list) -> None:
+    logger.info("Step 1b: 거시 지표 수집")
+    try:
+        result = run_macro_ingest()
+        rows = result.get("rows", [])
+        if rows:
+            upsert_macro_indicators(conn, rows)
+            conn.commit()
+        errors.extend(result.get("errors", []))
+        logger.info("Step 1b 완료: macro_indicators %d건 upsert (commit)", len(rows))
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Step 1b 실패: %s", exc, exc_info=True)
+        errors.append(_err("macro", exc))
 
 
 def _step_ingest_kr(conn: psycopg.Connection, kr_tickers: list[str], errors: list) -> None:
@@ -295,6 +313,15 @@ def _step_enrich_gemini(conn: psycopg.Connection, errors: list) -> None:
         logger.error("Step 7c(market_news_digest) 실패: %s", exc, exc_info=True)
         errors.append(_err("market_news_digest", exc))
 
+    try:
+        macro_ok = summarize_macro_environment(conn)
+        conn.commit()
+        logger.info("Step 7d 완료: 거시 환경 요약 %s (commit)", "저장" if macro_ok else "스킵")
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Step 7d(macro_summary) 실패: %s", exc, exc_info=True)
+        errors.append(_err("macro_summary", exc))
+
 
 def _step_compute_portfolio(conn: psycopg.Connection, errors: list) -> None:
     """Step 9: 보유종목 평가 (portfolio_holdings → portfolio + portfolio_snapshot). 실패해도 파이프라인 계속."""
@@ -365,6 +392,7 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
             logger.info("유니버스: KR=%d US=%d 합계=%d", len(kr_tickers), len(us_tickers), len(all_tickers))
 
             _step_market(conn, errors)
+            _step_macro(conn, errors)
             _step_ingest_kr(conn, kr_tickers, errors)
             _step_ingest_us(conn, us_tickers, errors)
             _step_ingest_news(conn, all_tickers, errors)
