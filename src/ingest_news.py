@@ -339,6 +339,32 @@ _US_ENGLISH_NAME: dict[str, str] = {
 }
 
 
+def build_google_news_queries(ticker: str, company_name: str) -> list[str]:
+    """종목별 Google News 쿼리 집합. 기본 쿼리 + 부정/리스크 쿼리를 함께 반환."""
+    kr = _is_kr(ticker)
+    code = _clean_ticker(ticker)
+    if kr:
+        return [
+            f"{company_name} 주가",
+            f"{company_name} 실적",
+            f"{company_name} OR {code}",
+            f"{company_name} 리스크",
+            f"{company_name} 하락",
+            f"{company_name} 우려",
+        ]
+
+    eng = _US_ENGLISH_NAME.get(ticker, company_name)
+    return [
+        f"{eng} {ticker} stock",
+        f"{eng} earnings",
+        f"{ticker} stock forecast",
+        f"{ticker} news",
+        f"{ticker} risk",
+        f"{ticker} decline",
+        f"{ticker} concern",
+    ]
+
+
 def fetch_google_news(
     ticker: str,
     company_name: str,
@@ -346,18 +372,11 @@ def fetch_google_news(
 ) -> list[NewsRawRow]:
     """
     Google News RSS에서 종목 관련 뉴스 수집.
-    KR: "{회사명} 주가", "{회사명} 실적", "{회사명} OR {코드}"
-    US: "{영문정식명} {ticker} stock", "{영문정식명} earnings", "{ticker} stock forecast"
-        (영문 정식명+티커로 일반명사 충돌 회피 — 예: "Meta Platforms META stock")
+    KR: 기본 쿼리 + "{회사명} 리스크", "{회사명} 하락", "{회사명} 우려"
+    US: 기본 쿼리 + "{ticker} risk", "{ticker} decline", "{ticker} concern"
     """
     kr = _is_kr(ticker)
-    code = _clean_ticker(ticker)  # KR: 6자리 코드
-    if kr:
-        queries = [f"{company_name} 주가", f"{company_name} 실적", f"{company_name} OR {code}"]
-    else:
-        # PR-2: 정식명+티커 복수 쿼리로 US 건수·정확도 보강
-        eng = _US_ENGLISH_NAME.get(ticker, company_name)
-        queries = [f"{eng} {ticker} stock", f"{eng} earnings", f"{ticker} stock forecast", f"{ticker} news"]
+    queries = build_google_news_queries(ticker, company_name)
     return _collect_rss_rows(ticker, queries, kr, max_items)
 
 
