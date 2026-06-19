@@ -60,7 +60,7 @@ export function Screener({ D, nav }) {
       <Panel title="모멘텀 픽" sub="타이밍 시그널" right={<MonoCaps style={{ fontSize: 9.5 }} color={C.acc}>모멘텀 내림차순</MonoCaps>}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-            {["#", "종목", "모멘텀", "감성", "RSI"].map((h, i) => <th key={i} style={{ padding: "8px 12px", textAlign: i >= 2 ? "right" : "left" }}><MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps></th>)}
+            {["#", "종목", "모멘텀", "심리", "RSI"].map((h, i) => <th key={i} style={{ padding: "8px 12px", textAlign: i >= 2 ? "right" : "left" }}><MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps></th>)}
           </tr></thead>
           <tbody>
             {momentum.map((s, i) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
@@ -114,7 +114,7 @@ export function Screener({ D, nav }) {
       right={<button onClick={() => setShowAll(!showAll)} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 5 }}>{showAll ? "접기 −" : "펼치기 +"}</button>}>
       {showAll && <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-          <Th label="종목" /><Th k="comp" label="Composite" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="퀄리티" /><Th k="g" label="성장" /><Th k="s" label="감성" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
+          <Th label="종목" /><Th k="comp" label="종합" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
         </tr></thead>
         <tbody>
           {unified.map((s) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
@@ -191,10 +191,10 @@ export function Market({ D }) {
   const overall = D.market.overall;
   const w = D.regimes[overall].w;
   const interp = overall === "bull"
-    ? "강세 국면 — 모멘텀 비중을 최대(45%)로 끌어올려 추세에 올라타되, 감성·과열 신호로 진입 타이밍을 조절합니다."
+    ? "강세 국면 — 모멘텀 비중을 최대(45%)로 끌어올려 추세에 올라타되, 심리·과열 신호로 진입 타이밍을 조절합니다."
     : overall === "neutral"
-      ? "중립 국면 — 모멘텀과 가치·퀄리티를 균형 있게 배분합니다. 추세에 일부 올라타되 펀더멘털이 받쳐주는 종목 위주로 선별합니다."
-      : "약세 국면 — 퀄리티(45%)·가치(35%)에 무게를 실어 방어합니다. 모멘텀 비중을 최소화하고 재무 건전성 높은 종목으로 포트폴리오를 압축합니다.";
+      ? "중립 국면 — 모멘텀과 가치·우량성을 균형 있게 배분합니다. 추세에 일부 올라타되 펀더멘털이 받쳐주는 종목 위주로 선별합니다."
+      : "약세 국면 — 우량성(45%)·가치(35%)에 무게를 실어 방어합니다. 모멘텀 비중을 최소화하고 재무 건전성 높은 종목으로 포트폴리오를 압축합니다.";
 
   return <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
@@ -205,7 +205,7 @@ export function Market({ D }) {
     <Panel title="현재 국면 → 전략 가중치" sub="동적 팩터 모델">
       <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 0 }}>
         <div style={{ padding: "20px 22px", borderRight: `1px solid ${C.line}` }}>
-          <MonoCaps style={{ fontSize: 9.5 }}>종합 레짐</MonoCaps>
+          <MonoCaps style={{ fontSize: 9.5 }}>종합 국면</MonoCaps>
           <div style={{ margin: "10px 0 14px" }}><RegimeBadge regime={overall} lg regimes={D.regimes} /></div>
           <p style={{ fontSize: 13, color: C.ink2, lineHeight: 1.65, margin: 0 }}>{interp}</p>
           <div style={{ marginTop: 16, display: "flex", gap: 14 }}>
@@ -219,7 +219,7 @@ export function Market({ D }) {
             {["bull", "neutral", "bear"].map((r) => <div key={r} style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${r === overall ? C.acc : C.line2}`, background: r === overall ? C.accTint : C.surface }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><RegimeBadge regime={r} regimes={D.regimes} /></div>
               <div className="mono" style={{ fontSize: 10.5, color: C.ink2, lineHeight: 1.7 }}>
-                M {D.regimes[r].w.m} · V {D.regimes[r].w.v} · Q {D.regimes[r].w.q}<br />G {D.regimes[r].w.g} · S {D.regimes[r].w.s}
+                모멘텀 {D.regimes[r].w.m} · 가치 {D.regimes[r].w.v} · 우량성 {D.regimes[r].w.q}<br />성장 {D.regimes[r].w.g} · 심리 {D.regimes[r].w.s}
               </div>
             </div>)}
           </div>
@@ -269,7 +269,7 @@ export function Research({ D, nav }) {
             </select>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Num size={18} weight={800} color={compColor(s?.comp ?? 0)}>{s?.comp ?? "—"}</Num>
-              <span style={{ fontSize: 11, color: C.ink3 }}>COMPOSITE</span>
+              <span style={{ fontSize: 11, color: C.ink3 }}>종합</span>
               <button onClick={() => nav(s.t)} style={{ ...btnGhost, marginLeft: "auto", fontSize: 11 }}>상세 →</button>
             </div>
           </div>

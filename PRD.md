@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v3.1 |
+| 버전 | v3.2 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -249,6 +249,16 @@ CREATE TABLE market_daily (
 CREATE TABLE runs (
   run_id BIGSERIAL PRIMARY KEY, kind TEXT, started_at TIMESTAMPTZ,
   finished_at TIMESTAMPTZ, status TEXT, errors JSONB
+);
+
+-- 사용자의 최신 판단과 누적 이력
+CREATE TABLE stock_notes (
+  ticker TEXT PRIMARY KEY, horizon TEXT, attractiveness INT,
+  thesis TEXT, updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE stock_note_history (
+  id BIGSERIAL PRIMARY KEY, ticker TEXT NOT NULL, horizon TEXT,
+  attractiveness INT, thesis TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- 포트폴리오 전략 조언(CoT 결과 캐시). cache_key=보유·현금·레짐 시그니처 → 변경 시 stale.
@@ -664,6 +674,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
 
 ### 안정화 (운영 중 발견·수정)
+- [x] **Wave 1 T2~T6 UX·라벨** (2026-06-19): 뉴스 종목별 심리를 점수 내림차순으로 정렬, 종목상세 티커/종목명·시장·섹터 즉시 필터, 관심종목 섹터 PATCH 편집, `stock_note_history` 기반 복수 판단 누적·최신순 표시, 8탭의 국면·심리·우량성·5팩터 한글 표시 통일. 내부 키와 매력도 3축 비합산 원칙 유지.
 - [x] **Wave 1 T1 총자산 단일화** (2026-06-19): 오버뷰의 주식 평가액 표시와 포트폴리오의 주식+현금 표시 불일치를 제거. 종목별 최신 가격·동일 최신 환율로 계산한 `portfolio_snapshot.payload.asset_total`을 로컬 API와 두 탭이 공용 함수로 사용하고, 구형 데이터만 평가액+현금 폴백. Python·Node 회귀 테스트 추가.
 - [x] **Decimal/DB 경계 버그**: psycopg3 NUMERIC→Decimal이 float·np.log·나눗셈에 섞여 indicators/quant 0건 → `db.get_conn` float 로더 + 읽기 경계 방어 캐스팅으로 수정
 - [x] **저장 경로**: 단일 트랜잭션 1회 커밋 → 단계별 commit/rollback으로 전환(앞 단계 오류·연결 끊김이 저장 무효화하던 문제)
@@ -684,6 +695,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v3.2 (2026-06-19) Wave 1 T2~T6: 뉴스 심리 정렬, 종목상세 검색/시장/섹터 필터, 관심종목 섹터 편집, 판단 이력 누적, 표시 레이어 한글 라벨 통일 — Codex.*
 - *v3.1 (2026-06-19) Wave 1 T1: 포트폴리오 총자산을 종목별 최신 평가액+KRW 환산 현금으로 단일화하고 오버뷰·포트폴리오 공용 표시 함수 및 로컬 요약 API 적용 — Codex.*
 - *v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
 - *v1.1 (2026-06-09) §F4 실제 구현 내용으로 전면 교체(레짐감지·사전필터·동적가중치·VCM·12-1M), §11 로드맵 Phase 1·2 완료 항목 표시 — PM(Claude).*

@@ -13,6 +13,8 @@ export function WatchlistAdmin({ D }) {
   const [adding, setAdding] = useState(false);
   const [msg, setMsg] = useState("");
   const [collecting, setCollecting] = useState([]);  // 수집 중 티커
+  const [sectorDrafts, setSectorDrafts] = useState({});
+  const [sectorSaving, setSectorSaving] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -46,6 +48,24 @@ export function WatchlistAdmin({ D }) {
   };
 
   const [toggleErr, setToggleErr] = useState("");
+
+  const saveSector = async (w) => {
+    const sector = sectorDrafts[w.ticker] ?? w.sector ?? "";
+    setToggleErr(""); setSectorSaving(w.ticker);
+    try {
+      const res = await fetch(`${API}/api/watchlist/${w.ticker}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sector }),
+      });
+      if (!res.ok) throw new Error();
+      await load();
+      setSectorDrafts((prev) => ({ ...prev, [w.ticker]: sector }));
+    } catch (_) {
+      setSectorDrafts((prev) => ({ ...prev, [w.ticker]: w.sector || "" }));
+      setToggleErr(`'${w.ticker}' 섹터 저장 실패 — 데이터 서버 연결을 확인하세요.`);
+    }
+    setSectorSaving("");
+  };
 
   const toggleActive = async (ticker, next) => {
     setToggleErr("");
@@ -81,8 +101,15 @@ export function WatchlistAdmin({ D }) {
       <HoldDot on={w.is_holding} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{w.name}</span>
-        <span className="mono" style={{ fontSize: 10, color: C.ink3, marginLeft: 7 }}>{w.ticker} · {w.market}{w.sector ? " · " + w.sector : ""}</span>
+        <span className="mono" style={{ fontSize: 10, color: C.ink3, marginLeft: 7 }}>{w.ticker} · {w.market}</span>
       </div>
+      <input value={sectorDrafts[w.ticker] ?? w.sector ?? ""} placeholder="섹터"
+        onChange={(event) => setSectorDrafts((prev) => ({ ...prev, [w.ticker]: event.target.value }))}
+        style={{ width: 110, border: `1px solid ${C.line2}`, borderRadius: 6, padding: "6px 8px", fontSize: 11.5, color: C.ink }} />
+      <button onClick={() => saveSector(w)} disabled={sectorSaving === w.ticker}
+        style={{ border: `1px solid ${C.line2}`, background: C.surface, color: C.acc, borderRadius: 6, padding: "5px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+        {sectorSaving === w.ticker ? "저장 중" : "저장"}
+      </button>
       {collecting.includes(w.ticker) || !w.has_data ? (
         <span style={{ fontSize: 10.5, fontWeight: 700, color: C.warn, background: C.warnBg, border: `1px solid ${C.warn}33`, borderRadius: 5, padding: "2px 8px" }}>데이터 수집 중</span>
       ) : (

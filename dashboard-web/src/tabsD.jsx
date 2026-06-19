@@ -16,7 +16,7 @@ const STRAT_META = {
   equal_weight_benchmark: { label: "동일가중 (벤치마크)", color: C.ink2 },
   buy_hold_benchmark:     { label: "Buy & Hold (벤치마크)", color: C.warn },
 };
-const FACTOR_LABEL = { momentum: "모멘텀", value: "가치", quality: "퀄리티", growth: "성장", composite: "종합(Composite)" };
+const FACTOR_LABEL = { momentum: "모멘텀", value: "가치", quality: "우량성", growth: "성장", composite: "종합" };
 
 const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
 const pctColor = (v) => (v == null ? C.ink3 : v >= 0 ? C.ok : C.bad);
