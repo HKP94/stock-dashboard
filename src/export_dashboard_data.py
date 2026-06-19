@@ -72,6 +72,29 @@ def _f(v) -> float | None:
         return None
 
 
+def _infer_refresh_context(generated_at: datetime, price_asof_by_market: dict[str, str] | None) -> dict[str, str]:
+    price_asof_by_market = price_asof_by_market or {}
+    kr = price_asof_by_market.get("KR")
+    us = price_asof_by_market.get("US")
+
+    if kr and us:
+        mode = "kr_close" if kr > us else "us_close"
+    else:
+        mode = "kr_close" if 12 <= generated_at.hour < 23 else "us_close"
+
+    if mode == "kr_close":
+        return {
+            "mode": mode,
+            "label": "한국 종가 기준 (18시 갱신)",
+            "note": "KR 가격·뉴스는 당일 기준으로 최신이며, US 가격은 전날 종가 기준입니다.",
+        }
+    return {
+        "mode": mode,
+        "label": "미국 종가 기준 (06시 갱신)",
+        "note": "미국 시장 종가 반영 전체 갱신본입니다. KR과 US 가격·뉴스가 일일 기본 주기로 정렬됩니다.",
+    }
+
+
 # PR-1(진단): 폴백 요약은 단일 출처(enrich_gemini)로 판정 — '분석 실패'/'일시 보류' 비노출.
 from src.enrich_gemini import is_fallback_summary as _is_fallback_summary
 
@@ -1249,12 +1272,15 @@ def build_data() -> dict:
         _attach_market_attractiveness(market, stocks)
 
         now = datetime.now()
+        refresh_context = _infer_refresh_context(now, price_asof)
+        market["refreshContext"] = refresh_context
         data = {
             "today":      now.strftime("%Y년 %-m월 %-d일 (%a)").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"),
             "updated":    now.strftime("%H:%M") + " KST",
             # PR-3: 데이터 신선도 가드 — 생성 시각(파싱용 ISO + 표시용 라벨). 프론트가 현재시각과 비교해 경고.
             "generatedAt":      now.strftime("%Y-%m-%dT%H:%M"),      # 로컬(KST) naive ISO
             "generatedAtLabel": now.strftime("%Y-%m-%d %H:%M") + " KST",
+            "refreshContext": refresh_context,
             "priceAsof":  price_asof_latest,   # PR-1: 가격 기준일(최신 거래일)
             "priceAsofByMarket": price_asof,   # {"KR": "...", "US": "..."}
             "rulesCount": rules_count,
