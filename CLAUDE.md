@@ -88,6 +88,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **export는 종목별 '최신' 조회만 사용**(`SELECT DISTINCT ON (ticker) ... ORDER BY ticker, asof/date DESC`). 글로벌 `max(asof)`/특정날짜 고정 금지 — KR/US 수집일이 달라 한쪽이 통째로 누락되는 버그의 근원(indicators·quant·price·**valuation·analyst** 전부 적용).
 - **UI 텍스트에 내부 스크립트명·명령어(.py / `python -m ...`) 노출 금지.** 사용자 친화 문구만. 빈 상태/에러도 "잠시 후 다시" 식으로.
 - **가격 갱신 = 하루 2회** (06:00 auto_run + 18:00 news_refresh 경량). 18:00은 KR 장마감 후라 KR 당일종가, 06:00은 US 종가 직후. 헤더는 `priceAsof`(실제 가격 기준일) 표시.
+- **종목 뉴스는 호재/악재 균형 수집**: KR Google News는 기본 쿼리 외 `리스크/하락/우려`, US는 `risk/decline/concern` 쿼리를 병행 수집한다. 종목당 캡은 유지하고 url_hash dedupe로 중복 제거한다.
 - **US 뉴스 소스**: yfinance.news + **Yahoo Finance RSS**(`feeds.finance.yahoo.com`, 429 시 무재시도 스킵) + **Finnhub**(`FINNHUB_API_KEY` 있을 때만) + Google News RSS(영문 정식명+티커 복수쿼리). KR은 네이버 HTML + Google News RSS. 전부 url_hash dedupe·종목격리.
 - **텔레그램은 보류(비활성)**. `TELEGRAM_ENABLED=false`(기본)면 `send_telegram.run_send`가 no-op 성공. 살리려면 PRD §F5 메모 참고(플래그 true + 워크플로 step 주석 해제).
 - **포트폴리오 총자산 = 보유종목 평가액 + 현금**(둘 다 KRW 환산). 현금=`portfolio_cash`(통화별), `compute_portfolio`가 `cash_total`/`asset_total`을 snapshot payload에 저장.
@@ -141,6 +142,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 ## 5. Gemini 호출 규칙 (토큰 절약)
 - 대량(종목별 뉴스 요약)=저렴 모델, 종합(시황 1회)=상위 모델. 모델명은 config로. **현행 유효 모델**(2026-06-17 실호출 검증): `GEMINI_BULK_MODEL=gemini-2.5-flash-lite`, `GEMINI_SYNTH_MODEL=gemini-2.5-flash`(3.5-flash에서 2.5 계열로 정리). 무효 모델명이면 호출 전량 실패하므로 변경 시 반드시 실호출 검증.
 - **중요뉴스 큐레이션 = 2단계·모델 분리로 비용 관리**(`curate_ticker_news`): **STEP A 선별/스코어링 = Flash-Lite**(impact_score·category·direction), 임계값(`CURATION_THRESHOLD=60`) 통과분만 **STEP B 인사이트 = 2.5-Flash**. 비용 가드: 입력 뉴스 캡(`CURATION_MAX_NEWS=12`)·top-K(6)·증분(enrich 종목만). 예상 비용 월 1만원 안쪽(36종목·하루 2회). 빈 큐레이션도 정상("중요 뉴스 없음"). 요약이 폴백이면 큐레이션 스킵. 결과는 `news_analysis.curated`(빈 []로 기존값 덮어쓰지 않음).
+- **뉴스 선별 편향 금지**: 종목 뉴스 요약과 STEP A 선별 프롬프트는 부정·리스크 뉴스도 중요하게 평가하도록 명시한다. 긍정/호재 편향 문구를 넣지 않는다.
 - 입력 뉴스는 dedupe + 상위 N건 + 본문 길이 캡. 새 뉴스 없으면 호출 스킵(전일 재사용).
 - 항상 `response_mime_type="application/json"` + 스키마 강제. 파싱 실패 핸들링 필수.
 - **키 쿼터(429)가 진짜 병목**: Gemini 키는 일일 쿼터 한계가 있어, 일일 파이프라인(38종목+시황)이 쿼터를 초과하면 **`429 RESOURCE_EXHAUSTED`로 종목별 폴백이 무더기 발생**(과거 "분석 실패" 광범위 노출의 근본원인). 따라서 ① **ad-hoc enrich/진단 호출로 쿼터를 태우지 말 것**(파이프라인이 유일 소비자가 이상적), ② 일시오류는 `_call_gemini_with_backoff`(429/503/타임아웃 **지수 백오프 3회**, 파싱 재시도와 분리)로 흡수, ③ 그래도 실패하면 **폴백을 `based_on='fallback_old'`로 표식**한다.

@@ -1230,7 +1230,7 @@ export function NewsTab({ D, filterTicker, setFilterTicker, nav }) {
         <div style={{ display: "flex", gap: 10, padding: "11px 16px", borderBottom: `1px solid ${C.line}`, alignItems: "center" }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="종목 검색…" style={{ flex: 1, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "7px 11px", fontSize: 12.5, fontFamily: "var(--sans)", outline: "none", color: C.ink }} />
           <FilterTabs value={sortMode} onChange={setSortMode} options={[{ k: "recent", label: "최신순" }, { k: "impact", label: "중요도순" }]} />
-          {sortMode === "recent" && <FilterTabs value={sent} onChange={setSent} options={[{ k: "all", label: "전체" }, { k: "긍정", label: "긍정" }, { k: "부정", label: "부정" }]} />}
+          {sortMode === "recent" && <FilterTabs value={sent} onChange={setSent} options={[{ k: "all", label: "전체" }, { k: "긍정", label: "긍정" }, { k: "중립", label: "중립" }, { k: "부정", label: "부정" }]} />}
         </div>
         {/* PR-2: 중요도순 = 큐레이션 피드 */}
         {sortMode === "impact" ? (
