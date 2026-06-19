@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { C, MonoCaps, Num, ChangePct, HoldDot, fmtPrice, btnGhost } from './ui.jsx';
 import { Panel } from './tabsA.jsx';
-import { portfolioAssetTotal } from './display.js';
+import { cleanDisplayText, portfolioAssetTotal } from './display.js';
 
 const API = "http://127.0.0.1:8765";
 
@@ -360,7 +360,7 @@ function Bullets({ items, color }) {
     <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
       {(items || []).map((t, i) => (
         <li key={i} style={{ display: "flex", gap: 8, fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>
-          <span style={{ color: color || C.ink3, flexShrink: 0 }}>·</span><span>{t}</span>
+          <span style={{ color: color || C.ink3, flexShrink: 0 }}>·</span><span>{cleanDisplayText(t)}</span>
         </li>
       ))}
     </ul>
@@ -421,12 +421,12 @@ function PortfolioAdvice({ D, hasHoldings }) {
           {/* STEP4 종합 관찰 (상단 강조) */}
           <div style={{ padding: "14px 16px" }}>
             <MonoCaps style={{ fontSize: 9, marginBottom: 6, display: "block" }} color={C.acc}>종합 관찰</MonoCaps>
-            <div style={{ fontSize: 13.5, color: C.ink, lineHeight: 1.65 }}>{advice.step4?.summary}</div>
+            <div style={{ fontSize: 13.5, color: C.ink, lineHeight: 1.65 }}>{cleanDisplayText(advice.step4?.summary)}</div>
             {(advice.step4?.questions || []).length > 0 && (
               <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
                 {advice.step4.questions.map((q, i) => (
                   <div key={i} style={{ fontSize: 12, color: C.ink2, display: "flex", gap: 7 }}>
-                    <span style={{ color: C.acc }}>?</span><span>{q}</span>
+                    <span style={{ color: C.acc }}>?</span><span>{cleanDisplayText(q)}</span>
                   </div>
                 ))}
               </div>
@@ -436,7 +436,7 @@ function PortfolioAdvice({ D, hasHoldings }) {
           <AdviceSection label="① 구성 분석" color={C.ink} open={open.s1} onToggle={() => setOpen((o) => ({ ...o, s1: !o.s1 }))}>
             <Bullets items={advice.step1?.facts} />
             <div style={{ marginTop: 8, fontSize: 12, color: C.ink3, lineHeight: 1.6 }}>
-              {advice.step1?.concentration_note} {advice.step1?.allocation_note} {advice.step1?.cash_note}
+              {cleanDisplayText(advice.step1?.concentration_note)} {cleanDisplayText(advice.step1?.allocation_note)} {cleanDisplayText(advice.step1?.cash_note)}
             </div>
           </AdviceSection>
           <AdviceSection label="② 리스크 식별" color={C.bad} open={open.s2} onToggle={() => setOpen((o) => ({ ...o, s2: !o.s2 }))}>
@@ -445,8 +445,8 @@ function PortfolioAdvice({ D, hasHoldings }) {
           <AdviceSection label="③ 국면 정합성" color={C.warn} open={open.s3} onToggle={() => setOpen((o) => ({ ...o, s3: !o.s3 }))}>
             <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.6 }}>
               <div>현재 국면: <b style={{ color: C.ink }}>{advice.regime}</b></div>
-              <div style={{ marginTop: 5 }}>{advice.step3?.tilt_note}</div>
-              <div style={{ marginTop: 5 }}>{advice.step3?.alignment_note}</div>
+              <div style={{ marginTop: 5 }}>{cleanDisplayText(advice.step3?.tilt_note)}</div>
+              <div style={{ marginTop: 5 }}>{cleanDisplayText(advice.step3?.alignment_note)}</div>
             </div>
           </AdviceSection>
           {/* 생성시각 */}

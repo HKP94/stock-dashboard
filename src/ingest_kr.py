@@ -23,6 +23,7 @@ import re
 import time
 from datetime import date, datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -42,6 +43,8 @@ logger = logging.getLogger(__name__)
 # ── 상수 ─────────────────────────────────────────────────────────
 PRICE_LOOKBACK_DAYS: int = 730   # 2년치 (compute_indicators SMA200 용)
 FS_BGN_YEARS: int = 4            # DART 재무 조회 연수
+KR_DAILY_CLOSE_HOUR: int = 16    # KST 기준 일봉 종가 확정 후 조회 시각(완충 포함)
+KST = ZoneInfo("Asia/Seoul")
 
 # DART 손익계산서 계정과목 후보 (한국어)
 _REVENUE_LABELS: frozenset[str] = frozenset({
@@ -87,6 +90,21 @@ def _safe_int(val) -> Optional[int]:
 # 가격 수집 (pykrx)
 # ──────────────────────────────────────────────────────────────
 
+def _resolve_kr_price_target_date(now: Optional[datetime] = None) -> date:
+    """KR 일봉 조회 종료일(KST 기준).
+    - 장마감 전이면 직전 영업일
+    - 장마감 후면 당일
+    - 주말이면 직전 금요일
+    휴장 평일은 pykrx가 직전 거래일로 자연스럽게 폴백한다.
+    """
+    now = now or datetime.now(KST)
+    if now.tzinfo is not None:
+        now = now.astimezone(KST)
+    target = now.date() if now.hour >= KR_DAILY_CLOSE_HOUR else now.date() - timedelta(days=1)
+    while target.weekday() >= 5:
+        target -= timedelta(days=1)
+    return target
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -101,16 +119,17 @@ def _pykrx_ohlcv(code: str, fromdate: str, todate: str) -> pd.DataFrame:
 def fetch_kr_prices(
     ticker: str,
     lookback_days: int = PRICE_LOOKBACK_DAYS,
+    now: Optional[datetime] = None,
 ) -> list[PriceDailyRow]:
     """pykrx로 KR 종목 일별 OHLCV 수집."""
     code = _clean_ticker(ticker)
-    today = date.today()
-    fromdate = (today - timedelta(days=lookback_days)).strftime("%Y%m%d")
-    todate = today.strftime("%Y%m%d")
+    target_date = _resolve_kr_price_target_date(now)
+    fromdate = (target_date - timedelta(days=lookback_days)).strftime("%Y%m%d")
+    todate = target_date.strftime("%Y%m%d")
 
     df = _pykrx_ohlcv(code, fromdate, todate)
     if df.empty:
-        logger.warning("%s: pykrx OHLCV 응답 없음", ticker)
+        logger.warning("%s: pykrx OHLCV 응답 없음 (target=%s)", ticker, target_date.isoformat())
         return []
 
     # pykrx 한국어 컬럼 → 표준화
@@ -138,7 +157,8 @@ def fetch_kr_prices(
             source="pykrx",
         ))
 
-    logger.info("%s: pykrx %d rows (%s~%s)", ticker, len(rows), fromdate, todate)
+    resolved_last = rows[-1].date.isoformat() if rows else None
+    logger.info("%s: pykrx %d rows (request=%s~%s, resolved_last=%s)", ticker, len(rows), fromdate, todate, resolved_last)
     return rows
 
 

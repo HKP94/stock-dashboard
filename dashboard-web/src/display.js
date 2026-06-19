@@ -29,6 +29,29 @@ export function filterStocks(stocks, { query = '', market = 'all', sector = 'all
   });
 }
 
+export function cleanDisplayText(text) {
+  if (text == null) return '';
+  return String(text)
+    .replace(/\*{1,3}([^*]+?)\*{1,3}/g, '$1')
+    .replace(/`([^`]+?)`/g, '$1')
+    .replace(/\*\*/g, '')
+    .replace(/\*/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
+export function extractBullets(text, { limit = Infinity } = {}) {
+  if (!text) return [];
+  return String(text)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*•]\s*/, ''))
+    .map(cleanDisplayText)
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
 const FACTOR_LABELS = { m: '모멘텀', v: '가치', q: '우량성', g: '성장', s: '심리' };
 const REGIME_LABELS = { bull: '강세', neutral: '중립', bear: '약세' };
 

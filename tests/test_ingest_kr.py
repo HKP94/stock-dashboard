@@ -13,7 +13,7 @@ import datetime as dt
 import pandas as pd
 import pytest
 
-from src.ingest_kr import _parse_dart_col_date, _parse_fs_rows
+from src.ingest_kr import _parse_dart_col_date, _parse_fs_rows, _resolve_kr_price_target_date
 
 
 _TITLE = (
@@ -180,3 +180,23 @@ class TestFetchKrValuationAnalyst:
              patch("src.ingest_kr.time.sleep", return_value=None):
             val, ana = fetch_kr_valuation_analyst("000000.KS")
         assert val is None and ana is None
+
+
+class TestResolveKrPriceTargetDate:
+    def test_after_close_uses_same_kst_day(self):
+        out = _resolve_kr_price_target_date(dt.datetime(2026, 6, 19, 18, 5))
+        assert out == dt.date(2026, 6, 19)
+
+    def test_utc_runner_time_converts_to_same_kst_close_day(self):
+        out = _resolve_kr_price_target_date(
+            dt.datetime(2026, 6, 19, 9, 5, tzinfo=dt.timezone.utc)
+        )
+        assert out == dt.date(2026, 6, 19)
+
+    def test_before_close_uses_previous_business_day(self):
+        out = _resolve_kr_price_target_date(dt.datetime(2026, 6, 19, 6, 0))
+        assert out == dt.date(2026, 6, 18)
+
+    def test_weekend_rolls_back_to_friday(self):
+        out = _resolve_kr_price_target_date(dt.datetime(2026, 6, 21, 18, 0))
+        assert out == dt.date(2026, 6, 19)

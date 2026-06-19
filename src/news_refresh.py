@@ -46,9 +46,15 @@ def _refresh_prices_light(conn) -> dict:
         wl = [(r["ticker"], r["market"]) for r in cur.fetchall()]
 
     n_price = 0
+    kr_latest = None
     for ticker, market in wl:
         try:
-            rows = fetch_kr_prices(ticker) if market == "KR" else fetch_us_prices(ticker)
+            if market == "KR":
+                rows = fetch_kr_prices(ticker)
+                if rows:
+                    kr_latest = max(kr_latest, rows[-1].date) if kr_latest else rows[-1].date
+            else:
+                rows = fetch_us_prices(ticker)
             if rows:
                 upsert_price_daily(conn, rows)
                 conn.commit()
@@ -75,6 +81,8 @@ def _refresh_prices_light(conn) -> dict:
         conn.rollback()
         errors.append({"step": "quant", "error": str(exc), "ts": datetime.utcnow().isoformat()})
 
+    if kr_latest:
+        logger.info("경량 가격 갱신(KR): 최종 적재 기준일 %s", kr_latest.isoformat())
     logger.info("경량 가격 갱신: prices %d / indicators %d / quant %d", n_price, n_ind, n_quant)
     return {"price_rows": n_price, "indicators": n_ind, "quant": n_quant, "errors": errors}
 
