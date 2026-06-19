@@ -702,6 +702,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
 
 ### 안정화 (운영 중 발견·수정)
+- [x] **Wave 3 백필 재계산 핫픽스** (2026-06-19): `backfill.py`의 5년 백필 경로가 W3-A 변경 중 `recompute_indicators_to_db` import 누락으로 partial run을 내던 문제를 수정했다. `python -m src.backfill` / `--5y` 단독 실행이 다시 가격 백필 → 영향 종목 지표 재계산 → active 유니버스 퀀트 재계산까지 한 번에 마치며, `recompute.py`는 수동 수복 도구로만 남긴다. 회귀 테스트로 NameError 재발을 차단했다.
 - [x] **Wave 3-C 현재 국면 추천 전략** (2026-06-19): export가 backtest_results의 국면별 성과를 읽어 현재 레짐에서 상대우위인 true track 전략을 계산하고, 신뢰도·한 줄 근거와 함께 `strategyGuidance`로 내보낸다. 시장전망 탭은 이를 최상단 카드로 노출하고, retrospective 참고 전략은 선택편향 경고와 함께 한 단계 낮춰 표시한다. 제언은 화면 표시 전용이며 주문 실행 경로가 없다.
 - [x] **Wave 3-B 전략 라이브러리 + 확장 백테스트** (2026-06-19): `strategies.py`에 true(`momentum_12_1`, `low_vol`, `equal_weight_bh`)와 retrospective(`value`, `quality`, `multifactor`) 전략 레지스트리를 추가하고, `backtest_results`를 `(strategy, track, horizon)` 저장 형식으로 확장했다. export/UI는 1Y/3Y/5Y 표·선택 전략 리베이스100 지수 비교·국면별 성과를 true/retrospective 분리 섹션으로 노출하며, retrospective에는 선택편향 경고를 고정한다.
 - [x] **Wave 3-A 벤치마크 이력 백본** (2026-06-19): `index_daily` 테이블과 `ingest_index_history.py`를 추가해 KOSPI/S&P500/NASDAQ 5년 일봉을 yfinance로 누적 저장한다. 연속성 결측 구간은 로깅만 하고 전체 수집은 계속하며, `backfill.py --5y`로 활성 유니버스 종목의 5년 가격 준비 상태를 점검·보강한다. `market_daily` 최신 스냅샷과 true backtest 비교용 장기 시계열을 분리해 §F7 원칙을 재확인.
@@ -731,6 +732,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v4.1 (2026-06-19) Wave 3 backfill hotfix: `backfill.py`의 indicators 재계산 import 누락을 복구해 `python -m src.backfill` / `--5y`가 다시 가격→지표→퀀트까지 단독 완결되도록 수정하고, NameError 회귀 테스트를 추가 — Codex.*
 - *v4.0 (2026-06-19) Wave 3-C: 현재 레짐의 국면별 성과를 읽어 true track 우선 전략 제언과 retrospective 참고 전략을 시장전망 탭에 표시하는 `strategyGuidance` 경로를 추가 — Codex.*
 - *v3.9 (2026-06-19) Wave 3-B: true/retrospective 전략 레지스트리와 1Y/3Y/5Y backtest_results 저장 형식, 전략비교 탭의 분리 표/라인차트/국면 막대차트를 추가 — Codex.*
 - *v3.8 (2026-06-19) Wave 3-A: `index_daily` 장기 벤치마크 이력과 5년 백필 점검 경로를 추가해 KOSPI/S&P500/NASDAQ true backtest 비교 백본을 분리 구축 — Codex.*
