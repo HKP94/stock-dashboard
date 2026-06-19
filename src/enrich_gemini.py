@@ -31,6 +31,7 @@ from src.db import (
     get_conn,
     log_run_finish,
     log_run_start,
+    replace_ticker_context,
     upsert_market_daily,
     upsert_market_news_summary,
     upsert_news_analysis,
@@ -42,6 +43,7 @@ from src.schemas import (
     MarketSummaryOutput,
     NewsAnalysisRow,
     NewsSummaryOutput,
+    TickerContextRow,
 )
 
 logger = logging.getLogger(__name__)
@@ -722,6 +724,14 @@ def enrich_news_batch(
                 curated=curated,
             )
             upsert_news_analysis(conn, [analysis_row])
+            replace_ticker_context(conn, TickerContextRow(
+                ticker=ticker,
+                context_type="news_summary",
+                content=output.summary_md,
+                source="gemini_news_analysis",
+                valid_from=asof,
+                valid_until=None,
+            ))
             enriched += 1
             logger.info("%s: 요약 완료 (sentiment=%s)", ticker, output.sentiment)
 
@@ -813,6 +823,14 @@ def reenrich_stale_fallbacks(
                 summary_md=output.summary_md, payload=output.model_dump(),
                 n_articles=len(news_items), model=model, based_on=output.based_on,
             )])
+            replace_ticker_context(conn, TickerContextRow(
+                ticker=ticker,
+                context_type="news_summary",
+                content=output.summary_md,
+                source="gemini_news_analysis",
+                valid_from=asof,
+                valid_until=None,
+            ))
             fixed += 1
             logger.info("%s: 폴백→실제 요약 복구 (sentiment=%s)", ticker, output.sentiment)
         except Exception as exc:

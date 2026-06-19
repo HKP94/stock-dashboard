@@ -5,7 +5,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v3.5 |
+| 버전 | v3.6 |
 | 작성일 | 2026-06-08 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
@@ -243,6 +243,13 @@ CREATE TABLE market_daily (
   asof DATE PRIMARY KEY, kospi NUMERIC, kosdaq NUMERIC, sp500 NUMERIC,
   nasdaq NUMERIC, vix NUMERIC, usdkrw NUMERIC, ust10y NUMERIC,
   summary_md TEXT, payload JSONB
+);
+
+-- 종목별 누적 인사이트 (최근 뉴스/리포트/드라이버/거시 근거 영속화)
+CREATE TABLE ticker_context (
+  id BIGSERIAL PRIMARY KEY, ticker TEXT NOT NULL, context_type TEXT NOT NULL,
+  content TEXT NOT NULL, source TEXT NOT NULL,
+  valid_from DATE NOT NULL, valid_until DATE, created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- 관측: 실행 로그
@@ -682,6 +689,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [x] **Wave 1 T7 표시 신호·정책** (2026-06-19): 활성 유니버스 퀀트 종합 백분위 상/하위 30% 기반 매수/관망/축소 신호를 계약·assemble·export·React에 추가. 근거·신뢰도 동반을 강제하고 자동 주문 금지는 유지. UI·텔레그램·Gemini/Hermes 프롬프트의 기존 보일러플레이트 제거.
 - [x] **Wave 2-A 부정·리스크 뉴스 균형화** (2026-06-19): KR Google News에 `리스크/하락/우려`, US에 `risk/decline/concern` 쿼리를 추가해 부정 뉴스 수집 편향을 완화. Gemini 뉴스 요약·STEP A 선별에 부정·리스크 뉴스 중요도 상향 문구를 넣고, 뉴스 탭 감성 필터를 전체/긍정/중립/부정으로 확장. url_hash dedupe와 종목당 수집 캡 유지, Python·Node 테스트 추가.
 - [x] **Wave 2-B 시장 뉴스 백본** (2026-06-19): `market_news`/`market_news_summary` 테이블을 추가하고 MarketWatch·한경·매경(file.mk)·Google News 시장 쿼리·선택형 FRED API를 별도 수집한다. Gemini 2.5 Flash가 KR/US/Global 3분할 요약을 저장하고, 시장전망 탭에 "오늘의 시장 뉴스 요약" 카드로 노출한다.
+- [x] **Wave 2-C 지식 베이스** (2026-06-19): `ticker_context` 테이블을 추가하고 Gemini 종목 뉴스 요약을 `news_summary` 컨텍스트로 영속화한다. 종목상세 하단에 "누적 인사이트" 섹션을 추가해 최근 30일 항목을 타입별로 필터링해 보여준다.
 - [x] **Wave 1 T2~T6 UX·라벨** (2026-06-19): 뉴스 종목별 심리를 점수 내림차순으로 정렬, 종목상세 티커/종목명·시장·섹터 즉시 필터, 관심종목 섹터 PATCH 편집, `stock_note_history` 기반 복수 판단 누적·최신순 표시, 8탭의 국면·심리·우량성·5팩터 한글 표시 통일. 내부 키와 매력도 3축 비합산 원칙 유지.
 - [x] **Wave 1 T1 총자산 단일화** (2026-06-19): 오버뷰의 주식 평가액 표시와 포트폴리오의 주식+현금 표시 불일치를 제거. 종목별 최신 가격·동일 최신 환율로 계산한 `portfolio_snapshot.payload.asset_total`을 로컬 API와 두 탭이 공용 함수로 사용하고, 구형 데이터만 평가액+현금 폴백. Python·Node 회귀 테스트 추가.
 - [x] **Decimal/DB 경계 버그**: psycopg3 NUMERIC→Decimal이 float·np.log·나눗셈에 섞여 indicators/quant 0건 → `db.get_conn` float 로더 + 읽기 경계 방어 캐스팅으로 수정
@@ -703,6 +711,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v3.6 (2026-06-19) Wave 2-C: `ticker_context` 테이블과 종목별 누적 인사이트 UI를 추가해 Gemini 뉴스 요약을 최근 30일 지식 베이스로 영속화 — Codex.*
 - *v3.5 (2026-06-19) Wave 2-B: 시장 단위 원천 뉴스(`market_news`)와 KR/US/Global 요약(`market_news_summary`)을 추가하고, 시장전망 탭에 오늘의 시장 뉴스 요약 카드를 연결 — Codex.*
 - *v3.4 (2026-06-19) Wave 2-A: 종목 뉴스 수집에 부정·리스크 키워드 쿼리를 추가하고, Gemini 뉴스/큐레이션 프롬프트의 긍정 편향을 제거, 뉴스 탭 감성 필터를 전체/긍정/중립/부정으로 확장 — Codex.*
 - *v3.3 (2026-06-19) Wave 1 T7: 근거·신뢰도 동반 표시 신호 계약과 UI 추가, 자동 주문 금지 정책 유지, 기존 출력 보일러플레이트 제거 — Codex.*

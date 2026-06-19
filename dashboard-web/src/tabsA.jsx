@@ -762,6 +762,88 @@ function AxesCard({ s }) {
   );
 }
 
+function InsightHistoryCard({ items }) {
+  const [typeFilter, setTypeFilter] = useState("all");
+  const types = useMemo(() => {
+    const seen = new Map();
+    for (const item of items || []) {
+      if (!seen.has(item.type)) seen.set(item.type, item.typeLabel || item.type);
+    }
+    return Array.from(seen.entries());
+  }, [items]);
+
+  const filtered = useMemo(() => {
+    const base = items || [];
+    if (typeFilter === "all") return base;
+    return base.filter((item) => item.type === typeFilter);
+  }, [items, typeFilter]);
+
+  return (
+    <Panel
+      title="누적 인사이트"
+      sub="최근 30일 · 최신순"
+      right={(
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <button
+            onClick={() => setTypeFilter("all")}
+            style={{
+              border: `1px solid ${typeFilter === "all" ? C.acc : C.line2}`,
+              background: typeFilter === "all" ? C.accTint : C.surface,
+              color: typeFilter === "all" ? C.acc : C.ink2,
+              borderRadius: 999,
+              padding: "4px 10px",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            전체
+          </button>
+          {types.map(([type, label]) => (
+            <button
+              key={type}
+              onClick={() => setTypeFilter(type)}
+              style={{
+                border: `1px solid ${typeFilter === type ? C.acc : C.line2}`,
+                background: typeFilter === type ? C.accTint : C.surface,
+                color: typeFilter === type ? C.acc : C.ink2,
+                borderRadius: 999,
+                padding: "4px 10px",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    >
+      {filtered.length === 0 ? (
+        <div style={{ padding: "24px 18px", color: C.ink3, fontSize: 12.5 }}>
+          최근 30일 누적 인사이트가 없습니다.
+        </div>
+      ) : (
+        <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {filtered.map((item) => (
+            <div key={item.id} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: C.acc, background: C.accTint, borderRadius: 999, padding: "3px 8px" }}>
+                  {item.typeLabel || item.type}
+                </span>
+                <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>{item.validFrom}</span>
+                {item.source && <span style={{ fontSize: 10.5, color: C.ink3 }}>{item.source}</span>}
+              </div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 12.5, color: C.ink, lineHeight: 1.6 }}>{item.content}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 // PR-2: 중요 뉴스 방향 색상 (호재 초록 / 악재 빨강 / 중립 회색)
 export const dirColor = (d) => d === "호재" ? C.ok : d === "악재" ? C.bad : C.ink3;
 
@@ -1153,6 +1235,9 @@ export function StockDetail({ D, ticker, nav }) {
 
       {/* 중요 뉴스 큐레이션 (Gemini 2단계: 영향도 스코어링 → 인사이트) */}
       <CuratedNews items={s.curatedNews} />
+
+      {/* Wave 2-C: 누적 인사이트 */}
+      <InsightHistoryCard items={s.insightHistory || []} />
 
       {/* PR-2: 원문 뉴스 (news_raw, 링크 포함) */}
       {(s.articles && s.articles.length > 0) && (
