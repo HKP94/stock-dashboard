@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from src.ingest_macro import (
     MacroSpec,
+    _ensure_env,
     _fetch_fred_macro_rows,
     _fetch_market_macro_rows,
     _fetch_ecos_macro_rows,
@@ -53,7 +54,8 @@ def test_fetch_ecos_macro_rows_skips_without_key(monkeypatch):
         ecos_cycle="M",
         ecos_item_codes=("0101000",),
     )
-    assert _fetch_ecos_macro_rows(spec, start=date(2026, 1, 1), end=date(2026, 6, 30)) == []
+    with patch("src.ingest_macro.load_dotenv"):
+        assert _fetch_ecos_macro_rows(spec, start=date(2026, 1, 1), end=date(2026, 6, 30)) == []
 
 
 def test_fetch_market_macro_rows_extracts_history():
@@ -110,3 +112,9 @@ def test_run_macro_ingest_isolates_source_failures():
 
     assert "rows" in result and "errors" in result
     assert len(result["errors"]) >= 1
+
+
+def test_ensure_env_loads_dotenv_when_available():
+    with patch("src.ingest_macro.load_dotenv") as load_dotenv:
+        _ensure_env()
+    load_dotenv.assert_called_once_with(override=False)

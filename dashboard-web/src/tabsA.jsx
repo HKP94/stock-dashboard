@@ -595,6 +595,287 @@ export function StockResearchSection({ s }) {
   );
 }
 
+function DriverTonePill({ tone }) {
+  const map = {
+    support: { label: "우호", color: C.ok, bg: C.okBg },
+    oppose: { label: "부담", color: C.bad, bg: C.badBg },
+    neutral: { label: "중립", color: C.ink3, bg: C.surface2 },
+  };
+  const meta = map[tone] || map.neutral;
+  return (
+    <span style={{
+      fontSize: 10.5, fontWeight: 700, color: meta.color, background: meta.bg,
+      border: `1px solid ${meta.color}22`, borderRadius: 5, padding: "2px 7px",
+    }}>
+      {meta.label}
+    </span>
+  );
+}
+
+function DriverRow({ item, draft, busy, onDraftChange, onSave, onDelete }) {
+  const series = (item.series || []).map((point) => Number(point.value)).filter((v) => Number.isFinite(v));
+  const implication = item.implication || {};
+  return (
+    <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.line}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.name}</span>
+        <span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{item.code}</span>
+        <Pill tone={item.origin === "auto" ? "warn" : "neutral"}>{item.badge}</Pill>
+        <span style={{ fontSize: 10.5, color: C.ink2 }}>영향도 {item.weight}/5</span>
+        {item.asof && <span className="mono" style={{ marginLeft: "auto", fontSize: 9.5, color: C.ink3 }}>기준일 {item.asof}</span>}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 14, marginTop: 10, alignItems: "center" }}>
+        <div style={{ background: C.surface2, borderRadius: 8, padding: "10px 12px", minHeight: 76 }}>
+          {series.length >= 2 ? (
+            <>
+              <Sparkline data={series} color={item.deltaDay >= 0 ? C.ok : C.bad} w={130} h={34} fill />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 10.5, color: C.ink2 }}>
+                <span>{item.price != null ? item.price.toLocaleString() : "—"}</span>
+                <span className="tnum" style={{ color: item.deltaMonth >= 0 ? C.ok : item.deltaMonth < 0 ? C.bad : C.ink3 }}>
+                  {item.deltaMonth != null ? `${item.deltaMonth > 0 ? "+" : ""}${item.deltaMonth}%` : "월간 변화 없음"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
+              {item.driverSource === "proxy_none" ? "무료 프록시 없음" : "가격 이력 수집 대기 중"}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <DriverTonePill tone={implication.tone} />
+            <span style={{ fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>{cleanDisplayText(implication.text || "가격 함의 계산 대기 중")}</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.ink2, lineHeight: 1.55 }}>
+            {cleanDisplayText(item.rationale || "") || "동인 근거 없음"}
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <select
+              value={draft.weight}
+              onChange={(event) => onDraftChange(item.code, "weight", Number(event.target.value))}
+              style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "7px 9px", background: C.surface, color: C.ink }}
+            >
+              {[1, 2, 3, 4, 5].map((weight) => <option key={weight} value={weight}>영향도 {weight}</option>)}
+            </select>
+            <input
+              value={draft.rationale}
+              placeholder="근거 메모"
+              onChange={(event) => onDraftChange(item.code, "rationale", event.target.value)}
+              style={{ flex: 1, minWidth: 220, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "7px 10px", fontSize: 12.5, color: C.ink }}
+            />
+            <button onClick={() => onSave(item)} disabled={busy}
+              style={{ ...btnGhost, color: C.acc, opacity: busy ? 0.6 : 1 }}>
+              {busy ? "저장 중…" : "저장"}
+            </button>
+            <button onClick={() => onDelete(item.code)} disabled={busy}
+              style={{ ...btnGhost, color: C.bad, opacity: busy ? 0.6 : 1 }}>
+              삭제
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StockDriversSection({ s }) {
+  const [items, setItems] = useState(s.drivers || []);
+  const [drafts, setDrafts] = useState({});
+  const [busyCode, setBusyCode] = useState("");
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ driver_code: "", driver_name: "", driver_source: "yfinance_proxy", weight: 3, rationale: "" });
+
+  useEffect(() => {
+    setItems(s.drivers || []);
+    setDrafts(Object.fromEntries((s.drivers || []).map((item) => [item.code, { weight: item.weight, rationale: item.rationale || "" }])));
+    setMsg("");
+    setErr("");
+    setOpen(false);
+    setForm({ driver_code: "", driver_name: "", driver_source: "yfinance_proxy", weight: 3, rationale: "" });
+  }, [s.t, s.drivers]);
+
+  const load = async () => {
+    try {
+      const response = await fetch(`${API}/api/drivers/${s.t}`);
+      if (!response.ok) throw new Error();
+      const rows = await response.json();
+      const merged = rows.map((row) => {
+        const existing = (items || []).find((item) => item.code === row.driver_code);
+        return {
+          code: row.driver_code,
+          name: row.driver_name,
+          driverSource: row.driver_source,
+          weight: row.weight,
+          origin: row.origin,
+          badge: row.origin === "auto" ? "추정" : "사용자",
+          rationale: row.rationale || "",
+          asof: existing?.asof || null,
+          price: existing?.price ?? null,
+          deltaDay: existing?.deltaDay ?? null,
+          deltaMonth: existing?.deltaMonth ?? null,
+          series: existing?.series || [],
+          implication: existing?.implication || { tone: "neutral", text: "가격 수집 후 함의를 표시합니다." },
+        };
+      });
+      setItems(merged);
+      setDrafts(Object.fromEntries(merged.map((item) => [item.code, { weight: item.weight, rationale: item.rationale || "" }])));
+    } catch (_) {
+      setErr("드라이버 목록을 다시 불러오지 못했습니다.");
+    }
+  };
+
+  const patchDraft = (code, field, value) => {
+    setDrafts((prev) => ({ ...prev, [code]: { ...(prev[code] || {}), [field]: value } }));
+  };
+
+  const saveItem = async (item) => {
+    const draft = drafts[item.code] || { weight: item.weight, rationale: item.rationale || "" };
+    setBusyCode(item.code); setErr(""); setMsg("");
+    try {
+      const response = await fetch(`${API}/api/drivers/${s.t}/${item.code}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ weight: draft.weight, rationale: draft.rationale }),
+      });
+      if (!response.ok) throw new Error();
+      setItems((prev) => prev.map((entry) => entry.code === item.code ? { ...entry, weight: draft.weight, rationale: draft.rationale, origin: "user", badge: "사용자" } : entry));
+      setMsg("드라이버를 저장했습니다.");
+    } catch (_) {
+      setErr("저장 실패 — 데이터 서버 연결을 확인하세요.");
+    }
+    setBusyCode("");
+  };
+
+  const deleteItem = async (code) => {
+    setBusyCode(code); setErr(""); setMsg("");
+    try {
+      const response = await fetch(`${API}/api/drivers/${s.t}/${code}`, { method: "DELETE" });
+      if (!response.ok) throw new Error();
+      setItems((prev) => prev.filter((entry) => entry.code !== code));
+      setDrafts((prev) => {
+        const next = { ...prev };
+        delete next[code];
+        return next;
+      });
+      setMsg("드라이버를 삭제했습니다.");
+    } catch (_) {
+      setErr("삭제 실패 — 데이터 서버 연결을 확인하세요.");
+    }
+    setBusyCode("");
+  };
+
+  const addItem = async () => {
+    if (!form.driver_code.trim() || !form.driver_name.trim()) {
+      setErr("코드와 이름을 입력하세요.");
+      return;
+    }
+    setBusyCode("new"); setErr(""); setMsg("");
+    try {
+      const response = await fetch(`${API}/api/drivers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, ticker: s.t }),
+      });
+      if (!response.ok) throw new Error();
+      await load();
+      setOpen(false);
+      setForm({ driver_code: "", driver_name: "", driver_source: "yfinance_proxy", weight: 3, rationale: "" });
+      setMsg("사용자 드라이버를 추가했습니다.");
+    } catch (_) {
+      setErr("추가 실패 — 데이터 서버 연결을 확인하세요.");
+    }
+    setBusyCode("");
+  };
+
+  const autoMap = async () => {
+    setAutoBusy(true); setErr(""); setMsg("");
+    try {
+      const response = await fetch(`${API}/api/drivers/${s.t}/auto-map`, { method: "POST" });
+      if (!response.ok) throw new Error();
+      await load();
+      setMsg("자동 추정 드라이버를 갱신했습니다. 사용자 수정값은 유지됩니다.");
+    } catch (_) {
+      setErr("자동 추정 실패 — 데이터 서버 연결을 확인하세요.");
+    }
+    setAutoBusy(false);
+  };
+
+  return (
+    <Panel
+      title="핵심 동인"
+      sub="가격 동인 · 프록시 · 사용자 수정 우선"
+      right={
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={autoMap} disabled={autoBusy} style={{ ...btnGhost, color: C.warn, opacity: autoBusy ? 0.6 : 1 }}>
+            {autoBusy ? "추정 중…" : "자동 추정"}
+          </button>
+          <button onClick={() => setOpen((value) => !value)} style={{ ...btnGhost, color: C.acc }}>
+            {open ? "닫기 −" : "+ 추가"}
+          </button>
+        </div>
+      }
+    >
+      {open && (
+        <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.line}`, background: C.surface2, display: "grid", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 150px 120px", gap: 8 }}>
+            <input value={form.driver_code} placeholder="코드 (예: SOXX)" onChange={(event) => setForm((prev) => ({ ...prev, driver_code: event.target.value.toUpperCase() }))}
+              style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, color: C.ink }} />
+            <input value={form.driver_name} placeholder="이름 (예: 반도체 ETF)" onChange={(event) => setForm((prev) => ({ ...prev, driver_name: event.target.value }))}
+              style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, color: C.ink }} />
+            <select value={form.driver_source} onChange={(event) => setForm((prev) => ({ ...prev, driver_source: event.target.value }))}
+              style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+              <option value="yfinance_proxy">프록시 가격</option>
+              <option value="shared_macro">거시 재사용</option>
+              <option value="proxy_none">프록시 없음</option>
+            </select>
+            <select value={form.weight} onChange={(event) => setForm((prev) => ({ ...prev, weight: Number(event.target.value) }))}
+              style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+              {[1, 2, 3, 4, 5].map((weight) => <option key={weight} value={weight}>영향도 {weight}</option>)}
+            </select>
+          </div>
+          <textarea value={form.rationale} placeholder="왜 이 동인인지 1줄 메모" onChange={(event) => setForm((prev) => ({ ...prev, rationale: event.target.value }))}
+            style={{ minHeight: 58, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, fontFamily: "var(--sans)", resize: "vertical", color: C.ink }} />
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button onClick={addItem} disabled={busyCode === "new"} style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, opacity: busyCode === "new" ? 0.6 : 1 }}>
+              {busyCode === "new" ? "추가 중…" : "추가"}
+            </button>
+            <span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{s.name} · {s.t}</span>
+          </div>
+        </div>
+      )}
+
+      {msg && <div style={{ padding: "10px 16px 0", fontSize: 12, color: C.ok }}>{msg}</div>}
+      {err && <div style={{ padding: "10px 16px 0", fontSize: 12, color: C.bad }}>{err}</div>}
+
+      {(items || []).length === 0 ? (
+        <div style={{ padding: "22px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+          아직 등록된 핵심 동인이 없습니다. 자동 추정으로 시작하거나 직접 추가하세요.
+        </div>
+      ) : (
+        <div>
+          {items.map((item) => (
+            <DriverRow
+              key={item.code}
+              item={item}
+              draft={drafts[item.code] || { weight: item.weight, rationale: item.rationale || "" }}
+              busy={busyCode === item.code}
+              onDraftChange={patchDraft}
+              onSave={saveItem}
+              onDelete={deleteItem}
+            />
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 // ── PR-1+3: 매력도 3축 카드 (퀀트·컨센서스·내 판단 나란히, 단일점수 금지) ──
 function _upsideGrade(up) {
   if (up == null) return null;
@@ -1157,6 +1438,8 @@ export function StockDetail({ D, ticker, nav }) {
 
       {/* PR-2: 재무 추이 (매출·영업이익·순이익·OCF·FCF + 추세 + 컨센서스) */}
       <FinancialsCard s={s} />
+
+      <StockDriversSection s={s} />
 
       {/* PR-2: 리서치 (전문가 보고서·내 조사자료, 종목상세 통합 + 빠른추가) */}
       <StockResearchSection s={s} />

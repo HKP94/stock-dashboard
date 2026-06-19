@@ -21,6 +21,7 @@ from typing import Literal, Optional
 
 import requests
 import yfinance as yf
+from dotenv import load_dotenv
 
 from src.schemas import MacroIndicatorRow
 
@@ -79,11 +80,17 @@ GLOBAL_MARKET_SPECS: tuple[MacroSpec, ...] = (
 )
 
 
+def _ensure_env() -> None:
+    load_dotenv(override=False)
+
+
 def _fred_key() -> Optional[str]:
+    _ensure_env()
     return os.environ.get("FRED_API_KEY")
 
 
 def _ecos_key() -> Optional[str]:
+    _ensure_env()
     return os.environ.get("ECOS_API_KEY")
 
 

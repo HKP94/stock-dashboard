@@ -54,6 +54,7 @@ def _load_secrets() -> None:
 _load_secrets()
 from src.db import get_conn  # noqa: E402
 from src.compute_portfolio import compute_portfolio  # noqa: E402
+from src.ingest_drivers import auto_map_ticker_drivers  # noqa: E402
 
 # data.json 경로 (포트폴리오 갱신 시 부분 재생성)
 _DATA_JSON = Path(__file__).resolve().parent.parent / "dashboard-web" / "src" / "data.json"
@@ -113,6 +114,27 @@ class ResearchIn(BaseModel):
     title: str
     url: Optional[str] = None
     note: Optional[str] = None
+
+
+class DriverIn(BaseModel):
+    ticker: str
+    driver_code: str
+    driver_name: str
+    driver_source: str
+    weight: int = Field(..., ge=1, le=5)
+    rationale: str = ""
+    origin: str = "user"
+
+
+class DriverPatch(BaseModel):
+    weight: Optional[int] = Field(default=None, ge=1, le=5)
+    rationale: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "DriverPatch":
+        if not ({"weight", "rationale"} & self.model_fields_set):
+            raise ValueError("weight or rationale is required")
+        return self
 
 
 # ── 헬퍼 ──────────────────────────────────────────────────────────
@@ -262,6 +284,71 @@ def _patch_data_json_research(ticker: str) -> None:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
     except Exception as exc:
         logger.warning("data.json research 갱신 실패: %s", exc)
+
+
+def _fetch_driver_items(ticker: str) -> list[dict]:
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT ticker, driver_code, driver_name, driver_source, weight, origin, rationale "
+            "FROM ticker_drivers WHERE ticker=%s ORDER BY weight DESC, updated_at DESC",
+            (ticker,),
+        )
+        return [
+            {
+                "ticker": r["ticker"],
+                "driver_code": r["driver_code"],
+                "driver_name": r["driver_name"],
+                "driver_source": r["driver_source"],
+                "weight": int(r["weight"]),
+                "origin": r["origin"],
+                "rationale": r["rationale"],
+            }
+            for r in c.fetchall()
+        ]
+
+
+def _patch_data_json_drivers(ticker: str) -> None:
+    if not _DATA_JSON.exists():
+        return
+    try:
+        from src.export_dashboard_data import _load_driver_cards
+
+        with open(_DATA_JSON, encoding="utf-8") as f:
+            data = json.load(f)
+        with get_conn() as conn:
+            driver_cards = _load_driver_cards(conn, [ticker]).get(ticker, [])
+        for s in data.get("stocks", []):
+            if s["t"] == ticker:
+                s["drivers"] = driver_cards
+                break
+        with open(_DATA_JSON, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+    except Exception as exc:
+        logger.warning("data.json drivers 갱신 실패: %s", exc)
+
+
+def _patch_driver_row(conn, ticker: str, driver_code: str, body: DriverPatch) -> dict:
+    sets: list[str] = []
+    params: list[object] = []
+    changed: dict[str, object] = {}
+    if "weight" in body.model_fields_set:
+        sets.append("weight=%s")
+        params.append(body.weight)
+        changed["weight"] = body.weight
+    if "rationale" in body.model_fields_set:
+        rationale = (body.rationale or "").strip()
+        sets.append("rationale=%s")
+        params.append(rationale)
+        changed["rationale"] = rationale
+    params.extend([ticker, driver_code])
+    cursor = conn.cursor()
+    cursor.execute(
+        f"UPDATE ticker_drivers SET {', '.join(sets)}, origin='user', updated_at=now() WHERE ticker=%s AND driver_code=%s",
+        tuple(params),
+    )
+    conn.commit()
+    return changed
 
 
 # ── 포트폴리오 엔드포인트 ────────────────────────────────────────
@@ -502,6 +589,67 @@ def delete_research(item_id: int):
         raise HTTPException(404, "research item not found")
     _patch_data_json_research(row["ticker"])
     return {"ok": True, "id": item_id, "ticker": row["ticker"]}
+
+
+@app.get("/api/drivers/{ticker}")
+def get_drivers(ticker: str):
+    return _fetch_driver_items(ticker)
+
+
+@app.post("/api/drivers", status_code=201)
+def add_driver(body: DriverIn):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO ticker_drivers
+                (ticker, driver_code, driver_name, driver_source, weight, origin, rationale, updated_at)
+            VALUES (%s,%s,%s,%s,%s,'user',%s,now())
+            ON CONFLICT (ticker, driver_code) DO UPDATE SET
+                driver_name=EXCLUDED.driver_name,
+                driver_source=EXCLUDED.driver_source,
+                weight=EXCLUDED.weight,
+                origin='user',
+                rationale=EXCLUDED.rationale,
+                updated_at=now()
+            """,
+            (body.ticker, body.driver_code, body.driver_name.strip(), body.driver_source, body.weight, (body.rationale or "").strip()),
+        )
+        conn.commit()
+    _patch_data_json_drivers(body.ticker)
+    return {"ok": True, "ticker": body.ticker, "driver_code": body.driver_code}
+
+
+@app.patch("/api/drivers/{ticker}/{driver_code}", status_code=200)
+def patch_driver(ticker: str, driver_code: str, body: DriverPatch):
+    with get_conn() as conn:
+        changed = _patch_driver_row(conn, ticker, driver_code, body)
+    _patch_data_json_drivers(ticker)
+    return {"ok": True, "ticker": ticker, "driver_code": driver_code, "changed": changed}
+
+
+@app.delete("/api/drivers/{ticker}/{driver_code}", status_code=200)
+def delete_driver(ticker: str, driver_code: str):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM ticker_drivers WHERE ticker=%s AND driver_code=%s", (ticker, driver_code))
+        conn.commit()
+    _patch_data_json_drivers(ticker)
+    return {"ok": True, "ticker": ticker, "driver_code": driver_code}
+
+
+@app.post("/api/drivers/{ticker}/auto-map", status_code=200)
+def auto_map_driver(ticker: str):
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT name, sector, market FROM watchlist WHERE ticker=%s", (ticker,))
+        row = c.fetchone()
+        if not row:
+            raise HTTPException(404, "ticker not found")
+        mapped = auto_map_ticker_drivers(conn, ticker, name=row["name"], sector=row["sector"] or "", market=row["market"] or "US")
+        conn.commit()
+    _patch_data_json_drivers(ticker)
+    return {"ok": True, "ticker": ticker, "count": len(mapped)}
 
 
 # ── 포트폴리오 전략 조언 엔드포인트 (CoT) ──────────────────────────
