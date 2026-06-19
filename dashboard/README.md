@@ -3,7 +3,6 @@
 > ⚠️ **메인 대시보드는 `dashboard-web/` (React/Vite)** 입니다.
 > `dashboard/app.py`는 레거시로, 유지보수하지 않습니다.
 
-> 투자 자문 아님 / 원금 손실 가능
 
 ## 관리 도구: watchlist_admin.py
 
@@ -23,7 +22,7 @@ streamlit run dashboard/watchlist_admin.py
 접속 정보는 `.streamlit/secrets.toml` 또는 환경변수 `DB_*`를 사용합니다 (아래 참고).
 
 ## 화면 구성
-- **상단**: ATLAS 타이틀 + 날짜 + 레짐 배지(bull/neutral/bear) + 면책
+- **상단**: ATLAS 타이틀 + 날짜 + 국면 배지(강세/중립/약세)
 - **시장 스트립**: KOSPI/KOSDAQ/S&P500/NASDAQ/VIX/USD-KRW 카드
 - **관심종목 표**: composite 내림차순, 시장·보유 필터, 팩터(M/V/Q/G/S)·RSI·플래그
   - composite 색상: ≥70 초록 / 55–69 노랑 / <55 회색 / 사전필터 대상은 "필터제외"

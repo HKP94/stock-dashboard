@@ -4,11 +4,10 @@
 
 ## 0. 절대 규칙 (위반 금지)
 - **시크릿 금지**: API 키/토큰/계좌번호/비밀번호를 코드·로그·커밋·문서·시트에 **절대** 하드코딩하지 않는다. 모두 환경변수(`.env`, gitignore) 또는 n8n Credentials로만 읽는다.
-- **자동 주문 금지**: v1은 **읽기 전용**. 매수/매도/이체 등 자산을 움직이는 코드는 작성하지 않는다(요청받아도 PM에게 에스컬레이션).
+- **표시 신호 허용·자동 주문 금지**: 근거·신뢰도를 동반한 매수/관망/축소 신호는 허용한다. 주문·체결·이체 등 자산을 움직이는 코드와 외부 주문 API 호출은 작성하지 않는다.
 - **계약 준수**: DB 스키마(PRD §5.1)·JSON 스키마(PRD §5.3)를 벗어나는 입출력을 만들지 않는다. 스키마 변경은 PRD 갱신 후에만.
 - **결정론은 코드로**: 지표·퀀트 점수·룰 알림은 LLM 호출 없이 Python으로 계산한다.
 - **부분 실패 격리**: 종목 단위 `try/except`. 한 종목/소스 실패가 전체 실행을 멈추면 안 된다. 실패는 `runs.errors`에 기록.
-- **면책**: 사용자 대상 출력 텍스트에는 "투자 자문 아님 / 원금 손실 가능"을 포함한다.
 
 ## 1. 프로젝트 개요
 GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main.py`)을, **n8n + Postgres + Gemini + Hermes Agent** 구조로 재설계한다. 기존의 핵심 문제는 ① Sheets를 DB로 사용 ② KR 종목 yfinance 의존 ③ 취약한 뉴스 스크래핑 ④ 모놀리식. 이를 계층 분리·소스 교체로 해결한다. 자세한 진단·아키텍처는 `PRD.md` §1~§4.
@@ -99,12 +98,13 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **local_api CORS는 PATCH 포함 필수**: 토글류는 `PATCH /api/watchlist/{ticker}`를 쓴다. `allow_methods`에 PATCH가 빠지면 크로스오리진 프리플라이트(OPTIONS)가 400으로 막혀 **버튼이 조용히 무반응**(curl은 CORS 우회라 200이라 백엔드만 보면 못 잡음). 새 메서드(PATCH/OPTIONS 등) 엔드포인트 추가 시 CORS `allow_methods` 동기화. 토글 UI는 **낙관적 업데이트+실패 롤백+에러 표시**로 견고하게(조용한 실패 금지).
 - **스크리너 장기보유 = 안전마진**(PRD §F4-6): 단일 "F-Score 7+" 필터는 **구조적으로 빔**(신호 7·8 미수집→실질 만점 7). 안전마진 = 가치40%+퀄리티35%+재무건전성25%(F-Score 없으면 ROE·부채 대체). **F-Score는 `quant_scores.fscore`에 영속화**(export `fscore=None` 하드코딩 금지 — 과거 버그). 가중치/SAFETY_FLOOR는 export 상단 상수. 후보 0이면 빈 화면 금지("충족 종목 없음" 명시).
 - **재무 시계열**(PR-2): `fundamentals.ocf/fcf`(영업/잉여 현금흐름)는 ingest_us 현금흐름표에서 수집(FCF=OCF+CapEx). 종목상세 "재무 추이" 카드(recharts)는 연간 매출·영업이익·순이익·영업이익률·OCF·FCF. KR 일부(삼성·하이닉스 등)는 DART 결측이라 **empty state**(빈 박스 금지). 컨센서스 전망은 기존 analyst(목표가·의견)·valuation(per_f) 재사용.
-- **포트폴리오 전략 조언(`portfolio_advice.py`) = 투자 자문 절대 금지**: CoT 4단계(구성/리스크/레짐/종합)를 코드로 분리하고, **모든 단계 프롬프트에 `ABSOLUTE_RULES` 주입**(매수/매도/비중 지시 금지, 관찰·리스크 식별까지만, 면책·관찰형). 매 단계 `response_mime_type=json`+pydantic 검증. **키 없음/STEP1 LLM 실패 시 전체 규칙기반 단락**(불필요한 429 재시도 방지). LLM 호출은 `enrich_gemini._call_gemini_with_backoff` 경계 재사용(`_llm_call`로 감싸 테스트 격리). `cache_key`(보유·현금·레짐 시그니처)로 증분 캐시 — 매 조회마다 호출하지 말 것. 출력에 매매 단정 문구가 있으면 버그.
+- **포트폴리오 전략 조언(`portfolio_advice.py`)**: CoT 4단계(구성/리스크/국면/종합)를 코드로 분리하고 모든 단계에 `ABSOLUTE_RULES`를 주입한다. 코드가 제공한 표시 신호는 근거·신뢰도와 함께 설명할 수 있으나 LLM이 새 신호·목표가를 만들면 안 된다. 주문·체결·이체 실행은 금지한다. 매 단계 `response_mime_type=json`+pydantic 검증, 키 없음/STEP1 실패 시 규칙기반 폴백, `cache_key` 증분 캐시를 유지한다.
 - **매력도 3축 = 절대 단일 점수로 합치지 마라**(확인편향 방지): 종목상세 `AxesCard`는 퀀트(composite)·컨센서스(상승여력)·내 판단(별점)을 **나란히** 보여주고 각 축에 출처 라벨을 단다. 평균/가중합으로 한 숫자를 만들지 않는다. 축이 엇갈리면(한 축 높음+다른 축 낮음) "확인 필요" 코멘트로 **괴리를 드러낸다**. 컨센서스 데이터 없으면 "컨센서스 없음", 별점 없으면 "내 판단 미입력"(0점 아님).
 - **내 판단은 누적 이력**: `stock_notes`는 3축용 최신 상태, `stock_note_history`는 명시적으로 제출한 판단의 불변 이력이다. 여러 줄 입력을 타임스탬프와 함께 최신순으로 보여주며 빈 판단은 저장하지 않는다.
 - **용어 한글화는 표시 레이어만**: 내부 `regime/sentiment/momentum/value/quality/growth`와 `m/v/q/g/s` 키는 유지하고 UI에서는 국면/심리/모멘텀/가치/우량성/성장으로 표시한다.
 - **리서치 항목**(`research_items`): local_api `GET/POST/DELETE /api/research`로 종목상세에서 직접 추가·삭제(유형 youtube/article/report/quant/memo). 추가 후 `_patch_data_json_research`로 해당 종목 `researchItems`만 패치(전체 재생성 회피). 공용 `ResearchItemCard`/`toYtEmbed`는 **tabsA.jsx에 정의**(tabsB가 import — tabsB→tabsA 단방향, 순환 import 금지).
-- **오버뷰 요약밴드**(`dailyBrief`, export `_build_daily_brief`): 주목/주의/3축괴리/시장 한줄을 **규칙 기반으로 합성**(키 없어도 동작). 시장 한 줄은 이미 생성된 Gemini 시황(`market_daily.summary`)을 재사용(ad-hoc 호출 금지). 전부 '관찰/정보'로 서술, 매수매도 단정·면책 유지. **괴리 종목은 주목에서 제외**(메시지 혼선 방지). 문장 한 줄은 `_short_line`으로 소수점에서 안 끊기게.
+- **오버뷰 요약밴드**(`dailyBrief`, export `_build_daily_brief`): 주목/주의/3축괴리/시장 한줄을 규칙 기반으로 합성하고 시장 한 줄은 기존 Gemini 시황을 재사용한다. 괴리 종목은 주목에서 제외하며 문장 한 줄은 `_short_line`으로 소수점에서 끊지 않는다.
+- **표시 신호 계약**: 활성 종목의 퀀트 종합 횡단면 백분위가 70 이상이면 매수, 30 이하면 축소, 나머지는 관망이다. 신호는 `label/percentile/reason/confidence`를 항상 함께 제공하며 단독 라벨은 버그다. 계산은 `display_signals.py`의 순수 Python이고 주문 실행 경로가 없다.
 - **시장 매력도**(`market.kr/us.attractiveness`, export `_attach_market_attractiveness`): 진입 환경(우호/중립/비우호)을 레짐+시장폭(정배열율)+변동성(VIX)으로 평가하고 근거를 서술. **단일 점수로 강요 금지**(3축 원칙과 동일 — 환경 평가+근거).
 - **탭 간 종목 컨텍스트 연속성**: 전역 `ticker`(App.jsx)가 selectedTicker. 어느 탭에서든 종목을 '포커스'하면 `ticker`를 갱신해야 종목상세로 가도 유지된다(스크리너·포트폴리오는 `nav(tk)`로, 뉴스는 `selectNewsTicker`로 동기화). 새 탭에서 종목 선택 UI를 만들면 반드시 전역 `ticker`도 갱신.
 - Python 3.12, 타입힌트 필수, `pydantic` v2로 외부 데이터·LLM 출력 검증.

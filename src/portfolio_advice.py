@@ -11,9 +11,8 @@ CoT 단계:
   STEP 4 종합       — 3~4문장 관찰 요약 + 질문형 사고 유도
 
 ★ 절대 원칙(모든 단계 프롬프트에 주입):
-  - 투자 자문 금지. 매수/매도/비중 늘려라·줄여라 같은 지시 금지.
-  - 관찰 / 리스크 식별 / 데이터가 말하는 것까지만. 결정은 사용자.
-  - 매 출력 면책 + 단정 아닌 관찰형 서술.
+  - 코드가 제공한 표시 신호만 근거·신뢰도와 함께 설명.
+  - 데이터에 없는 신호 생성과 자동 주문·체결·이체 실행 금지.
 
 키 없거나 단계 실패 → 규칙기반 폴백(코드가 집중도·비중·신호로 관찰 문장 생성).
 증분: 보유·가격·레짐이 안 바뀌면 cache_key로 캐시 재사용(매 조회 호출 안 함).
@@ -39,19 +38,16 @@ logger = logging.getLogger(__name__)
 # ── 상수 ─────────────────────────────────────────────────────────
 # Gemini 2.5 (분석용). 모델명은 env로 교체 가능(하드코딩 금지 원칙).
 PORTFOLIO_ADVICE_MODEL: str = os.environ.get("PORTFOLIO_ADVICE_MODEL", "gemini-2.5-flash")
-DISCLAIMER: str = "투자 자문 아님 · 관찰·정보 제공 · 결정은 사용자 몫 · 원금 손실 가능"
 CONCENTRATION_WARN_PCT: float = 40.0   # 단일 종목 비중 경고 임계
 REGIME_KO = {"bull": "강세(위험선호)", "neutral": "중립", "bear": "약세(위험회피)"}
 
 # 모든 단계 프롬프트에 주입하는 절대 원칙
 ABSOLUTE_RULES: str = (
     "★ 절대 원칙(반드시 지켜라):\n"
-    "- 너는 투자 자문가가 아니다. '매수/매도/사라/팔아라/비중을 늘려라/줄여라/담아라/덜어내라' 같은 "
-    "지시·권유·매매 신호를 절대 만들지 마라.\n"
-    "- 오직 '관찰 / 리스크 식별 / 데이터가 말하는 것'까지만 서술한다. 최종 결정은 사용자 몫이다.\n"
-    "- 단정하지 말고 관찰형으로('~로 보입니다', '~한 점이 관찰됩니다', '~는 검토해볼 만합니다').\n"
-    "- 목표가·적정주가·매매 타이밍을 생성하지 마라.\n"
-    "- 투자 자문이 아니며 원금 손실이 가능하다.\n"
+    "- 코드가 제공한 표시 신호는 근거·신뢰도와 함께 설명할 수 있다.\n"
+    "- 데이터에 없는 신호·목표가·적정주가·매매 타이밍을 새로 만들지 마라.\n"
+    "- 주문·체결·이체 실행을 지시하거나 수행하지 마라. 신호는 화면 표시 전용이다.\n"
+    "- 구성, 리스크, 데이터 근거를 명확히 서술하고 최종 선택은 사용자에게 남겨라.\n"
 )
 
 
@@ -366,7 +362,6 @@ def _assemble(ctx, s1, s2, s3, s4, source: str) -> dict:
         "cacheKey": cache_key(ctx),
         "holdingsCount": len(ctx["holdings"]),
         "regime": REGIME_KO.get(ctx["regime"], ctx["regime"]),
-        "disclaimer": DISCLAIMER,
         "step1": s1.model_dump(),
         "step2": s2.model_dump(),
         "step3": s3.model_dump(),
@@ -382,7 +377,7 @@ def analyze_portfolio(conn: psycopg.Connection, force: bool = False) -> dict:
             "generatedAt": datetime.now().strftime("%Y-%m-%dT%H:%M"),
             "generatedAtLabel": datetime.now().strftime("%Y-%m-%d %H:%M") + " KST",
             "source": "empty", "cacheKey": cache_key(ctx), "holdingsCount": 0,
-            "regime": REGIME_KO.get(ctx["regime"], ctx["regime"]), "disclaimer": DISCLAIMER,
+            "regime": REGIME_KO.get(ctx["regime"], ctx["regime"]),
             "empty": True,
         }
 
@@ -476,4 +471,3 @@ if __name__ == "__main__":
     with get_conn() as conn:
         out = analyze_portfolio(conn, force=True)
         print(json.dumps(out, ensure_ascii=False, indent=2))
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")

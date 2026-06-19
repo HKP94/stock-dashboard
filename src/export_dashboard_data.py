@@ -29,6 +29,8 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from src.display_signals import compute_display_signals
+
 logger = logging.getLogger(__name__)
 
 # dashboard-web/src/data.json 출력 경로 (이 파일 기준으로 상대 경로)
@@ -111,7 +113,7 @@ def _safety_reason(per, pbr, roe, debt_ratio, fscore) -> str:
 
 def _rule_based_insight(close, chg, rsi, comp, sent, has_data) -> str:
     """실제 뉴스 요약이 없을 때 보여줄 '규칙기반 한 줄 인사이트'(수치+해석).
-    '분석 실패' 원문 대신 결정론적 한 줄을 항상 채운다. 매수/매도 권유 없음(투자 자문 아님)."""
+    '분석 실패' 원문 대신 결정론적 한 줄을 항상 채운다."""
     if not has_data or close is None:
         return "데이터 수집 중 — 가격·지표가 채워지면 분석이 표시됩니다."
     parts: list[str] = []
@@ -359,6 +361,25 @@ def _split_flags(flags: list[str]) -> tuple[list[str], list[str]]:
         else:
             action.append(f)
     return action, quality
+
+
+def _attach_display_signals(stocks: list[dict]) -> None:
+    rows = [
+        {
+            "ticker": stock["t"],
+            "composite": stock.get("comp"),
+            "momentum": stock.get("f", {}).get("m"),
+            "value": stock.get("f", {}).get("v"),
+            "quality": stock.get("f", {}).get("q"),
+            "growth": stock.get("f", {}).get("g"),
+            "sentiment": stock.get("f", {}).get("s"),
+        }
+        for stock in stocks
+    ]
+    signals = compute_display_signals(rows)
+    for stock in stocks:
+        signal = signals.get(stock["t"])
+        stock["signal"] = signal.model_dump() if signal else None
 
 
 # ── PR-2: 포트폴리오 holdings 로드 ────────────────────────────────────
@@ -726,7 +747,6 @@ def _build_daily_brief(stocks: list[dict], market: dict) -> dict:
         "krLine": krline,
         "usLine": usline,
         "regime": overall,
-        "disclaimer": "정보·관찰용 · 투자 자문 아님 · 원금 손실 가능",
     }
 
 
@@ -994,7 +1014,7 @@ def build_data() -> dict:
             news_asof = str(news.get("asof")) if news.get("asof") else None
             summary_raw = news.get("summary_md") or ""
             # PR-1(진단): 폴백('분석 실패'/'일시 보류')은 화면에 절대 노출하지 않는다.
-            # 실제 요약이 없으면 규칙기반 한 줄 인사이트(수치+해석)로 대체. (투자 자문 아님)
+            # 실제 요약이 없으면 규칙기반 한 줄 인사이트(수치+해석)로 대체.
             if _is_fallback_summary(summary_raw, news.get("based_on")):
                 summary_raw = ""
                 news_asof = None
@@ -1110,6 +1130,8 @@ def build_data() -> dict:
                 "note": notes_map.get(tk),
                 "noteHistory": note_history_map.get(tk, []),
             })
+
+        _attach_display_signals(stocks)
 
         # PR-3: 액션 신호만 카운트
         rules_count = sum(len(s["flagsAction"]) for s in stocks)

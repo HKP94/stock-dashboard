@@ -34,3 +34,7 @@ const REGIME_LABELS = { bull: '강세', neutral: '중립', bear: '약세' };
 
 export const factorLabel = (key) => FACTOR_LABELS[key] ?? key;
 export const regimeLabel = (key) => REGIME_LABELS[key] ?? key;
+
+export function isCompleteSignal(signal) {
+  return Boolean(signal?.label && signal?.reason && Number.isFinite(Number(signal?.confidence)));
+}

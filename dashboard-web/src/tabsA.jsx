@@ -4,7 +4,7 @@ import {
   C, fmtPrice, compColor, sentMeta, flagTone,
   MonoCaps, Num, ChangePct, SentBadge, HoldDot, AlignBadge,
   CompositeCell, MiniBars, FactorBar, Sparkline, PriceChart,
-  SentStack, Pill, RegimeBadge, btnGhost,
+  SentStack, Pill, RegimeBadge, SignalCard, btnGhost,
 } from './ui.jsx';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -203,7 +203,6 @@ function DailyBriefBand({ b, regimes, nav }) {
         <Col label="▼ 주의 (위험 신호)" color={C.bad} items={b.cautions} empty="오늘 두드러진 주의 신호 없음" />
         <Col label="⚠ 3축 괴리 (확인 필요)" color={C.warn} items={b.diverge} empty="퀀트·컨센서스 큰 괴리 없음" />
       </div>
-      <div style={{ padding: "7px 16px", borderTop: `1px solid ${C.line}`, fontSize: 10, color: C.ink3 }}>{b.disclaimer}</div>
     </div>
   );
 }
@@ -771,7 +770,7 @@ export function CuratedNews({ items }) {
   const list = items || [];
   return (
     <Panel title="중요 뉴스" sub="Gemini 큐레이션 · 영향도순"
-      right={<MonoCaps style={{ fontSize: 9 }} color={C.ink3}>참고용 · 투자 자문 아님</MonoCaps>}>
+      right={<MonoCaps style={{ fontSize: 9 }} color={C.ink3}>영향도순</MonoCaps>}>
       {list.length === 0 ? (
         <div style={{ padding: "22px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
           주목할 만한 중요 뉴스가 없습니다.
@@ -920,6 +919,8 @@ export function StockDetail({ D, ticker, nav }) {
           <div style={{ marginTop: 3 }}><ChangePct v={s.chg} size={16} /></div>
         </div>
       </div>
+
+      <SignalCard signal={s.signal} />
 
       {/* PR-1: 개선된 종목 네비게이션 */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1082,7 +1083,7 @@ export function StockDetail({ D, ticker, nav }) {
 
       {/* PR-2: 내 보유 정보 카드 (is_holding=true 종목만) */}
       {s.holding && (
-        <Panel title="내 보유 정보" sub="투자 자문 아님 / 원금 손실 가능">
+        <Panel title="내 보유 정보" sub="보유 수량·평가 손익">
           <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)" }}>
             {[
               ["수량", s.holding.qty != null ? s.holding.qty : "—"],

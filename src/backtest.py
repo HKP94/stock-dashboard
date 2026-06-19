@@ -13,7 +13,7 @@ backtest.py — 멀티전략 비교 (진짜 백테스트 + 회고)
 모멘텀 공식(PRD §F4): 0.10·Z(1M) + 0.20·Z(3M) + 0.30·Z(6M) + 0.40·Z(12-1M),
 12-1M = 최근 1개월 skip(단기 되돌림 제거). compute_quant._zscore 재사용.
 
-⚠️ 투자 자문 아님 / 원금 손실 가능. 과거 성과는 미래를 보장하지 않는다.
+과거 성과는 미래 성과를 보장하지 않는다.
 """
 
 from __future__ import annotations
@@ -390,4 +390,4 @@ if __name__ == "__main__":
             errors.append({"step": "backtest", "error": str(exc), "ts": datetime.utcnow().isoformat()})
             status = "failed"
         log_run_finish(conn, run_id, status=status, errors=errors)
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능. 과거 성과는 미래를 보장하지 않습니다.")
+    print("\n과거 성과는 미래 성과를 보장하지 않습니다.")

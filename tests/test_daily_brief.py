@@ -70,9 +70,9 @@ class TestDailyBrief:
         dv = {d["t"] for d in b["diverge"]}
         assert hi.isdisjoint(dv)  # 겹치지 않음
 
-    def test_disclaimer_present(self):
+    def test_disclaimer_boilerplate_absent(self):
         b = _build_daily_brief([_stock("A", "에이", 80)], MARKET)
-        assert "투자 자문 아님" in b["disclaimer"]
+        assert "disclaimer" not in b
 
 
 class TestMarketAttractiveness:

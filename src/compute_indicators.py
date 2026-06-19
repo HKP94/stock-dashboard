@@ -219,5 +219,3 @@ if __name__ == "__main__":
             conn.rollback()
             log_run_finish(conn, run_id, status="failed", errors=[{"error": str(exc)}])
             raise
-
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")

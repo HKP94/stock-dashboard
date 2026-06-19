@@ -413,7 +413,7 @@ class TestBuildNewsPrompt:
 
     def test_no_buy_sell_recommendation(self):
         prompt = _build_news_prompt("AAPL", "애플", SAMPLE_NEWS_ITEMS)
-        assert "매수/매도 의견이나 목표가를 만들지 마라" in prompt
+        assert "표시 신호를 새로 만들지 마라" in prompt
 
 
 class TestBuildMarketPrompt:
@@ -431,4 +431,4 @@ class TestBuildMarketPrompt:
 
     def test_no_stock_recommendation(self):
         prompt = _build_market_prompt({}, {})
-        assert "매매 권유 금지" in prompt
+        assert "주문 실행 지시 금지" in prompt

@@ -133,12 +133,5 @@ export default function App() {
       {tab === "manage" && <WatchlistAdmin D={D} />}
     </div>
 
-    {/* fixed disclaimer */}
-    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(6px)", borderTop: `1px solid ${C.line2}` }}>
-      <div style={{ maxWidth: 1280, margin: "0 auto", padding: "9px 24px", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.ink3, letterSpacing: "0.04em", fontFamily: "var(--mono)" }}>DISCLAIMER</span>
-        <span style={{ fontSize: 11, color: C.ink3, lineHeight: 1.4 }}>본 화면은 정보·정량 분석 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다.</span>
-      </div>
-    </div>
   </div>;
 }

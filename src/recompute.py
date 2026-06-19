@@ -11,7 +11,6 @@ recompute.py — 기존 prices_daily 기준 지표·퀀트 재계산·저장 (1�
 
 실행: python -m src.recompute
 
-⚠️ 투자 자문 아님 / 원금 손실 가능
 """
 
 from __future__ import annotations
@@ -94,8 +93,6 @@ def run_recompute() -> dict:
 
 
 if __name__ == "__main__":
-    import sys
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -105,4 +102,3 @@ if __name__ == "__main__":
         "recompute 결과: indicators %d종목 / quant %d행 / 에러 %d건",
         result["indicators"], result["quant"], len(result["errors"]),
     )
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능", file=sys.stderr)

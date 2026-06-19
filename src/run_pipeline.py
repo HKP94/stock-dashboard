@@ -14,7 +14,7 @@ run_pipeline.py — ATLAS 일일 파이프라인 실행기
 전체 실행은 runs 테이블에 기록.
 시크릿은 환경변수에서만. 자동 주문 없음.
 
-⚠️ 투자 자문 아님 / 원금 손실 가능
+자동 주문 없음.
 """
 
 from __future__ import annotations
@@ -320,7 +320,7 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
     한 단계 실패해도 다음 단계 계속.
     runs 테이블에 실행 이력 기록.
 
-    ⚠️ 투자 자문 아님 / 원금 손실 가능
+    자동 주문 없음.
     """
     asof = asof or date.today()
     errors: list[dict] = []
@@ -365,12 +365,9 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
 
 
 if __name__ == "__main__":
-    import sys
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     records = run_pipeline()
     logger.info("조립된 레코드: %d종목", len(records))
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능", file=sys.stderr)

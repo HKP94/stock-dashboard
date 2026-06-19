@@ -6,7 +6,6 @@ local_api.py — ATLAS 로컬 쓰기 API (FastAPI, 127.0.0.1:8765 전용)
   - CORS: http://localhost:5173 만 허용.
   - 자동 주문/매매 없음. 메타데이터·메모 쓰기만.
   - 시크릿 하드코딩 금지. DB 접속은 환경변수 또는 .streamlit/secrets.toml.
-  - 투자 자문 아님 / 원금 손실 가능.
 
 실행:
   python -m src.local_api
@@ -531,7 +530,7 @@ def get_portfolio_advice():
 
 @app.post("/api/portfolio/advice", status_code=200)
 def make_portfolio_advice():
-    """전략 조언 재생성(CoT, force) → data.json 갱신 + 결과 반환. 투자 자문 아님."""
+    """전략 조언 재생성(CoT, force) → data.json 갱신 + 결과 반환."""
     from src.portfolio_advice import analyze_portfolio
     with get_conn() as conn:
         advice = analyze_portfolio(conn, force=True)
@@ -639,6 +638,5 @@ def patch_watchlist(ticker: str, body: WatchlistPatch):
 # ── 실행 ──────────────────────────────────────────────────────────
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    print("⚠️  투자 자문 아님 / 원금 손실 가능")
     print("ATLAS Local API — http://127.0.0.1:8765/docs")
     uvicorn.run("src.local_api:app", host="127.0.0.1", port=8765, reload=True)

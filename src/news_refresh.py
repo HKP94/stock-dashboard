@@ -12,7 +12,7 @@ news_refresh.py — 가벼운 갱신 잡 (하루 2회 중 18:00 KST용)
         → 두 잡으로 KR/US 모두 최신 거래일 가격 확보.
 
 실행: python -m src.news_refresh
-⚠️ 투자 자문 아님 / 원금 손실 가능. 자동 주문 없음.
+자동 주문 없음.
 """
 
 from __future__ import annotations
@@ -159,4 +159,3 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     r = run_news_refresh()
     print(f"\n신규 뉴스 {r['new_news']}건 / 요약 {r['enriched']}종목 / 에러 {len(r['errors'])}")
-    print("⚠️ 투자 자문 아님 / 원금 손실 가능")

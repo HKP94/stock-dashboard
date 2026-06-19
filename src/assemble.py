@@ -9,8 +9,7 @@ assemble.py — 종목 일일 레코드 조립 (PRD §5.2)
   assemble_daily(conn, asof=None) → list[StockDailyRecord]
   assemble_one(ticker, conn, asof=None) → StockDailyRecord | None
 
-⚠️ 투자 자문 아님 / 원금 손실 가능
-   출력 데이터는 정보·참고용이며 매수/매도 신호가 아닙니다.
+신호는 근거·신뢰도와 함께 표시되며 자동 주문을 실행하지 않습니다.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from typing import Optional
 import psycopg
 
 from src.db import get_conn, log_run_finish, log_run_start
+from src.display_signals import compute_display_signals
 from src.schemas import (
     AnalystView,
     FundamentalsView,
@@ -501,7 +501,7 @@ def assemble_daily(
     Supabase Pooler idle timeout(연결 끊김 → "the connection is closed") 회피.
     조립(_build_record)은 메모리상 dict로만 수행 — DB 미접근, 종목 단위 try/except 격리.
 
-    ⚠️ 반환값은 참고용이며 투자 자문이 아닙니다.
+    반환값의 신호는 표시 전용이며 주문 실행 경로가 없습니다.
     """
     asof = asof or date.today()
     watchlist = _q_watchlist(conn)
@@ -539,6 +539,14 @@ def assemble_daily(
             logger.error("%s: 조립 실패 — %s", ticker, exc, exc_info=True)
             # 실패 종목 스킵, 다음 종목 계속
 
+    signal_rows = [
+        {"ticker": record.ticker, **record.quant.model_dump(exclude={"signal"})}
+        for record in results
+    ]
+    signals = compute_display_signals(signal_rows)
+    for record in results:
+        record.quant.signal = signals.get(record.ticker)
+
     logger.info("assemble_daily: %d/%d 종목 조립 완료", len(results), len(tickers))
     return results
 
@@ -548,8 +556,6 @@ def assemble_daily(
 # ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import sys
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -572,5 +578,3 @@ if __name__ == "__main__":
             status = "failed"
 
         log_run_finish(conn, run_id, status=status, errors=errors)
-
-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능", file=sys.stderr)

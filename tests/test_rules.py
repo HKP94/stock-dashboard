@@ -5,7 +5,6 @@ tests/test_rules.py — rules.py 단위 테스트
 각 룰마다 True/False 케이스, 경계값, None 처리 검증.
 
 ⚠️ 테스트 합격이 투자 판단 근거가 되지 않습니다.
-   투자 자문 아님 / 원금 손실 가능.
 """
 
 from __future__ import annotations

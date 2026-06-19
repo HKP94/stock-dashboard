@@ -7,7 +7,7 @@ PR-2 (F1): 수동 입력된 portfolio_holdings와 prices_daily 최신가를 결�
 - portfolio(ticker, asof) upsert: 종목별 당일 평가
 - portfolio_snapshot(asof) upsert: 전체 합산 스냅샷
 
-자동 주문 없음 / 투자 자문 아님 / 원금 손실 가능
+자동 주문 없음.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) -> 
     portfolio(종목별 행)는 원통화(qty×price) 그대로 저장 — 통화 정보는 holdings에 있음.
 
     Returns summary dict for logging.
-    ⚠️ 투자 자문 아님 / 원금 손실 가능
+    자동 주문 없음.
     """
     asof = asof or date.today()
     asof_ts = datetime.combine(asof, datetime.min.time()).replace(tzinfo=timezone.utc)
