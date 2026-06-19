@@ -30,6 +30,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── ingest_kis.py       # KIS Developers 옵션 보조(키 있을 때만, ROE/부채/컨센서스 보강)
 │   ├── ingest_news.py      # 뉴스 수집 + url_hash dedupe → news_raw
 │   ├── ingest_market.py    # 지수/VIX/환율/금리 → market_daily
+│   ├── ingest_index_history.py  # KOSPI/S&P500/NASDAQ 5년 이력 → index_daily (true backtest 비교용)
 │   ├── ingest_portfolio.py # KIS 잔고(또는 선택 옵션) → portfolio*
 │   ├── compute_indicators.py  # SMA/RSI/추세기울기/정배열 (기존 main.py 로직 이식)
 │   ├── compute_quant.py    # 팩터 스코어링 (PRD §F4)
@@ -38,7 +39,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── assemble.py         # 종목 일일 레코드(PRD §5.2) 조립 뷰
 │   ├── run_pipeline.py     # 일일 파이프라인 실행기(수집→연산→LLM→조립)
 │   ├── send_telegram.py    # 아침 브리핑 텔레그램 발송
-│   ├── backfill.py         # 누락/부족 종목 자동탐지 + 2년치 가격 백필 + 지표·퀀트 재계산
+│   ├── backfill.py         # 누락/부족 종목 자동탐지 + 2년/5년 가격 백필 + 지표·퀀트 재계산
 │   ├── news_refresh.py     # 18:00 KST 잡: 경량 가격갱신(prices+indicators+quant) + 뉴스+요약+export
 │   ├── recompute.py        # prices_daily 기준 indicators→quant 재계산(1회용)
 │   ├── compute_portfolio.py  # portfolio_holdings × prices_daily → portfolio upsert (F1, USD→KRW 환산)
@@ -82,6 +83,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 ## 3. 코딩 컨벤션 & PR 표준 절차
 - **PR마다 PRD.md §11 로드맵과 변경 이력을 갱신한다** (PR 본문에 '무엇을/왜/어떻게 검증'과 함께). 이 규칙은 모든 PR에 상시 적용된다.
 - **백테스트 vs 회고 절대 구분 (PRD §F7)**: 모멘텀만 진짜 백테스트(과거 시점 데이터만). 가치·퀄리티·성장·복합은 오늘 스냅샷뿐이라 "회고"(선정시점편향) — 화면·코드에서 절대 혼동 금지, 회고는 "백테스트 아님" 경고 필수.
+- **장기 벤치마크 이력(W3-A)**: KOSPI/S&P500/NASDAQ 5년 일봉은 `index_daily`에 저장한다. `market_daily`는 최신 스냅샷/요약 전용이며, true backtest 비교 시 두 테이블을 혼용하지 않는다.
 - **시장 뉴스 pseudo-ticker**: 시장 시황 뉴스는 `_MARKET_KR`/`_MARKET_US` ticker로 `news_raw`에 저장. 이들은 watchlist에 없으므로 종목 카드/enrich 종목요약 대상에서 제외(`enrich_news_batch`는 watchlist 종목만 처리).
 - **시장 뉴스 영속화(W2-B)**: 종목 뉴스와 별도로 `market_news`(원천)와 `market_news_summary`(일일 KR/US/Global 요약)를 유지한다. 시장전망 탭의 "오늘의 시장 뉴스 요약"은 이 테이블만 읽는다.
 - **누적 인사이트 영속화(W2-C)**: Gemini 종목 뉴스 요약은 `ticker_context`에도 `context_type='news_summary'`로 저장한다. 종목상세 "누적 인사이트"는 최근 30일만 보여주고, `valid_until < today` 항목은 삭제하지 말고 조회에서만 제외한다.

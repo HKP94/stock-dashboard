@@ -240,6 +240,22 @@ ALTER TABLE market_daily ADD COLUMN IF NOT EXISTS summary_kr_md TEXT;
 ALTER TABLE market_daily ADD COLUMN IF NOT EXISTS summary_us_md TEXT;
 
 -- =============================================================
+-- 장기 벤치마크 지수 이력 (W3-A — true backtest 비교용 5년 일봉)
+-- latest snapshot용 market_daily와 분리해 시계열 연속성/비교 기준을 보존한다.
+-- =============================================================
+CREATE TABLE IF NOT EXISTS index_daily (
+    index_code   TEXT        NOT NULL,
+    asof         DATE        NOT NULL,
+    close        NUMERIC     NOT NULL,
+    source       TEXT        NOT NULL DEFAULT 'yfinance',
+    fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (index_code, asof)
+);
+
+CREATE INDEX IF NOT EXISTS idx_index_daily_asof
+    ON index_daily (asof DESC, index_code);
+
+-- =============================================================
 -- 실행 로그 (관측성 — 모든 파이프라인 실행 기록)
 -- =============================================================
 CREATE TABLE IF NOT EXISTS runs (
