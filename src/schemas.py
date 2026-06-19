@@ -120,6 +120,27 @@ class NewsAnalysisRow(BaseModel):
     curated: list[dict] = Field(default_factory=list)  # 중요뉴스 큐레이션 결과
 
 
+class MarketNewsRow(BaseModel):
+    source: str
+    title: str
+    url: str
+    published_at: Optional[datetime] = None
+    url_hash: str = Field(default="")
+
+    @model_validator(mode="after")
+    def _fill_url_hash(self) -> "MarketNewsRow":
+        if not self.url_hash:
+            self.url_hash = hashlib.sha256(self.url.encode()).hexdigest()
+        return self
+
+
+class MarketNewsSummaryRow(BaseModel):
+    summary_date: date
+    kr_summary: str
+    us_summary: str
+    global_summary: str
+
+
 class QuantScoresRow(BaseModel):
     ticker: str
     asof: date
@@ -296,3 +317,9 @@ class MarketSummaryOutput(BaseModel):
         if not v:
             raise ValueError("field must have at least one item")
         return v
+
+
+class MarketNewsDigestOutput(BaseModel):
+    kr_summary: str
+    us_summary: str
+    global_summary: str

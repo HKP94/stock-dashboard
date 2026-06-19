@@ -17,12 +17,14 @@ from src.enrich_gemini import (
     BODY_CAP,
     TRANSIENT_RETRIES,
     _build_market_prompt,
+    _build_market_news_digest_prompt,
     _build_news_prompt,
     _call_gemini_for_market,
     _call_gemini_for_news,
     _call_gemini_with_backoff,
     _is_transient,
     _neutral_news_fallback,
+    _parse_market_news_digest_output,
     _parse_market_output,
     _parse_news_output,
     is_fallback_summary,
@@ -54,6 +56,11 @@ VALID_MARKET_PAYLOAD: dict = {
 
 VALID_NEWS_JSON: str = json.dumps(VALID_NEWS_PAYLOAD, ensure_ascii=False)
 VALID_MARKET_JSON: str = json.dumps(VALID_MARKET_PAYLOAD, ensure_ascii=False)
+VALID_MARKET_DIGEST_JSON: str = json.dumps({
+    "kr_summary": "한국 시장 요약",
+    "us_summary": "미국 시장 요약",
+    "global_summary": "글로벌 거시 요약",
+}, ensure_ascii=False)
 
 SAMPLE_NEWS_ITEMS: list[dict] = [
     {"title": "애플 실적 발표", "body": "내용 요약", "published_at": None, "source": "yahoo"},
@@ -432,3 +439,21 @@ class TestBuildMarketPrompt:
     def test_no_stock_recommendation(self):
         prompt = _build_market_prompt({}, {})
         assert "주문 실행 지시 금지" in prompt
+
+    def test_market_news_digest_prompt_contains_sections(self):
+        prompt = _build_market_news_digest_prompt({
+            "KR": [{"source": "hankyung_rss_kr", "title": "코스피 상승", "published_at": None}],
+            "US": [{"source": "marketwatch_rss_us", "title": "S&P500 상승", "published_at": None}],
+            "GLOBAL": [{"source": "fred_api_global", "title": "물가 지표", "published_at": None}],
+        })
+        assert "[KR]" in prompt
+        assert "[US]" in prompt
+        assert "[GLOBAL]" in prompt
+
+
+class TestMarketNewsDigestOutput:
+    def test_parse_market_news_digest_output(self):
+        out = _parse_market_news_digest_output(VALID_MARKET_DIGEST_JSON)
+        assert out.kr_summary == "한국 시장 요약"
+        assert out.us_summary == "미국 시장 요약"
+        assert out.global_summary == "글로벌 거시 요약"

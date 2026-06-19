@@ -33,6 +33,7 @@ from src.compute_quant import compute_quant_universe
 from src.db import (
     get_conn,
     insert_news_raw,
+    insert_market_news,
     log_run_finish,
     log_run_start,
     upsert_analyst,
@@ -43,9 +44,10 @@ from src.db import (
     upsert_quant_scores,
     upsert_valuation,
 )
-from src.enrich_gemini import enrich_market_summary, enrich_news_batch, reenrich_stale_fallbacks
+from src.enrich_gemini import enrich_market_summary, enrich_news_batch, reenrich_stale_fallbacks, summarize_market_news_digest
 from src.ingest_kr import run_kr_ingest
 from src.ingest_market import run_market_ingest
+from src.ingest_market_news import run_market_news_ingest
 from src.ingest_news import run_news_ingest
 from src.ingest_us import run_us_ingest
 from src.schemas import StockDailyRecord
@@ -201,6 +203,20 @@ def _step_ingest_news(conn: psycopg.Connection, all_tickers: list[str], errors: 
         errors.append(_err("ingest_news", exc))
 
 
+def _step_ingest_market_news(conn: psycopg.Connection, errors: list) -> None:
+    logger.info("Step 4b: 시장 뉴스 수집")
+    try:
+        result = run_market_news_ingest()
+        inserted = insert_market_news(conn, result.get("rows", []))
+        conn.commit()
+        errors.extend(result.get("errors", []))
+        logger.info("Step 4b 완료: market_news 신규 %d건 삽입 (commit)", inserted)
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Step 4b 실패: %s", exc, exc_info=True)
+        errors.append(_err("ingest_market_news", exc))
+
+
 def _step_compute_indicators(conn: psycopg.Connection, all_tickers: list[str], errors: list) -> None:
     logger.info("Step 5: 기술적 지표 계산 (%d종목)", len(all_tickers))
     ok, fail, n_rows = 0, 0, 0
@@ -269,6 +285,15 @@ def _step_enrich_gemini(conn: psycopg.Connection, errors: list) -> None:
         conn.rollback()
         logger.error("Step 7b(market_summary) 실패: %s", exc, exc_info=True)
         errors.append(_err("enrich_market", exc))
+
+    try:
+        digest_ok = summarize_market_news_digest(conn)
+        conn.commit()
+        logger.info("Step 7c 완료: 시장 뉴스 요약 %s (commit)", "저장" if digest_ok else "스킵")
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Step 7c(market_news_digest) 실패: %s", exc, exc_info=True)
+        errors.append(_err("market_news_digest", exc))
 
 
 def _step_compute_portfolio(conn: psycopg.Connection, errors: list) -> None:
@@ -343,6 +368,7 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
             _step_ingest_kr(conn, kr_tickers, errors)
             _step_ingest_us(conn, us_tickers, errors)
             _step_ingest_news(conn, all_tickers, errors)
+            _step_ingest_market_news(conn, errors)
             _step_compute_indicators(conn, all_tickers, errors)
             _step_compute_quant(conn, all_tickers, errors)
             _step_enrich_gemini(conn, errors)

@@ -123,6 +123,31 @@ CREATE INDEX IF NOT EXISTS idx_news_raw_ticker_published
     ON news_raw (ticker, published_at DESC);
 
 -- =============================================================
+-- 시장 뉴스 원천 (W2-B)
+-- =============================================================
+CREATE TABLE IF NOT EXISTS market_news (
+    id           BIGSERIAL   PRIMARY KEY,
+    source       TEXT        NOT NULL,
+    title        TEXT        NOT NULL,
+    url          TEXT        NOT NULL,
+    url_hash     TEXT        NOT NULL UNIQUE,
+    published_at TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_news_published
+    ON market_news (published_at DESC, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS market_news_summary (
+    id             BIGSERIAL   PRIMARY KEY,
+    summary_date   DATE        NOT NULL UNIQUE,
+    kr_summary     TEXT        NOT NULL,
+    us_summary     TEXT        NOT NULL,
+    global_summary TEXT        NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =============================================================
 -- 뉴스 LLM 분석 결과 (enrich_gemini.py → §5.3-A 저장)
 -- =============================================================
 CREATE TABLE IF NOT EXISTS news_analysis (

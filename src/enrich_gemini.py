@@ -32,10 +32,13 @@ from src.db import (
     log_run_finish,
     log_run_start,
     upsert_market_daily,
+    upsert_market_news_summary,
     upsert_news_analysis,
 )
 from src.schemas import (
     MarketDailyRow,
+    MarketNewsDigestOutput,
+    MarketNewsSummaryRow,
     MarketSummaryOutput,
     NewsAnalysisRow,
     NewsSummaryOutput,
@@ -185,6 +188,11 @@ def _parse_market_output(text: str) -> MarketSummaryOutput:
     """JSON 텍스트 → MarketSummaryOutput pydantic 검증. 실패 시 예외."""
     data = json.loads(text)
     return MarketSummaryOutput.model_validate(data)
+
+
+def _parse_market_news_digest_output(text: str) -> MarketNewsDigestOutput:
+    data = json.loads(text)
+    return MarketNewsDigestOutput.model_validate(data)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -341,6 +349,32 @@ def _build_region_market_prompt(
         '"drivers":["오늘 시장을 움직인 요인 2~4개(해석 포함)"],"kr_us_note":"이 시장 국면 해석 1~2문장",'
         '"watch_today":["향후 체크포인트 2~4개"],'
         '"summary_md":"- [수치/사실] → [의미] 형태 불릿 3~5줄(국면해석·리스크/기회·섹터 시사점 포함)"}'
+    )
+
+
+def _build_market_news_digest_prompt(grouped_news: dict[str, list[dict]]) -> str:
+    def _section(name: str, items: list[dict]) -> str:
+        lines = []
+        for item in items[:10]:
+            pub = item.get("published_at")
+            d = pub.strftime("%Y-%m-%d") if hasattr(pub, "strftime") else "날짜미상"
+            lines.append(f"- {d} | {item.get('source')} | {(item.get('title') or '')[:140]}")
+        return f"[{name}]\n" + ("\n".join(lines) if lines else "- 관련 기사 없음")
+
+    sections = "\n\n".join([
+        _section("KR", grouped_news.get("KR", [])),
+        _section("US", grouped_news.get("US", [])),
+        _section("GLOBAL", grouped_news.get("GLOBAL", [])),
+    ])
+    return (
+        "너는 글로벌 시장 뉴스 데스크 편집장이다. 아래 시장 뉴스 원문 묶음을 읽고 "
+        "한국 시장, 미국 시장, 글로벌 거시를 각각 2~4문장으로 요약하라.\n"
+        "- 수치/사실과 의미를 함께 써라.\n"
+        "- 주문·종목 매수/매도 지시는 금지한다.\n"
+        "- 같은 사건이 여러 기사에 반복되면 한 번만 압축하라.\n\n"
+        "아래 JSON으로만 답하라:\n"
+        '{"kr_summary":"한국 시장 요약","us_summary":"미국 시장 요약","global_summary":"글로벌 거시 요약"}\n\n'
+        f"{sections}"
     )
 
 
@@ -580,6 +614,27 @@ def _get_market_news(
     with conn.cursor() as cur:
         cur.execute(sql, (pseudo_ticker, limit))
         return [dict(row) for row in cur.fetchall()]
+
+
+def _get_market_news_digest_rows(conn: psycopg.Connection, limit: int = 12) -> dict[str, list[dict]]:
+    sql = """
+        SELECT source, title, published_at
+        FROM market_news
+        ORDER BY published_at DESC NULLS LAST, created_at DESC
+        LIMIT %s
+    """
+    grouped = {"KR": [], "US": [], "GLOBAL": []}
+    with conn.cursor() as cur:
+        cur.execute(sql, (limit * 3,))
+        for row in cur.fetchall():
+            source = row["source"] or ""
+            bucket = "GLOBAL"
+            if source.endswith("_kr"):
+                bucket = "KR"
+            elif source.endswith("_us"):
+                bucket = "US"
+            grouped[bucket].append(dict(row))
+    return {k: v[:limit] for k, v in grouped.items()}
 
 
 def _get_sentiment_rollup(
@@ -854,6 +909,37 @@ def enrich_market_summary(
     return True
 
 
+def summarize_market_news_digest(
+    conn: psycopg.Connection,
+    asof: Optional[date] = None,
+) -> bool:
+    asof = asof or date.today()
+    grouped_news = _get_market_news_digest_rows(conn)
+    if not any(grouped_news.values()):
+        logger.warning("market_news 없음 — 시장 뉴스 요약 스킵")
+        return False
+
+    client = _get_gemini_client()
+    model = _get_synth_model()
+    try:
+        prompt = _build_market_news_digest_prompt(grouped_news)
+        text = _call_gemini_with_backoff(client, model, prompt)
+        output = _parse_market_news_digest_output(text)
+    except Exception as exc:
+        logger.error("시장 뉴스 요약 실패: %s", exc, exc_info=True)
+        return False
+
+    row = MarketNewsSummaryRow(
+        summary_date=asof,
+        kr_summary=output.kr_summary,
+        us_summary=output.us_summary,
+        global_summary=output.global_summary,
+    )
+    upsert_market_news_summary(conn, row)
+    logger.info("시장 뉴스 요약 저장 완료 (%s)", asof)
+    return True
+
+
 # ──────────────────────────────────────────────────────────────
 # 실행 진입점 (python -m src.enrich_gemini)
 # ──────────────────────────────────────────────────────────────
@@ -882,6 +968,9 @@ if __name__ == "__main__":
 
             market_ok = enrich_market_summary(conn)
             logger.info("시황 종합: %s", "완료" if market_ok else "스킵/실패")
+
+            digest_ok = summarize_market_news_digest(conn)
+            logger.info("시장 뉴스 요약: %s", "완료" if digest_ok else "스킵/실패")
 
         except Exception as exc:
             logger.error("enrich_gemini 전체 오류: %s", exc, exc_info=True)

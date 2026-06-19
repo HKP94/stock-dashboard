@@ -29,6 +29,8 @@ from src.schemas import (
     FundamentalsRow,
     IndicatorDailyRow,
     MarketDailyRow,
+    MarketNewsRow,
+    MarketNewsSummaryRow,
     NewsAnalysisRow,
     NewsRawRow,
     PortfolioRow,
@@ -281,6 +283,22 @@ def insert_news_raw(conn: psycopg.Connection, rows: list[NewsRawRow]) -> int:
     return inserted
 
 
+def insert_market_news(conn: psycopg.Connection, rows: list[MarketNewsRow]) -> int:
+    """url_hash 충돌 시 무시(dedupe). 실제 삽입된 행 수 반환."""
+    sql = """
+        INSERT INTO market_news (source, title, url, url_hash, published_at)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (url_hash) DO NOTHING
+    """
+    inserted = 0
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(sql, (r.source, r.title, r.url, r.url_hash, r.published_at))
+            inserted += cur.rowcount
+    logger.debug("insert_market_news: %d new / %d total", inserted, len(rows))
+    return inserted
+
+
 def upsert_news_analysis(conn: psycopg.Connection, rows: list[NewsAnalysisRow]) -> None:
     sql = """
         INSERT INTO news_analysis
@@ -416,6 +434,20 @@ def upsert_market_daily(conn: psycopg.Connection, row: MarketDailyRow) -> None:
             ),
         )
     logger.debug("upsert_market_daily: asof=%s", row.asof)
+
+
+def upsert_market_news_summary(conn: psycopg.Connection, row: MarketNewsSummaryRow) -> None:
+    sql = """
+        INSERT INTO market_news_summary (summary_date, kr_summary, us_summary, global_summary)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (summary_date) DO UPDATE SET
+            kr_summary     = EXCLUDED.kr_summary,
+            us_summary     = EXCLUDED.us_summary,
+            global_summary = EXCLUDED.global_summary
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (row.summary_date, row.kr_summary, row.us_summary, row.global_summary))
+    logger.debug("upsert_market_news_summary: summary_date=%s", row.summary_date)
 
 
 # ──────────────────────────────────────────────────────────────

@@ -83,6 +83,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **PR마다 PRD.md §11 로드맵과 변경 이력을 갱신한다** (PR 본문에 '무엇을/왜/어떻게 검증'과 함께). 이 규칙은 모든 PR에 상시 적용된다.
 - **백테스트 vs 회고 절대 구분 (PRD §F7)**: 모멘텀만 진짜 백테스트(과거 시점 데이터만). 가치·퀄리티·성장·복합은 오늘 스냅샷뿐이라 "회고"(선정시점편향) — 화면·코드에서 절대 혼동 금지, 회고는 "백테스트 아님" 경고 필수.
 - **시장 뉴스 pseudo-ticker**: 시장 시황 뉴스는 `_MARKET_KR`/`_MARKET_US` ticker로 `news_raw`에 저장. 이들은 watchlist에 없으므로 종목 카드/enrich 종목요약 대상에서 제외(`enrich_news_batch`는 watchlist 종목만 처리).
+- **시장 뉴스 영속화(W2-B)**: 종목 뉴스와 별도로 `market_news`(원천)와 `market_news_summary`(일일 KR/US/Global 요약)를 유지한다. 시장전망 탭의 "오늘의 시장 뉴스 요약"은 이 테이블만 읽는다.
 - **시장 등락률**: `ingest_market`이 거래일 기준 전일대비 등락을 `market_daily.payload.changes`에 저장(주말 carry-over 0.00% 버그 방지). export는 changes 우선, 폴백은 상대오차 1e-5 초과 시만 인정.
 - **KR 밸류/컨센서스 = 네이버금융 + FnGuide 무료 스크래핑** (`ingest_kr.fetch_kr_valuation_analyst`). PER/PBR/현재가/목표가/투자의견=네이버 종목메인, ROE/부채비율=FnGuide `#highlight_D_A`. **yfinance KR 절대 금지**. KIS(`ingest_kis.py`)는 키 있을 때만 활성 보조. ROE는 비율(0.07) 단위로 정규화해 US와 통일(표시 시 ×100 %).
 - **export는 종목별 '최신' 조회만 사용**(`SELECT DISTINCT ON (ticker) ... ORDER BY ticker, asof/date DESC`). 글로벌 `max(asof)`/특정날짜 고정 금지 — KR/US 수집일이 달라 한쪽이 통째로 누락되는 버그의 근원(indicators·quant·price·**valuation·analyst** 전부 적용).
@@ -90,6 +91,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **가격 갱신 = 하루 2회** (06:00 auto_run + 18:00 news_refresh 경량). 18:00은 KR 장마감 후라 KR 당일종가, 06:00은 US 종가 직후. 헤더는 `priceAsof`(실제 가격 기준일) 표시.
 - **종목 뉴스는 호재/악재 균형 수집**: KR Google News는 기본 쿼리 외 `리스크/하락/우려`, US는 `risk/decline/concern` 쿼리를 병행 수집한다. 종목당 캡은 유지하고 url_hash dedupe로 중복 제거한다.
 - **US 뉴스 소스**: yfinance.news + **Yahoo Finance RSS**(`feeds.finance.yahoo.com`, 429 시 무재시도 스킵) + **Finnhub**(`FINNHUB_API_KEY` 있을 때만) + Google News RSS(영문 정식명+티커 복수쿼리). KR은 네이버 HTML + Google News RSS. 전부 url_hash dedupe·종목격리.
+- **시장 뉴스 소스**: MarketWatch RSS(US), 한국경제 RSS(KR), 매일경제 공개 RSS(file.mk 경로, KR), Google News RSS 시장 쿼리(KR/US/Global), FRED API(`FRED_API_KEY` 있을 때만)를 사용한다. 소스별 실패는 로그만 남기고 전체 실행은 계속한다.
 - **텔레그램은 보류(비활성)**. `TELEGRAM_ENABLED=false`(기본)면 `send_telegram.run_send`가 no-op 성공. 살리려면 PRD §F5 메모 참고(플래그 true + 워크플로 step 주석 해제).
 - **포트폴리오 총자산 = 보유종목 평가액 + 현금**(둘 다 KRW 환산). 현금=`portfolio_cash`(통화별), `compute_portfolio`가 `cash_total`/`asset_total`을 snapshot payload에 저장.
 - **총자산 표시는 단일 경로**: 오버뷰·포트폴리오 모두 `portfolio_snapshot.payload.asset_total`을 공용 `portfolioAssetTotal`로 표시한다. 구형 export만 `total_eval + cash_total` 폴백을 허용한다.

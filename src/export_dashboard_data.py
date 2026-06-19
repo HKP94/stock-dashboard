@@ -312,8 +312,22 @@ def _build_market(conn, regime_info: dict) -> dict:
         "regimeBasis": regime_info.get("us_basis", ""),
     }
 
+    cur.execute("""
+        SELECT summary_date, kr_summary, us_summary, global_summary
+        FROM market_news_summary
+        ORDER BY summary_date DESC, created_at DESC
+        LIMIT 1
+    """)
+    digest = cur.fetchone()
+    news_summary = {
+        "asof": str(digest["summary_date"]) if digest else None,
+        "krSummary": (digest["kr_summary"] or "") if digest else "",
+        "usSummary": (digest["us_summary"] or "") if digest else "",
+        "globalSummary": (digest["global_summary"] or "") if digest else "",
+    }
+
     return {"overall": overall, "indices": indices, "kr": kr, "us": us,
-            "summaryMd": summary_md}
+            "summaryMd": summary_md, "newsSummary": news_summary}
 
 
 # ── 종목 가격·거래량 시계열 (6개월) ──────────────────────────────────

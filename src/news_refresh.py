@@ -20,8 +20,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from src.db import get_conn, insert_news_raw, log_run_finish, log_run_start, upsert_price_daily
-from src.enrich_gemini import enrich_market_summary, enrich_news_batch
+from src.db import get_conn, insert_market_news, insert_news_raw, log_run_finish, log_run_start, upsert_price_daily
+from src.enrich_gemini import enrich_market_summary, enrich_news_batch, summarize_market_news_digest
+from src.ingest_market_news import run_market_news_ingest
 from src.ingest_news import run_news_ingest
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,17 @@ def run_news_refresh() -> dict:
             logger.error("뉴스 수집 실패: %s", exc, exc_info=True)
             errors.append({"step": "ingest_news", "error": str(exc), "ts": datetime.utcnow().isoformat()})
 
+        try:
+            market_result = run_market_news_ingest()
+            inserted_market = insert_market_news(conn, market_result.get("rows", []))
+            conn.commit()
+            errors.extend(market_result.get("errors", []))
+            logger.info("시장 뉴스 수집: 신규 %d건", inserted_market)
+        except Exception as exc:
+            conn.rollback()
+            logger.error("시장 뉴스 수집 실패: %s", exc, exc_info=True)
+            errors.append({"step": "ingest_market_news", "error": str(exc), "ts": datetime.utcnow().isoformat()})
+
         # 2) Gemini 요약 + 시황
         try:
             enriched, errs = enrich_news_batch(conn)
@@ -131,6 +143,13 @@ def run_news_refresh() -> dict:
             conn.rollback()
             logger.warning("시황 종합 실패(비치명적): %s", exc)
             errors.append({"step": "enrich_market", "error": str(exc), "ts": datetime.utcnow().isoformat()})
+        try:
+            summarize_market_news_digest(conn)
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            logger.warning("시장 뉴스 요약 실패(비치명적): %s", exc)
+            errors.append({"step": "market_news_digest", "error": str(exc), "ts": datetime.utcnow().isoformat()})
 
         if errors and status != "failed":
             status = "partial"
