@@ -34,6 +34,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── ingest_portfolio.py # KIS 잔고(또는 선택 옵션) → portfolio*
 │   ├── compute_indicators.py  # SMA/RSI/추세기울기/정배열 (기존 main.py 로직 이식)
 │   ├── compute_quant.py    # 팩터 스코어링 (PRD §F4)
+│   ├── strategies.py       # true/retrospective 전략 레지스트리 (Wave 3)
 │   ├── rules.py            # 알림 룰 엔진 (PRD §F6-1)
 │   ├── enrich_gemini.py    # Gemini 호출 래퍼 (스키마 검증 포함)
 │   ├── assemble.py         # 종목 일일 레코드(PRD §5.2) 조립 뷰
@@ -84,6 +85,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **PR마다 PRD.md §11 로드맵과 변경 이력을 갱신한다** (PR 본문에 '무엇을/왜/어떻게 검증'과 함께). 이 규칙은 모든 PR에 상시 적용된다.
 - **백테스트 vs 회고 절대 구분 (PRD §F7)**: 모멘텀만 진짜 백테스트(과거 시점 데이터만). 가치·퀄리티·성장·복합은 오늘 스냅샷뿐이라 "회고"(선정시점편향) — 화면·코드에서 절대 혼동 금지, 회고는 "백테스트 아님" 경고 필수.
 - **장기 벤치마크 이력(W3-A)**: KOSPI/S&P500/NASDAQ 5년 일봉은 `index_daily`에 저장한다. `market_daily`는 최신 스냅샷/요약 전용이며, true backtest 비교 시 두 테이블을 혼용하지 않는다.
+- **전략 비교 저장 형식(W3-B)**: `backtest_results`는 `(strategy, track, horizon)` 단위로 1Y/3Y/5Y 결과를 저장한다. `track='true'`와 `track='retrospective'`는 export와 UI에서 별도 섹션으로만 노출하며, retrospective는 항상 선택편향 경고와 함께 보여준다.
 - **시장 뉴스 pseudo-ticker**: 시장 시황 뉴스는 `_MARKET_KR`/`_MARKET_US` ticker로 `news_raw`에 저장. 이들은 watchlist에 없으므로 종목 카드/enrich 종목요약 대상에서 제외(`enrich_news_batch`는 watchlist 종목만 처리).
 - **시장 뉴스 영속화(W2-B)**: 종목 뉴스와 별도로 `market_news`(원천)와 `market_news_summary`(일일 KR/US/Global 요약)를 유지한다. 시장전망 탭의 "오늘의 시장 뉴스 요약"은 이 테이블만 읽는다.
 - **누적 인사이트 영속화(W2-C)**: Gemini 종목 뉴스 요약은 `ticker_context`에도 `context_type='news_summary'`로 저장한다. 종목상세 "누적 인사이트"는 최근 30일만 보여주고, `valid_until < today` 항목은 삭제하지 말고 조회에서만 제외한다.

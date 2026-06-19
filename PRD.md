@@ -279,6 +279,14 @@ CREATE TABLE portfolio_advice (
   cache_key TEXT PRIMARY KEY, payload JSONB NOT NULL,
   generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 전략 비교 결과 (Wave 3)
+CREATE TABLE backtest_results (
+  id BIGSERIAL PRIMARY KEY,
+  strategy TEXT, track TEXT, horizon TEXT,
+  cum_return NUMERIC, cagr NUMERIC, mdd NUMERIC, sharpe NUMERIC,
+  regime_returns JSONB, payload JSONB, computed_at TIMESTAMPTZ DEFAULT now()
+);
 ```
 
 ### 5.2 종목 일일 레코드 (Hermes·시트 소비용 뷰)
@@ -499,10 +507,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 | 편향 | 없음(실제 운용 가능 성과 추정) | **선정시점편향(look-ahead/survivorship)** 존재 |
 | 화면 표기 | "실제 백테스트" | **"참고용 · 백테스트 아님"** + 선정시점편향 경고 박스 필수 |
 
-- 구현: `src/backtest.py` — `compute_momentum_backtest`(252영업일 후 21영업일 리밸런싱, PRD §F4 모멘텀 0.10·Z1M+0.20·Z3M+0.30·Z6M+0.40·Z12-1M, 동일가중 top_n + 동일가중/Buy&Hold 벤치마크), `compute_retrospective`(오늘 quant 상위 5 × 1/3/6/12M 수익률 + 벤치마크).
-- 지표: 누적수익률·CAGR·MDD·연환산변동성(월std×√12)·Sharpe(rf=0). 결과는 `backtest_results`(metric_type 구분).
+- 구현: `src/backtest.py` — true track(`momentum_12_1`, `low_vol`, `equal_weight_bh`)과 retrospective track(`value`, `quality`, `multifactor`)를 별도 계산한다. true는 월별 리밸런싱 point-in-time 전략이고, retrospective는 최신 스냅샷 상위 종목 고정 바스켓 회고다.
+- 지표: 1Y/3Y/5Y 누적수익률·CAGR·MDD·Sharpe(rf=0). 결과는 `backtest_results`의 `(strategy, track, horizon)` 단위로 저장하고, `payload`에는 리베이스100 곡선·지수 비교선·선정 예시를 담는다.
 - 벤치마크 백본(W3-A): true backtest 비교용 KOSPI/S&P500/NASDAQ 5년 일봉은 `index_daily`에 저장한다. `market_daily`는 최신 스냅샷/시황용으로 유지하고, 회고·백테스트 표시에서 장기 시계열과 혼용하지 않는다.
-- 표시: React "전략 비교" 탭 — 섹션1(recharts 누적수익 차트+메트릭표, "과거 성과는 미래 보장 안 함"), 섹션2(경고 박스 + 팩터별 카드).
+- 표시: React "전략 비교" 탭은 true / retrospective 섹션을 분리한다. 각 섹션은 전략별 1Y/3Y/5Y 표, 선택 전략 + KOSPI/S&P500/NASDAQ 리베이스100 차트, 국면별 성과 막대차트를 제공한다. retrospective 섹션은 상단 경고 배지를 고정 노출한다.
 - **승격 경로(2026-06-15~)**: `valuation`/`analyst`를 매 실행 `asof=오늘`로 일자별 누적 저장(PK `(ticker, asof)`). 가치·퀄리티·성장 스냅샷 시계열이 수개월 쌓이면, 회고(retrospective)를 각 과거 시점의 실제 스냅샷으로 재현하는 **진짜 백테스트로 승격** 가능. 그 전까지는 회고로만 표기(선정시점편향 경고 유지).
 
 ---
@@ -693,6 +701,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
 
 ### 안정화 (운영 중 발견·수정)
+- [x] **Wave 3-B 전략 라이브러리 + 확장 백테스트** (2026-06-19): `strategies.py`에 true(`momentum_12_1`, `low_vol`, `equal_weight_bh`)와 retrospective(`value`, `quality`, `multifactor`) 전략 레지스트리를 추가하고, `backtest_results`를 `(strategy, track, horizon)` 저장 형식으로 확장했다. export/UI는 1Y/3Y/5Y 표·선택 전략 리베이스100 지수 비교·국면별 성과를 true/retrospective 분리 섹션으로 노출하며, retrospective에는 선택편향 경고를 고정한다.
 - [x] **Wave 3-A 벤치마크 이력 백본** (2026-06-19): `index_daily` 테이블과 `ingest_index_history.py`를 추가해 KOSPI/S&P500/NASDAQ 5년 일봉을 yfinance로 누적 저장한다. 연속성 결측 구간은 로깅만 하고 전체 수집은 계속하며, `backfill.py --5y`로 활성 유니버스 종목의 5년 가격 준비 상태를 점검·보강한다. `market_daily` 최신 스냅샷과 true backtest 비교용 장기 시계열을 분리해 §F7 원칙을 재확인.
 - [x] **Wave 1 T7 표시 신호·정책** (2026-06-19): 활성 유니버스 퀀트 종합 백분위 상/하위 30% 기반 매수/관망/축소 신호를 계약·assemble·export·React에 추가. 근거·신뢰도 동반을 강제하고 자동 주문 금지는 유지. UI·텔레그램·Gemini/Hermes 프롬프트의 기존 보일러플레이트 제거.
 - [x] **Wave 2-A 부정·리스크 뉴스 균형화** (2026-06-19): KR Google News에 `리스크/하락/우려`, US에 `risk/decline/concern` 쿼리를 추가해 부정 뉴스 수집 편향을 완화. Gemini 뉴스 요약·STEP A 선별에 부정·리스크 뉴스 중요도 상향 문구를 넣고, 뉴스 탭 감성 필터를 전체/긍정/중립/부정으로 확장. url_hash dedupe와 종목당 수집 캡 유지, Python·Node 테스트 추가.
@@ -720,6 +729,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v3.9 (2026-06-19) Wave 3-B: true/retrospective 전략 레지스트리와 1Y/3Y/5Y backtest_results 저장 형식, 전략비교 탭의 분리 표/라인차트/국면 막대차트를 추가 — Codex.*
 - *v3.8 (2026-06-19) Wave 3-A: `index_daily` 장기 벤치마크 이력과 5년 백필 점검 경로를 추가해 KOSPI/S&P500/NASDAQ true backtest 비교 백본을 분리 구축 — Codex.*
 - *v3.7 (2026-06-19) Wave 2-D: 06시/18시 갱신 문맥을 `refreshContext`로 분리해 헤더·시장전망 탭에 미국 종가 기준 / 한국 종가 기준 라벨과 18시 갱신 주석을 노출 — Codex.*
 - *v3.6 (2026-06-19) Wave 2-C: `ticker_context` 테이블과 종목별 누적 인사이트 UI를 추가해 Gemini 뉴스 요약을 최근 30일 지식 베이스로 영속화 — Codex.*
