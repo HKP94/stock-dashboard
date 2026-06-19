@@ -46,6 +46,23 @@ def test_fetch_fred_rows_skips_without_key(monkeypatch):
     assert _fetch_fred_rows() == []
 
 
+def test_fetch_fred_rows_never_persists_api_key_in_url(monkeypatch):
+    monkeypatch.setenv("FRED_API_KEY", "secret-key")
+
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "observations": [{"value": "4.25", "date": "2026-06-19"}]
+    }
+
+    with patch("src.ingest_market_news.requests.get", return_value=response):
+        rows = _fetch_fred_rows()
+
+    assert rows
+    assert all("api_key" not in row.url for row in rows)
+    assert rows[0].url.startswith("https://fred.stlouisfed.org/series/")
+
+
 def test_run_market_news_ingest_collects_and_isolates_errors():
     with patch("src.ingest_market_news._fetch_feed_rows", side_effect=[[MagicMock()], Exception("boom"), []]), \
          patch("src.ingest_market_news._fetch_google_rows", return_value=[]), \

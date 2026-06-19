@@ -101,12 +101,13 @@ def _fetch_fred_rows(today: Optional[date] = None) -> list[MarketNewsRow]:
     today = today or date.today()
     rows: list[MarketNewsRow] = []
     for series_id, label in FRED_SERIES.items():
-        url = (
+        request_url = (
             "https://api.stlouisfed.org/fred/series/observations"
             f"?series_id={series_id}&api_key={key}&file_type=json&sort_order=desc&limit=2"
         )
+        public_url = f"https://fred.stlouisfed.org/series/{series_id}"
         try:
-            response = requests.get(url, timeout=15)
+            response = requests.get(request_url, timeout=15)
             response.raise_for_status()
             payload = response.json()
             observations = payload.get("observations") or []
@@ -118,7 +119,7 @@ def _fetch_fred_rows(today: Optional[date] = None) -> list[MarketNewsRow]:
             rows.append(MarketNewsRow(
                 source="fred_api_global",
                 title=f"{label} 최신치 {value} ({obs_date})",
-                url=url,
+                url=public_url,
                 published_at=datetime.strptime(obs_date, "%Y-%m-%d"),
             ))
         except Exception as exc:  # noqa: BLE001
