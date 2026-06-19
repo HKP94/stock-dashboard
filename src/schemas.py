@@ -141,6 +141,15 @@ class MarketNewsSummaryRow(BaseModel):
     global_summary: str
 
 
+class TickerContextRow(BaseModel):
+    ticker: str
+    context_type: Literal["news_summary", "report", "driver", "macro"]
+    content: str
+    source: str
+    valid_from: date
+    valid_until: Optional[date] = None
+
+
 class QuantScoresRow(BaseModel):
     ticker: str
     asof: date

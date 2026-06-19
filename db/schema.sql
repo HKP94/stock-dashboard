@@ -147,6 +147,19 @@ CREATE TABLE IF NOT EXISTS market_news_summary (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS ticker_context (
+    id           BIGSERIAL   PRIMARY KEY,
+    ticker       TEXT        NOT NULL,
+    context_type TEXT        NOT NULL CHECK (context_type IN ('news_summary', 'report', 'driver', 'macro')),
+    content      TEXT        NOT NULL,
+    source       TEXT        NOT NULL,
+    valid_from   DATE        NOT NULL,
+    valid_until  DATE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ticker_context_lookup
+    ON ticker_context (ticker, context_type, valid_from DESC);
+
 -- =============================================================
 -- 뉴스 LLM 분석 결과 (enrich_gemini.py → §5.3-A 저장)
 -- =============================================================

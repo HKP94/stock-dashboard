@@ -47,6 +47,13 @@ FACTOR_META = {
     "s": {"key": "sentiment", "ko": "감성", "group": "timing"},
 }
 
+CONTEXT_TYPE_LABEL = {
+    "news_summary": "뉴스 요약",
+    "report": "리포트",
+    "driver": "핵심 동인",
+    "macro": "거시",
+}
+
 REGIMES = {
     "bull":    {"label": "강세",  "color": "acc",  "w": {"m": 45, "v": 20, "q": 20, "g": 10, "s": 5}},
     "neutral": {"label": "중립",  "color": "warn", "w": {"m": 35, "v": 25, "q": 25, "g": 10, "s": 5}},
@@ -553,6 +560,68 @@ def _load_research_items(conn) -> dict[str, list[dict]]:
     return result
 
 
+def _group_ticker_context_rows(
+    rows: list[dict],
+    *,
+    today: date | None = None,
+    max_days: int = 30,
+) -> dict[str, list[dict]]:
+    today = today or date.today()
+    cutoff = today - timedelta(days=max_days)
+    grouped: dict[str, list[dict]] = {}
+
+    for row in rows:
+        ticker = row["ticker"]
+        valid_from = row["valid_from"]
+        valid_until = row.get("valid_until")
+
+        if isinstance(valid_from, str):
+            valid_from = date.fromisoformat(valid_from[:10])
+        if isinstance(valid_until, str) and valid_until:
+            valid_until = date.fromisoformat(valid_until[:10])
+
+        if valid_from < cutoff:
+            continue
+        if valid_until and valid_until < today:
+            continue
+
+        grouped.setdefault(ticker, []).append({
+            "id": row["id"],
+            "type": row["context_type"],
+            "typeLabel": CONTEXT_TYPE_LABEL.get(row["context_type"], row["context_type"]),
+            "content": row["content"],
+            "source": row["source"],
+            "validFrom": valid_from.isoformat(),
+            "validUntil": valid_until.isoformat() if valid_until else None,
+            "createdAt": str(row["created_at"]),
+        })
+
+    return grouped
+
+
+def _load_ticker_context_recent(
+    conn,
+    tickers: list[str],
+    *,
+    today: date | None = None,
+    max_days: int = 30,
+) -> dict[str, list[dict]]:
+    if not tickers:
+        return {}
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, ticker, context_type, content, source, valid_from, valid_until, created_at
+        FROM ticker_context
+        WHERE ticker = ANY(%s)
+        ORDER BY ticker, valid_from DESC, created_at DESC, id DESC
+        """,
+        (tickers,),
+    )
+    rows = [dict(row) for row in cur.fetchall()]
+    return _group_ticker_context_rows(rows, today=today, max_days=max_days)
+
+
 # ── 종목 news 피드 (PR-2: news_raw 원문 + URL 포함) ───────────────────
 def _build_news_feed(conn, watchlist_map: dict, sentiment_by_ticker: dict) -> list[dict]:
     """
@@ -953,6 +1022,7 @@ def build_data() -> dict:
         # PR-4(이번): stock_notes
         notes_map = _load_stock_notes(conn)
         note_history_map = _load_stock_note_history(conn)
+        ticker_context_map = _load_ticker_context_recent(conn, tickers)
 
         # PR-7: 백테스트 / 회고
         backtest_data = _load_backtest(conn)
@@ -1143,6 +1213,8 @@ def build_data() -> dict:
                 # PR-4(이번): 투자 판단 메모
                 "note": notes_map.get(tk),
                 "noteHistory": note_history_map.get(tk, []),
+                # Wave 2-C: 최근 30일 누적 인사이트
+                "insightHistory": ticker_context_map.get(tk, []),
             })
 
         _attach_display_signals(stocks)
