@@ -9,6 +9,7 @@ import {
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
+import { portfolioAssetTotal } from './display.js';
 
 // PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
 function fmtBig(v, cur) {
@@ -279,15 +280,15 @@ export function Overview({ D, nav, goNews }) {
       )}
 
       {/* PR-3: 포트폴리오 요약 카드 — ₩ 환산 전체 숫자 */}
-      {D.portfolio && D.portfolio.total_eval != null && (
+      {portfolioAssetTotal(D.portfolio) != null && (
         <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "14px 20px", display: "flex", alignItems: "center", gap: 24 }}>
           <div>
             <MonoCaps style={{ fontSize: 9 }}>내 포트폴리오 (₩ 환산)</MonoCaps>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
               <Num size={22} weight={800} style={{ textDecoration: "none" }}>
-                ₩{Math.round(D.portfolio.total_eval).toLocaleString("ko-KR")}
+                ₩{Math.round(portfolioAssetTotal(D.portfolio)).toLocaleString("ko-KR")}
               </Num>
-              <span style={{ fontSize: 12, color: C.ink3 }}>총평가</span>
+              <span style={{ fontSize: 12, color: C.ink3 }}>총자산</span>
             </div>
           </div>
           <div style={{ width: 1, height: 36, background: C.line2 }}></div>

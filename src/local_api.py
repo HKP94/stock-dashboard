@@ -121,6 +121,28 @@ def _latest_price(ticker: str) -> Optional[float]:
     return float(r["close"]) if r else None
 
 
+def _as_float(value: object) -> Optional[float]:
+    return float(value) if value is not None else None
+
+
+def _portfolio_snapshot_payload(row: dict) -> dict:
+    payload = row.get("payload") or {}
+    return {
+        "total_eval": _as_float(row.get("total_value")),
+        "total_cost": _as_float(row.get("total_cost")),
+        "total_pnl": _as_float(row.get("total_pnl")),
+        "total_pnl_pct": _as_float(payload.get("pnl_pct")),
+        "n_holdings": payload.get("n_holdings"),
+        "currency": "KRW",
+        "fx_rate": _as_float(payload.get("fx_rate")),
+        "fx_missing": payload.get("fx_missing", False),
+        "by_currency": payload.get("by_currency", {}),
+        "cash_total": _as_float(payload.get("cash_total")) or 0.0,
+        "asset_total": _as_float(payload.get("asset_total")),
+        "cash_by_currency": payload.get("cash_by_currency", {}),
+    }
+
+
 def _patch_data_json_portfolio() -> None:
     """data.json의 portfolio 필드만 부분 갱신."""
     if not _DATA_JSON.exists():
@@ -134,21 +156,7 @@ def _patch_data_json_portfolio() -> None:
             c.execute("SELECT total_value, total_cost, total_pnl, payload FROM portfolio_snapshot ORDER BY asof DESC LIMIT 1")
             r = c.fetchone()
             if r:
-                payload = r["payload"] or {}
-                data["portfolio"] = {
-                    "total_eval":    float(r["total_value"]) if r["total_value"] else None,
-                    "total_cost":    float(r["total_cost"])  if r["total_cost"]  else None,
-                    "total_pnl":     float(r["total_pnl"])   if r["total_pnl"]   else None,
-                    "total_pnl_pct": payload.get("pnl_pct"),
-                    "n_holdings":    payload.get("n_holdings"),
-                    "currency":      "KRW",
-                    "fx_rate":       payload.get("fx_rate"),
-                    "fx_missing":    payload.get("fx_missing", False),
-                    "by_currency":   payload.get("by_currency", {}),
-                    "cash_total":    payload.get("cash_total", 0),       # PR-2
-                    "asset_total":   payload.get("asset_total"),         # PR-2
-                    "cash_by_currency": payload.get("cash_by_currency", {}),
-                }
+                data["portfolio"] = _portfolio_snapshot_payload(dict(r))
             # holding 필드도 갱신
             c.execute("SELECT ticker, qty, avg_price, currency FROM portfolio_holdings WHERE qty > 0")
             holdings = {row["ticker"]: dict(row) for row in c.fetchall()}
@@ -258,6 +266,19 @@ def get_portfolio():
             "pnl_pct":     round(pnl_pct, 2) if pnl_pct is not None else None,
         })
     return result
+
+
+@app.get("/api/portfolio/summary")
+def get_portfolio_summary():
+    """오버뷰와 포트폴리오가 공유하는 최신 KRW 환산 합계."""
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT total_value, total_cost, total_pnl, payload "
+            "FROM portfolio_snapshot ORDER BY asof DESC LIMIT 1"
+        )
+        row = c.fetchone()
+    return _portfolio_snapshot_payload(dict(row)) if row else None
 
 
 @app.post("/api/portfolio", status_code=201)

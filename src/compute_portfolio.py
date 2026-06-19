@@ -210,6 +210,8 @@ def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) -> 
     return {
         "n": n_ok,
         "total_eval_krw": total_eval_krw,
+        "cash_total_krw": cash_total_krw,
+        "asset_total_krw": asset_total_krw,
         "total_pnl_krw": total_pnl_krw,
         "total_pnl_pct": total_pnl_pct,
         "fx_rate": fx,

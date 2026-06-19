@@ -26,7 +26,7 @@ def test_cors_allows_patch():
 
 def test_cors_allows_core_methods():
     methods = set(_cors_options().get("allow_methods", []))
-    assert {"GET", "POST", "PUT", "DELETE"}.issubset(methods)
+    assert {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}.issubset(methods)
 
 
 def test_cors_origin_is_vite_dev():
