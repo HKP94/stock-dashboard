@@ -538,6 +538,76 @@ def _load_backtest(conn) -> dict:
     }
 
 
+_REGIME_GUIDANCE_LABEL = {"bull": "상승", "neutral": "횡보", "bear": "하락"}
+
+
+def _build_strategy_guidance(backtest: dict, market: dict) -> dict | None:
+    regime = (market or {}).get("overall")
+    if regime not in _REGIME_GUIDANCE_LABEL:
+        return None
+
+    def _fmt(v: float | None) -> str:
+        if v is None:
+            return "—"
+        sign = "+" if v >= 0 else ""
+        return f"{sign}{v * 100:.1f}%"
+
+    def _pick_best(strategies: list[dict], track: str) -> tuple[dict | None, float | None]:
+        scored = []
+        for s in strategies or []:
+            for horizon in ("5y", "3y", "1y"):
+                h = (s.get("horizons") or {}).get(horizon)
+                if not h:
+                    continue
+                rr = (h.get("regimeReturns") or {}).get(regime)
+                if rr is None:
+                    continue
+                scored.append((float(rr), {
+                    "name": s.get("name"),
+                    "label": s.get("label") or s.get("name"),
+                    "track": track,
+                    "horizon": horizon,
+                    "regimeReturn": float(rr),
+                }))
+                break
+        if not scored:
+            return None, None
+        scored.sort(key=lambda item: item[0], reverse=True)
+        best = scored[0][1]
+        next_score = scored[1][0] if len(scored) > 1 else None
+        edge = (best["regimeReturn"] - next_score) if next_score is not None else None
+        return best, edge
+
+    best_true, edge_true = _pick_best((backtest.get("trueTrack") or {}).get("strategies") or [], "true")
+    if not best_true:
+        return None
+
+    regime_ko = _REGIME_GUIDANCE_LABEL[regime]
+    confidence = int(max(55, min(90, 55 + (abs(edge_true or 0) * 200))))
+    best_true["confidence"] = confidence
+    best_true["reason"] = (
+        f"{regime_ko} 국면 {best_true['horizon']} 기준 {_fmt(best_true['regimeReturn'])} 성과로 "
+        + (f"다음 전략 대비 {_fmt(edge_true)} 우위입니다." if edge_true is not None else "동일 비교군 중 상대우위입니다.")
+    )
+
+    best_retro, _ = _pick_best((backtest.get("retrospective") or {}).get("strategies") or [], "retrospective")
+    reference = None
+    if best_retro:
+        reference = {
+            **best_retro,
+            "warning": (backtest.get("retrospective") or {}).get("warning") or "",
+            "reason": f"참고용 회고에서는 {regime_ko} 국면 {best_retro['horizon']} 기준 {_fmt(best_retro['regimeReturn'])}였습니다.",
+        }
+
+    return {
+        "regime": regime,
+        "label": f"현재 국면 추천 전략 · {_REGIME_GUIDANCE_LABEL[regime]}",
+        "primary": best_true,
+        "reference": reference,
+        "note": "표시 전용 제언입니다. 실제 주문 실행 경로는 없으며, true track 성과를 우선 참고하세요.",
+    }
+
+
 # ── PR-4(이번): stock_notes 로드 ─────────────────────────────────────
 def _load_stock_notes(conn) -> dict[str, dict]:
     """stock_notes → {ticker: {horizon, attractiveness, thesis}}."""
@@ -1275,6 +1345,7 @@ def build_data() -> dict:
         daily_brief = _build_daily_brief(stocks, market)
         # PR-2: 시장 매력도(진입 환경) — kr/us에 부착
         _attach_market_attractiveness(market, stocks)
+        strategy_guidance = _build_strategy_guidance(backtest_data, market)
 
         now = datetime.now()
         refresh_context = _infer_refresh_context(now, price_asof)
@@ -1299,6 +1370,7 @@ def build_data() -> dict:
             "portfolio":  portfolio_snapshot,   # PR-2: 전체 포트폴리오 요약
             "portfolioAdvice": portfolio_advice,  # 전략 조언(CoT) 최근 캐시(+stale)
             "backtest":   backtest_data,        # PR-7: 백테스트 + 회고
+            "strategyGuidance": strategy_guidance,
             "research":   {
                 "files": {}, "notes": {},
                 "tags": ["매수후보", "관망", "리스크주의", "장기보유", "분할매수", "비중축소"],
