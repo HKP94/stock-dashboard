@@ -118,3 +118,33 @@ def test_backfill_one_uses_five_year_window_when_requested():
     assert kr_rows == ["ok"]
     mock_us.assert_called_once_with("AAPL", period="5y")
     mock_kr.assert_called_once_with("005930.KS", lookback_days=1830)
+
+
+def test_run_backfill_five_year_recomputes_indicators_and_quant_without_manual_step():
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.__exit__.return_value = False
+
+    gaps = [{"ticker": "AAPL", "market": "US", "name": "Apple", "reason": "가격 부족", "rows": 0, "last_date": None}]
+    fake_price_rows = [MagicMock()]
+    fake_quant_rows = [MagicMock(), MagicMock()]
+
+    with patch("src.backfill.get_conn", return_value=conn), \
+         patch("src.backfill.log_run_start", return_value=101), \
+         patch("src.backfill.log_run_finish") as finish, \
+         patch("src.backfill.detect_gap_tickers", return_value=gaps), \
+         patch("src.backfill._backfill_one", return_value=fake_price_rows), \
+         patch("src.backfill.upsert_price_daily") as upsert_prices, \
+         patch("src.backfill.compute_quant_universe", return_value=fake_quant_rows), \
+         patch("src.backfill.upsert_quant_scores") as upsert_quant, \
+         patch("src.backfill.recompute_indicators_to_db", return_value=1) as recompute_indicators:
+        result = bf.run_backfill(required_years=5)
+
+    recompute_indicators.assert_called_once_with(conn, ["AAPL"])
+    upsert_prices.assert_called_once_with(conn, fake_price_rows)
+    upsert_quant.assert_called_once_with(conn, fake_quant_rows)
+    finish.assert_called_once()
+    assert result["backfilled"] == 1
+    assert result["indicators"] == 1
+    assert result["quant"] == 2
+    assert result["errors"] == []

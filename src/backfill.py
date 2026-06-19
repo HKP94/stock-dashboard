@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta
 
 import psycopg
 
+from src.compute_indicators import recompute_indicators_to_db
 from src.db import (
     get_conn,
     log_run_finish,
