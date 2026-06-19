@@ -9,6 +9,7 @@ import { Panel, ResearchItemCard, RESEARCH_TYPE_LABEL } from './tabsA.jsx';
 
 const grade = (v) => v >= 88 ? "A+" : v >= 80 ? "A" : v >= 72 ? "B+" : v >= 64 ? "B" : v >= 56 ? "C+" : v >= 48 ? "C" : "D";
 const gradeCol = (v) => v >= 80 ? C.ok : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C.bad;
+const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
 
 function GradeChip({ value }) {
   const col = gradeCol(value);
@@ -193,6 +194,7 @@ export function Market({ D }) {
   const w = D.regimes[overall].w;
   const newsSummary = D.market.newsSummary || {};
   const refreshContext = D.refreshContext || D.market.refreshContext || {};
+  const strategyGuidance = D.strategyGuidance;
   const interp = overall === "bull"
     ? "강세 국면 — 모멘텀 비중을 최대(45%)로 끌어올려 추세에 올라타되, 심리·과열 신호로 진입 타이밍을 조절합니다."
     : overall === "neutral"
@@ -210,6 +212,42 @@ export function Market({ D }) {
           <div style={{ marginTop: 6, fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>{refreshContext.note}</div>
         )}
       </div>
+    )}
+
+    {strategyGuidance?.primary && (
+      <Panel title="현재 국면 추천 전략" sub="표시 전용 · true track 우선">
+        <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ border: `1px solid ${C.acc}33`, background: C.accTint, borderRadius: 10, padding: "14px 16px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{strategyGuidance.label}</MonoCaps>
+              <span style={{ fontSize: 18, fontWeight: 800, color: C.acc }}>{strategyGuidance.primary.label}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: C.ok, background: C.okBg, border: `1px solid ${C.ok}33`, borderRadius: 999, padding: "3px 8px" }}>true</span>
+              <span style={{ marginLeft: "auto", fontSize: 12, color: C.ink2 }}>신뢰도 {strategyGuidance.primary.confidence}</span>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 13, color: C.ink, lineHeight: 1.65 }}>{strategyGuidance.primary.reason}</div>
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: C.ink2 }}>국면 수익률 {pct(strategyGuidance.primary.regimeReturn)}</span>
+              <span style={{ fontSize: 12, color: C.ink2 }}>근거 구간 {strategyGuidance.primary.horizon}</span>
+            </div>
+          </div>
+
+          {strategyGuidance.reference && (
+            <div style={{ border: `1px solid ${C.warn}33`, background: C.warnBg, borderRadius: 10, padding: "12px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.warn }}>참고용 회고</span>
+                <span style={{ fontSize: 12, color: C.ink }}>{strategyGuidance.reference.label}</span>
+                <span style={{ fontSize: 11, color: C.ink2 }}>{pct(strategyGuidance.reference.regimeReturn)} · {strategyGuidance.reference.horizon}</span>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>{strategyGuidance.reference.reason}</div>
+              {strategyGuidance.reference.warning && (
+                <div style={{ marginTop: 6, fontSize: 11.5, color: C.bad }}>{strategyGuidance.reference.warning}</div>
+              )}
+            </div>
+          )}
+
+          <div style={{ fontSize: 11.5, color: C.ink3 }}>{strategyGuidance.note}</div>
+        </div>
+      </Panel>
     )}
 
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>

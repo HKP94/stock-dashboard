@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.display_signals import compute_display_signals
+from src.strategies import RETROSPECTIVE_STRATEGIES, STRATEGY_BY_NAME, TRUE_STRATEGIES
 
 logger = logging.getLogger(__name__)
 
@@ -481,55 +482,129 @@ def _load_portfolio_snapshot(conn) -> dict:
 
 # ── PR-7: 백테스트 / 회고 로드 ────────────────────────────────────────
 def _load_backtest(conn) -> dict:
-    """backtest_results → {trueBacktest:{strategies,window}, retrospective:{byFactor}}."""
+    """backtest_results → separated true/retrospective strategy payload."""
     cur = conn.cursor()
     cur.execute("""
-        SELECT strategy_name, metric_type, window_start, window_end,
-               cum_return, cagr, mdd, vol, sharpe, payload
+        SELECT strategy, track, horizon, cum_return, cagr, mdd, sharpe, regime_returns, payload
         FROM backtest_results
+        WHERE strategy IS NOT NULL AND track IS NOT NULL AND horizon IS NOT NULL
     """)
     rows = [dict(r) for r in cur.fetchall()]
+    grouped: dict[str, dict[str, dict]] = {"true": {}, "retrospective": {}}
+    retro_warning = ""
+    retro_asof = None
 
-    # 진짜 백테스트
-    strategies = []
-    window = {}
-    for r in rows:
-        if r["metric_type"] != "true_backtest":
+    for row in rows:
+        track = row["track"]
+        if track not in grouped:
             continue
-        p = r["payload"] or {}
-        strategies.append({
-            "name": r["strategy_name"],
-            "equityCurve": p.get("equity_curve", []),
-            "cumReturn": _f(r["cum_return"]),
-            "cagr": _f(r["cagr"]),
-            "mdd": _f(r["mdd"]),
-            "vol": _f(r["vol"]),
-            "sharpe": _f(r["sharpe"]),
-        })
-        if not window and p.get("months") is not None:
-            window = {"start": str(r["window_start"]), "end": str(r["window_end"]), "months": p.get("months")}
-    # 표시 순서 고정: 모멘텀 → 동일가중 → Buy&Hold
-    order = {"momentum_top8": 0, "equal_weight_benchmark": 1, "buy_hold_benchmark": 2}
-    strategies.sort(key=lambda s: order.get(s["name"], 9))
+        payload = row["payload"] or {}
+        name = row["strategy"]
+        meta = STRATEGY_BY_NAME.get(name)
+        strategy = grouped[track].setdefault(
+            name,
+            {
+                "name": name,
+                "label": payload.get("label") or (meta.label if meta else name),
+                "description": payload.get("description") or (meta.description if meta else ""),
+                "horizons": {},
+            },
+        )
+        strategy["horizons"][row["horizon"]] = {
+            "cumReturn": _f(row["cum_return"]),
+            "cagr": _f(row["cagr"]),
+            "mdd": _f(row["mdd"]),
+            "sharpe": _f(row["sharpe"]),
+            "regimeReturns": row["regime_returns"] or {},
+            "equityCurve": payload.get("equity_curve", []),
+            "benchmarks": payload.get("benchmarks", {}),
+            "selectionExamples": payload.get("selection_examples", []),
+            "selectedTickers": payload.get("selected_tickers", []),
+            "warning": payload.get("warning", ""),
+            "window": {"start": payload.get("window_start"), "end": payload.get("window_end")},
+        }
+        if track == "retrospective":
+            retro_warning = payload.get("warning") or retro_warning
+            retro_asof = payload.get("asof") or retro_asof
 
-    # 회고
-    by_factor = []
-    factor_order = {"momentum": 0, "value": 1, "quality": 2, "growth": 3, "composite": 4}
-    retro_rows = [r for r in rows if r["metric_type"] == "retrospective"]
-    retro_rows.sort(key=lambda r: factor_order.get((r["payload"] or {}).get("factor"), 9))
-    for r in retro_rows:
-        p = r["payload"] or {}
-        by_factor.append({
-            "factor": p.get("factor"),
-            "topTickers": p.get("top_tickers", []),
-            "benchmark": p.get("benchmark", {}),
-            "warning": p.get("warning", ""),
-            "asof": p.get("asof"),
-        })
+    true_order = {s.name: i for i, s in enumerate(TRUE_STRATEGIES)}
+    retro_order = {s.name: i for i, s in enumerate(RETROSPECTIVE_STRATEGIES)}
+    true_strategies = sorted(grouped["true"].values(), key=lambda s: true_order.get(s["name"], 99))
+    retro_strategies = sorted(grouped["retrospective"].values(), key=lambda s: retro_order.get(s["name"], 99))
 
     return {
-        "trueBacktest": {"strategies": strategies, "window": window},
-        "retrospective": {"byFactor": by_factor},
+        "trueTrack": {"strategies": true_strategies},
+        "retrospective": {"strategies": retro_strategies, "warning": retro_warning, "asof": retro_asof},
+    }
+
+
+_REGIME_GUIDANCE_LABEL = {"bull": "상승", "neutral": "횡보", "bear": "하락"}
+
+
+def _build_strategy_guidance(backtest: dict, market: dict) -> dict | None:
+    regime = (market or {}).get("overall")
+    if regime not in _REGIME_GUIDANCE_LABEL:
+        return None
+
+    def _fmt(v: float | None) -> str:
+        if v is None:
+            return "—"
+        sign = "+" if v >= 0 else ""
+        return f"{sign}{v * 100:.1f}%"
+
+    def _pick_best(strategies: list[dict], track: str) -> tuple[dict | None, float | None]:
+        scored = []
+        for s in strategies or []:
+            for horizon in ("5y", "3y", "1y"):
+                h = (s.get("horizons") or {}).get(horizon)
+                if not h:
+                    continue
+                rr = (h.get("regimeReturns") or {}).get(regime)
+                if rr is None:
+                    continue
+                scored.append((float(rr), {
+                    "name": s.get("name"),
+                    "label": s.get("label") or s.get("name"),
+                    "track": track,
+                    "horizon": horizon,
+                    "regimeReturn": float(rr),
+                }))
+                break
+        if not scored:
+            return None, None
+        scored.sort(key=lambda item: item[0], reverse=True)
+        best = scored[0][1]
+        next_score = scored[1][0] if len(scored) > 1 else None
+        edge = (best["regimeReturn"] - next_score) if next_score is not None else None
+        return best, edge
+
+    best_true, edge_true = _pick_best((backtest.get("trueTrack") or {}).get("strategies") or [], "true")
+    if not best_true:
+        return None
+
+    regime_ko = _REGIME_GUIDANCE_LABEL[regime]
+    confidence = int(max(55, min(90, 55 + (abs(edge_true or 0) * 200))))
+    best_true["confidence"] = confidence
+    best_true["reason"] = (
+        f"{regime_ko} 국면 {best_true['horizon']} 기준 {_fmt(best_true['regimeReturn'])} 성과로 "
+        + (f"다음 전략 대비 {_fmt(edge_true)} 우위입니다." if edge_true is not None else "동일 비교군 중 상대우위입니다.")
+    )
+
+    best_retro, _ = _pick_best((backtest.get("retrospective") or {}).get("strategies") or [], "retrospective")
+    reference = None
+    if best_retro:
+        reference = {
+            **best_retro,
+            "warning": (backtest.get("retrospective") or {}).get("warning") or "",
+            "reason": f"참고용 회고에서는 {regime_ko} 국면 {best_retro['horizon']} 기준 {_fmt(best_retro['regimeReturn'])}였습니다.",
+        }
+
+    return {
+        "regime": regime,
+        "label": f"현재 국면 추천 전략 · {_REGIME_GUIDANCE_LABEL[regime]}",
+        "primary": best_true,
+        "reference": reference,
+        "note": "표시 전용 제언입니다. 실제 주문 실행 경로는 없으며, true track 성과를 우선 참고하세요.",
     }
 
 
@@ -1270,6 +1345,7 @@ def build_data() -> dict:
         daily_brief = _build_daily_brief(stocks, market)
         # PR-2: 시장 매력도(진입 환경) — kr/us에 부착
         _attach_market_attractiveness(market, stocks)
+        strategy_guidance = _build_strategy_guidance(backtest_data, market)
 
         now = datetime.now()
         refresh_context = _infer_refresh_context(now, price_asof)
@@ -1294,6 +1370,7 @@ def build_data() -> dict:
             "portfolio":  portfolio_snapshot,   # PR-2: 전체 포트폴리오 요약
             "portfolioAdvice": portfolio_advice,  # 전략 조언(CoT) 최근 캐시(+stale)
             "backtest":   backtest_data,        # PR-7: 백테스트 + 회고
+            "strategyGuidance": strategy_guidance,
             "research":   {
                 "files": {}, "notes": {},
                 "tags": ["매수후보", "관망", "리스크주의", "장기보유", "분할매수", "비중축소"],
