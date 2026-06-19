@@ -38,6 +38,7 @@ from src.schemas import (
     PriceDailyRow,
     QuantScoresRow,
     RunRow,
+    TickerContextRow,
     ValuationRow,
     WatchlistRow,
 )
@@ -448,6 +449,25 @@ def upsert_market_news_summary(conn: psycopg.Connection, row: MarketNewsSummaryR
     with conn.cursor() as cur:
         cur.execute(sql, (row.summary_date, row.kr_summary, row.us_summary, row.global_summary))
     logger.debug("upsert_market_news_summary: summary_date=%s", row.summary_date)
+
+
+def replace_ticker_context(conn: psycopg.Connection, row: TickerContextRow) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM ticker_context
+            WHERE ticker = %s AND context_type = %s AND source = %s AND valid_from = %s
+            """,
+            (row.ticker, row.context_type, row.source, row.valid_from),
+        )
+        cur.execute(
+            """
+            INSERT INTO ticker_context (ticker, context_type, content, source, valid_from, valid_until)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (row.ticker, row.context_type, row.content, row.source, row.valid_from, row.valid_until),
+        )
+    logger.debug("replace_ticker_context: %s %s %s", row.ticker, row.context_type, row.valid_from)
 
 
 # ──────────────────────────────────────────────────────────────
