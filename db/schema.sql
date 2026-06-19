@@ -173,6 +173,34 @@ CREATE TABLE IF NOT EXISTS macro_summary (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS ticker_drivers (
+    ticker        TEXT        NOT NULL,
+    driver_code   TEXT        NOT NULL,
+    driver_name   TEXT        NOT NULL,
+    driver_source TEXT        NOT NULL,
+    weight        SMALLINT    NOT NULL CHECK (weight BETWEEN 1 AND 5),
+    origin        TEXT        NOT NULL CHECK (origin IN ('auto', 'user')),
+    rationale     TEXT        NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, driver_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ticker_drivers_ticker_origin
+    ON ticker_drivers (ticker, origin, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS driver_prices (
+    driver_code   TEXT        NOT NULL,
+    asof          DATE        NOT NULL,
+    close         NUMERIC     NOT NULL,
+    source        TEXT        NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (driver_code, asof)
+);
+
+CREATE INDEX IF NOT EXISTS idx_driver_prices_asof
+    ON driver_prices (driver_code, asof DESC);
+
 CREATE TABLE IF NOT EXISTS ticker_context (
     id           BIGSERIAL   PRIMARY KEY,
     ticker       TEXT        NOT NULL,

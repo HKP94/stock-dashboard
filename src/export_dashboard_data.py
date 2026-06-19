@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.display_signals import compute_display_signals
+from src.ingest_drivers import DRIVER_CATALOG
 from src.strategies import RETROSPECTIVE_STRATEGIES, STRATEGY_BY_NAME, TRUE_STRATEGIES
 
 logger = logging.getLogger(__name__)
@@ -442,6 +443,122 @@ def _load_macro(conn) -> dict:
     )
     summary_row = cur.fetchone()
     return _build_macro_payload(rows, dict(summary_row) if summary_row else None)
+
+
+def _driver_implication(code: str, latest: dict, previous: dict | None) -> dict:
+    meta = DRIVER_CATALOG.get(code)
+    if not latest or latest.get("close") is None:
+        return {"tone": "neutral", "text": "가격 프록시가 아직 없어 방향 해석을 보류합니다."}
+    if not previous or previous.get("close") in (None, 0):
+        return {"tone": "neutral", "text": "최근 추세 데이터가 부족해 방향성 해석을 보류합니다."}
+    delta = round((float(latest["close"]) - float(previous["close"])) / float(previous["close"]) * 100, 2)
+    if abs(delta) < 0.2 or not meta or meta.effect_sign == 0:
+        return {"tone": "neutral", "text": "최근 변동이 크지 않아 영향도 판단은 중립으로 둡니다."}
+    signed = delta * meta.effect_sign
+    tone = "support" if signed > 0 else "oppose"
+    direction = "상승" if delta > 0 else "하락"
+    text = f"{meta.name}이(가) 최근 {abs(delta):.1f}% {direction}해 이 종목에는 {'우호적' if tone == 'support' else '부담'}일 수 있습니다."
+    return {"tone": tone, "text": text}
+
+
+def _build_driver_cards(driver_rows: list[dict], price_rows: dict[str, list[dict]]) -> list[dict]:
+    cards: list[dict] = []
+    for row in sorted(driver_rows, key=lambda item: (-int(item.get("weight") or 0), item["driver_name"])):
+        code = row["driver_code"]
+        series = sorted(price_rows.get(code, []), key=lambda item: item["asof"])
+        latest = series[-1] if series else None
+        previous = series[-2] if len(series) >= 2 else None
+        delta_day = None
+        if latest and previous and previous.get("close") not in (None, 0):
+            delta_day = round((float(latest["close"]) - float(previous["close"])) / float(previous["close"]) * 100, 2)
+        month_base = next((item for item in reversed(series[:-1]) if (latest["asof"] - item["asof"]).days >= 28), None) if latest else None
+        delta_month = None
+        if latest and month_base and month_base.get("close") not in (None, 0):
+            delta_month = round((float(latest["close"]) - float(month_base["close"])) / float(month_base["close"]) * 100, 2)
+        cards.append({
+            "code": code,
+            "name": row["driver_name"],
+            "driverSource": row["driver_source"],
+            "weight": int(row["weight"]),
+            "origin": row["origin"],
+            "badge": "추정" if row["origin"] == "auto" else "사용자",
+            "rationale": row["rationale"],
+            "asof": str(latest["asof"]) if latest else None,
+            "price": _f(latest["close"]) if latest else None,
+            "deltaDay": delta_day,
+            "deltaMonth": delta_month,
+            "series": [{"date": str(item["asof"]), "value": _f(item["close"])} for item in series[-24:]],
+            "implication": _driver_implication(code, latest, month_base or previous),
+        })
+    return cards
+
+
+def _load_driver_cards(conn, tickers: list[str]) -> dict[str, list[dict]]:
+    if not tickers:
+        return {}
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT ticker, driver_code, driver_name, driver_source, weight, origin, rationale
+        FROM ticker_drivers
+        WHERE ticker = ANY(%s)
+        ORDER BY ticker, weight DESC, updated_at DESC
+        """,
+        (tickers,),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    if not rows:
+        return {}
+    codes_by_source = {"shared_macro": set(), "shared_index": set(), "yfinance_proxy": set(), "proxy_none": set()}
+    for row in rows:
+        codes_by_source.setdefault(row["driver_source"], set()).add(row["driver_code"])
+
+    price_rows: dict[str, list[dict]] = {}
+    cutoff = (date.today() - timedelta(days=200)).isoformat()
+
+    if codes_by_source["shared_macro"]:
+        cur.execute(
+            """
+            SELECT indicator_code AS code, asof, value AS close
+            FROM macro_indicators
+            WHERE indicator_code = ANY(%s) AND asof >= %s
+            ORDER BY indicator_code, asof ASC
+            """,
+            (list(codes_by_source["shared_macro"]), cutoff),
+        )
+        for row in cur.fetchall():
+            price_rows.setdefault(row["code"], []).append({"asof": row["asof"], "close": _f(row["close"])})
+
+    if codes_by_source["shared_index"]:
+        cur.execute(
+            """
+            SELECT index_code AS code, asof, close
+            FROM index_daily
+            WHERE index_code = ANY(%s) AND asof >= %s
+            ORDER BY index_code, asof ASC
+            """,
+            (list(codes_by_source["shared_index"]), cutoff),
+        )
+        for row in cur.fetchall():
+            price_rows.setdefault(row["code"], []).append({"asof": row["asof"], "close": _f(row["close"])})
+
+    if codes_by_source["yfinance_proxy"]:
+        cur.execute(
+            """
+            SELECT driver_code AS code, asof, close
+            FROM driver_prices
+            WHERE driver_code = ANY(%s) AND asof >= %s
+            ORDER BY driver_code, asof ASC
+            """,
+            (list(codes_by_source["yfinance_proxy"]), cutoff),
+        )
+        for row in cur.fetchall():
+            price_rows.setdefault(row["code"], []).append({"asof": row["asof"], "close": _f(row["close"])})
+
+    grouped: dict[str, list[dict]] = {}
+    for ticker in tickers:
+        grouped[ticker] = _build_driver_cards([row for row in rows if row["ticker"] == ticker], price_rows)
+    return grouped
 
 
 # ── 종목 가격·거래량 시계열 (6개월) ──────────────────────────────────
@@ -1204,6 +1321,7 @@ def build_data() -> dict:
         notes_map = _load_stock_notes(conn)
         note_history_map = _load_stock_note_history(conn)
         ticker_context_map = _load_ticker_context_recent(conn, tickers)
+        driver_cards_map = _load_driver_cards(conn, tickers)
 
         # PR-7: 백테스트 / 회고
         backtest_data = _load_backtest(conn)
@@ -1396,6 +1514,7 @@ def build_data() -> dict:
                 "noteHistory": note_history_map.get(tk, []),
                 # Wave 2-C: 최근 30일 누적 인사이트
                 "insightHistory": ticker_context_map.get(tk, []),
+                "drivers": driver_cards_map.get(tk, []),
             })
 
         _attach_display_signals(stocks)

@@ -251,6 +251,18 @@ CREATE TABLE index_daily (
   PRIMARY KEY (index_code, asof)
 );
 
+-- 종목 핵심 동인 (Wave 4-C)
+CREATE TABLE ticker_drivers (
+  ticker TEXT, driver_code TEXT, driver_name TEXT, driver_source TEXT,
+  weight SMALLINT, origin TEXT, rationale TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (ticker, driver_code)
+);
+CREATE TABLE driver_prices (
+  driver_code TEXT, asof DATE, close NUMERIC, source TEXT,
+  PRIMARY KEY (driver_code, asof)
+);
+
 -- 종목별 누적 인사이트 (최근 뉴스/리포트/드라이버/거시 근거 영속화)
 CREATE TABLE ticker_context (
   id BIGSERIAL PRIMARY KEY, ticker TEXT NOT NULL, context_type TEXT NOT NULL,
@@ -702,6 +714,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
 
 ### 안정화 (운영 중 발견·수정)
+- [x] **Wave 4-C 종목 드라이버** (2026-06-19): `ticker_drivers`/`driver_prices`를 추가해 종목별 핵심 가격 동인을 자동 추정(Gemini + 휴리스틱 fallback)하고 local_api CRUD로 사용자가 수정할 수 있게 했다. `origin='user'`는 auto 재생성에 덮어쓰이지 않으며, 공용 동인은 `macro_indicators`/`index_daily`를 재사용하고 전용 프록시(SOXX/LIT)만 별도 적재한다. 종목상세 탭은 "핵심 동인" 카드에서 추정 뱃지·영향도·미니차트·support/oppose 함의를 함께 보여준다.
 - [x] **Wave 4-B 매크로 분석** (2026-06-19): `macro_indicators`/`macro_summary`를 추가해 미국(FRED) 기준금리·10년물·CPI·실업률, 한국(ECOS) 기준금리·CPI, 글로벌(yfinance) VIX·DXY·USDKRW·WTI를 정기 수집·요약한다. FRED/ECOS 키는 요청에만 사용하고 DB·로그·저장 URL에 남기지 않도록 회귀 테스트와 에러 마스킹을 추가했다. 시장전망 탭은 "거시 환경" 카드에서 최신 값·전일/전월 대비·미니 추세와 우호/부담 양면 해석을 함께 보여준다.
 - [x] **Wave 4-A 긴급 버그·정리** (2026-06-19): 관심종목 관리 섹터 입력이 매 글자마다 행 리마운트로 포커스/스크롤을 잃던 문제를 top-level 행 컴포넌트 + local draft 저장 구조로 안정화했다. KR 일봉 조회 종료일을 KST 장마감 기준으로 명시하고, 18시 경량 갱신은 실제 적재된 마지막 거래일을 로그로 남기도록 해 `priceAsofByMarket["KR"]`와의 정합을 강화했다. 뉴스 요약·시장 시황·포트폴리오 조언은 렌더 단계에서 raw `*`/`**`를 정리하고, Gemini/조언 프롬프트에도 과도한 강조 자제 지침을 추가했다.
 - [x] **Wave 3 백필 재계산 핫픽스** (2026-06-19): `backfill.py`의 5년 백필 경로가 W3-A 변경 중 `recompute_indicators_to_db` import 누락으로 partial run을 내던 문제를 수정했다. `python -m src.backfill` / `--5y` 단독 실행이 다시 가격 백필 → 영향 종목 지표 재계산 → active 유니버스 퀀트 재계산까지 한 번에 마치며, `recompute.py`는 수동 수복 도구로만 남긴다. 회귀 테스트로 NameError 재발을 차단했다.
@@ -734,6 +747,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v4.4 (2026-06-19) Wave 4-C: `ticker_drivers`/`driver_prices` 스키마, Gemini 기반 드라이버 자동 추정과 사용자 우선 CRUD, 공용 거시 재사용·전용 프록시 적재, 종목상세 "핵심 동인" 카드, `ingest_macro`의 `.env` 자동 로드를 추가 — Codex.*
 - *v4.3 (2026-06-19) Wave 4-B: `macro_indicators`/`macro_summary` 거시 백본과 FRED·ECOS·yfinance 수집, Gemini 양면 거시 요약, 시장전망 탭의 "거시 환경" 카드 및 시크릿 비저장 회귀 테스트를 추가 — Codex.*
 - *v4.2 (2026-06-19) Wave 4-A: 관심종목 섹터 입력 포커스 튐을 top-level 행 컴포넌트와 로컬 draft 저장 구조로 수정하고, KR 일봉 종료일을 KST 장마감 기준으로 명시·로깅, UI/프롬프트의 과도한 markdown 강조를 정리 — Codex.*
 - *v4.1 (2026-06-19) Wave 3 backfill hotfix: `backfill.py`의 indicators 재계산 import 누락을 복구해 `python -m src.backfill` / `--5y`가 다시 가격→지표→퀀트까지 단독 완결되도록 수정하고, NameError 회귀 테스트를 추가 — Codex.*

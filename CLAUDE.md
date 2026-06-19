@@ -37,6 +37,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── strategies.py       # true/retrospective 전략 레지스트리 (Wave 3)
 │   ├── rules.py            # 알림 룰 엔진 (PRD §F6-1)
 │   ├── enrich_gemini.py    # Gemini 호출 래퍼 (스키마 검증 포함)
+│   ├── ingest_drivers.py   # 종목 핵심 동인 자동 추정 + 프록시 가격 수집 (Wave 4-C)
 │   ├── assemble.py         # 종목 일일 레코드(PRD §5.2) 조립 뷰
 │   ├── run_pipeline.py     # 일일 파이프라인 실행기(수집→연산→LLM→조립)
 │   ├── send_telegram.py    # 아침 브리핑 텔레그램 발송
@@ -91,6 +92,8 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **시장 뉴스 영속화(W2-B)**: 종목 뉴스와 별도로 `market_news`(원천)와 `market_news_summary`(일일 KR/US/Global 요약)를 유지한다. 시장전망 탭의 "오늘의 시장 뉴스 요약"은 이 테이블만 읽는다.
 - **거시 백본(W4-B)**: `macro_indicators`는 지표별 시계열, `macro_summary`는 일일 양면 해석(우호/부담/체크포인트) 전용이다. 시장전망 탭의 "거시 환경" 카드는 이 두 테이블만 읽고, 종목 export처럼 지표별 최신 행을 개별 선택한다(글로벌 max(asof) 금지).
 - **거시 시크릿 규칙(W4-B)**: FRED/ECOS 키는 요청에만 사용한다. DB 컬럼·저장 URL·로그 메시지·예외 문자열에 키가 남으면 버그다. HTTP 오류는 원본 URL을 그대로 올리지 말고 마스킹/일반화한다.
+- **종목 드라이버(W4-C)**: `ticker_drivers`는 `(ticker, driver_code)` 단위로 저장하며 `origin='user'`가 항상 우선이다. 자동 추정 결과는 user 행을 덮어쓰지 못하고, stale auto만 교체한다. 가격은 `macro_indicators`/`index_daily` 재사용을 우선하고, 전용 프록시만 `driver_prices`에 적재한다.
+- **드라이버 해석 톤(W4-C)**: 종목상세 "핵심 동인" 카드는 support/oppose 관찰 문장만 보여준다. 자동 추정은 반드시 "추정" 뱃지와 rationale을 같이 노출하고, 매매 단정 문구를 만들지 않는다.
 - **누적 인사이트 영속화(W2-C)**: Gemini 종목 뉴스 요약은 `ticker_context`에도 `context_type='news_summary'`로 저장한다. 종목상세 "누적 인사이트"는 최근 30일만 보여주고, `valid_until < today` 항목은 삭제하지 말고 조회에서만 제외한다.
 - **신선도 라벨(W2-D)**: export는 `generatedAt`와 시장별 최신 거래일로 `refreshContext`를 계산한다. 헤더/시장전망 탭은 반드시 "미국 종가 기준 (06시 갱신)" 또는 "한국 종가 기준 (18시 갱신)"을 표시하고, 18시 갱신본에서는 KR 가격·뉴스만 최신이며 US 가격은 전날 종가임을 명시한다.
 - **시장 등락률**: `ingest_market`이 거래일 기준 전일대비 등락을 `market_daily.payload.changes`에 저장(주말 carry-over 0.00% 버그 방지). export는 changes 우선, 폴백은 상대오차 1e-5 초과 시만 인정.

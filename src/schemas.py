@@ -160,6 +160,23 @@ class MacroSummaryRow(BaseModel):
     summary_md: str
 
 
+class TickerDriverRow(BaseModel):
+    ticker: str
+    driver_code: str
+    driver_name: str
+    driver_source: str
+    weight: int = Field(ge=1, le=5)
+    origin: Literal["auto", "user"]
+    rationale: str
+
+
+class DriverPriceRow(BaseModel):
+    driver_code: str
+    asof: date
+    close: float
+    source: str
+
+
 class IndexDailyRow(BaseModel):
     index_code: str
     asof: date
@@ -366,3 +383,15 @@ class MacroSummaryOutput(BaseModel):
     oppose_view: str
     watch_points: list[str] = Field(default_factory=list)
     summary_md: str
+
+
+class DriverSuggestionItem(BaseModel):
+    driver_code: str
+    driver_name: str
+    driver_source: str
+    weight: int = Field(ge=1, le=5)
+    rationale: str
+
+
+class DriverSuggestionOutput(BaseModel):
+    drivers: list[DriverSuggestionItem] = Field(default_factory=list)

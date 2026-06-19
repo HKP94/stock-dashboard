@@ -47,6 +47,7 @@ from src.db import (
 )
 from src.enrich_gemini import enrich_market_summary, enrich_news_batch, reenrich_stale_fallbacks, summarize_macro_environment, summarize_market_news_digest
 from src.ingest_kr import run_kr_ingest
+from src.ingest_drivers import run_driver_price_ingest
 from src.ingest_macro import run_macro_ingest
 from src.ingest_market import run_market_ingest
 from src.ingest_market_news import run_market_news_ingest
@@ -125,6 +126,19 @@ def _step_macro(conn: psycopg.Connection, errors: list) -> None:
         conn.rollback()
         logger.error("Step 1b 실패: %s", exc, exc_info=True)
         errors.append(_err("macro", exc))
+
+
+def _step_driver_prices(conn: psycopg.Connection, errors: list) -> None:
+    logger.info("Step 1c: 드라이버 프록시 가격 수집")
+    try:
+        result = run_driver_price_ingest(conn)
+        conn.commit()
+        errors.extend(result.get("errors", []))
+        logger.info("Step 1c 완료: driver_prices %d건 upsert (commit)", len(result.get("rows", [])))
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Step 1c 실패: %s", exc, exc_info=True)
+        errors.append(_err("driver_prices", exc))
 
 
 def _step_ingest_kr(conn: psycopg.Connection, kr_tickers: list[str], errors: list) -> None:
@@ -393,6 +407,7 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
 
             _step_market(conn, errors)
             _step_macro(conn, errors)
+            _step_driver_prices(conn, errors)
             _step_ingest_kr(conn, kr_tickers, errors)
             _step_ingest_us(conn, us_tickers, errors)
             _step_ingest_news(conn, all_tickers, errors)

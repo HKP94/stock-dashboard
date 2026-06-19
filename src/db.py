@@ -26,6 +26,7 @@ from psycopg.types.numeric import FloatLoader, NumericBinaryLoader
 
 from src.schemas import (
     AnalystRow,
+    DriverPriceRow,
     FundamentalsRow,
     IndexDailyRow,
     IndicatorDailyRow,
@@ -42,6 +43,7 @@ from src.schemas import (
     QuantScoresRow,
     RunRow,
     TickerContextRow,
+    TickerDriverRow,
     ValuationRow,
     WatchlistRow,
 )
@@ -516,6 +518,70 @@ def upsert_macro_summary(conn: psycopg.Connection, row: MacroSummaryRow) -> None
             ),
         )
     logger.debug("upsert_macro_summary: summary_date=%s", row.summary_date)
+
+
+def upsert_ticker_drivers(conn: psycopg.Connection, rows: list[TickerDriverRow]) -> None:
+    sql = """
+        INSERT INTO ticker_drivers
+            (ticker, driver_code, driver_name, driver_source, weight, origin, rationale, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+        ON CONFLICT (ticker, driver_code) DO UPDATE SET
+            driver_name   = EXCLUDED.driver_name,
+            driver_source = EXCLUDED.driver_source,
+            weight        = EXCLUDED.weight,
+            origin        = EXCLUDED.origin,
+            rationale     = EXCLUDED.rationale,
+            updated_at    = now()
+        WHERE ticker_drivers.origin <> 'user' OR EXCLUDED.origin = 'user'
+    """
+    with conn.cursor() as cur:
+        cur.executemany(
+            sql,
+            [
+                (
+                    r.ticker,
+                    r.driver_code,
+                    r.driver_name,
+                    r.driver_source,
+                    r.weight,
+                    r.origin,
+                    r.rationale,
+                )
+                for r in rows
+            ],
+        )
+    logger.debug("upsert_ticker_drivers: %d rows", len(rows))
+
+
+def delete_stale_auto_ticker_drivers(conn: psycopg.Connection, ticker: str, keep_codes: list[str]) -> None:
+    with conn.cursor() as cur:
+        if keep_codes:
+            cur.execute(
+                """
+                DELETE FROM ticker_drivers
+                WHERE ticker = %s AND origin = 'auto' AND driver_code <> ALL(%s)
+                """,
+                (ticker, keep_codes),
+            )
+        else:
+            cur.execute(
+                "DELETE FROM ticker_drivers WHERE ticker = %s AND origin = 'auto'",
+                (ticker,),
+            )
+    logger.debug("delete_stale_auto_ticker_drivers: %s keep=%d", ticker, len(keep_codes))
+
+
+def upsert_driver_prices(conn: psycopg.Connection, rows: list[DriverPriceRow]) -> None:
+    sql = """
+        INSERT INTO driver_prices (driver_code, asof, close, source)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (driver_code, asof) DO UPDATE SET
+            close  = EXCLUDED.close,
+            source = EXCLUDED.source
+    """
+    with conn.cursor() as cur:
+        cur.executemany(sql, [(r.driver_code, r.asof, r.close, r.source) for r in rows])
+    logger.debug("upsert_driver_prices: %d rows", len(rows))
 
 
 def replace_ticker_context(conn: psycopg.Connection, row: TickerContextRow) -> None:
