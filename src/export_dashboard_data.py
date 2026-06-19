@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.display_signals import compute_display_signals
+from src.strategies import RETROSPECTIVE_STRATEGIES, STRATEGY_BY_NAME, TRUE_STRATEGIES
 
 logger = logging.getLogger(__name__)
 
@@ -481,55 +482,59 @@ def _load_portfolio_snapshot(conn) -> dict:
 
 # ── PR-7: 백테스트 / 회고 로드 ────────────────────────────────────────
 def _load_backtest(conn) -> dict:
-    """backtest_results → {trueBacktest:{strategies,window}, retrospective:{byFactor}}."""
+    """backtest_results → separated true/retrospective strategy payload."""
     cur = conn.cursor()
     cur.execute("""
-        SELECT strategy_name, metric_type, window_start, window_end,
-               cum_return, cagr, mdd, vol, sharpe, payload
+        SELECT strategy, track, horizon, cum_return, cagr, mdd, sharpe, regime_returns, payload
         FROM backtest_results
+        WHERE strategy IS NOT NULL AND track IS NOT NULL AND horizon IS NOT NULL
     """)
     rows = [dict(r) for r in cur.fetchall()]
+    grouped: dict[str, dict[str, dict]] = {"true": {}, "retrospective": {}}
+    retro_warning = ""
+    retro_asof = None
 
-    # 진짜 백테스트
-    strategies = []
-    window = {}
-    for r in rows:
-        if r["metric_type"] != "true_backtest":
+    for row in rows:
+        track = row["track"]
+        if track not in grouped:
             continue
-        p = r["payload"] or {}
-        strategies.append({
-            "name": r["strategy_name"],
-            "equityCurve": p.get("equity_curve", []),
-            "cumReturn": _f(r["cum_return"]),
-            "cagr": _f(r["cagr"]),
-            "mdd": _f(r["mdd"]),
-            "vol": _f(r["vol"]),
-            "sharpe": _f(r["sharpe"]),
-        })
-        if not window and p.get("months") is not None:
-            window = {"start": str(r["window_start"]), "end": str(r["window_end"]), "months": p.get("months")}
-    # 표시 순서 고정: 모멘텀 → 동일가중 → Buy&Hold
-    order = {"momentum_top8": 0, "equal_weight_benchmark": 1, "buy_hold_benchmark": 2}
-    strategies.sort(key=lambda s: order.get(s["name"], 9))
+        payload = row["payload"] or {}
+        name = row["strategy"]
+        meta = STRATEGY_BY_NAME.get(name)
+        strategy = grouped[track].setdefault(
+            name,
+            {
+                "name": name,
+                "label": payload.get("label") or (meta.label if meta else name),
+                "description": payload.get("description") or (meta.description if meta else ""),
+                "horizons": {},
+            },
+        )
+        strategy["horizons"][row["horizon"]] = {
+            "cumReturn": _f(row["cum_return"]),
+            "cagr": _f(row["cagr"]),
+            "mdd": _f(row["mdd"]),
+            "sharpe": _f(row["sharpe"]),
+            "regimeReturns": row["regime_returns"] or {},
+            "equityCurve": payload.get("equity_curve", []),
+            "benchmarks": payload.get("benchmarks", {}),
+            "selectionExamples": payload.get("selection_examples", []),
+            "selectedTickers": payload.get("selected_tickers", []),
+            "warning": payload.get("warning", ""),
+            "window": {"start": payload.get("window_start"), "end": payload.get("window_end")},
+        }
+        if track == "retrospective":
+            retro_warning = payload.get("warning") or retro_warning
+            retro_asof = payload.get("asof") or retro_asof
 
-    # 회고
-    by_factor = []
-    factor_order = {"momentum": 0, "value": 1, "quality": 2, "growth": 3, "composite": 4}
-    retro_rows = [r for r in rows if r["metric_type"] == "retrospective"]
-    retro_rows.sort(key=lambda r: factor_order.get((r["payload"] or {}).get("factor"), 9))
-    for r in retro_rows:
-        p = r["payload"] or {}
-        by_factor.append({
-            "factor": p.get("factor"),
-            "topTickers": p.get("top_tickers", []),
-            "benchmark": p.get("benchmark", {}),
-            "warning": p.get("warning", ""),
-            "asof": p.get("asof"),
-        })
+    true_order = {s.name: i for i, s in enumerate(TRUE_STRATEGIES)}
+    retro_order = {s.name: i for i, s in enumerate(RETROSPECTIVE_STRATEGIES)}
+    true_strategies = sorted(grouped["true"].values(), key=lambda s: true_order.get(s["name"], 99))
+    retro_strategies = sorted(grouped["retrospective"].values(), key=lambda s: retro_order.get(s["name"], 99))
 
     return {
-        "trueBacktest": {"strategies": strategies, "window": window},
-        "retrospective": {"byFactor": by_factor},
+        "trueTrack": {"strategies": true_strategies},
+        "retrospective": {"strategies": retro_strategies, "warning": retro_warning, "asof": retro_asof},
     }
 
 

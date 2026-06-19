@@ -359,3 +359,10 @@ CREATE TABLE IF NOT EXISTS backtest_results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backtest_strategy ON backtest_results (strategy_name, computed_at DESC);
+ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS strategy TEXT;
+ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS track TEXT CHECK (track IN ('true', 'retrospective'));
+ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS horizon TEXT CHECK (horizon IN ('1y', '3y', '5y'));
+ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS regime_returns JSONB NOT NULL DEFAULT '{}';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_backtest_results_strategy_track_horizon
+    ON backtest_results (strategy, track, horizon)
+    WHERE strategy IS NOT NULL AND track IS NOT NULL AND horizon IS NOT NULL;

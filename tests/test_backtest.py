@@ -122,34 +122,41 @@ class TestBacktestIntegration:
         mat = _make_matrix(320)
         upserts = []
 
-        def fake_upsert(conn, name, mtype, ws, we, m, payload):
-            upserts.append({"name": name, "mtype": mtype, "metrics": m, "payload": payload})
+        def fake_upsert(conn, definition, horizon, metrics, regime_returns, payload):
+            if horizon == "5y":
+                upserts.append({
+                    "name": definition.name,
+                    "track": definition.track,
+                    "metrics": metrics,
+                    "payload": payload,
+                })
 
         conn = MagicMock()
         with patch.object(bt, "_load_watchlist", return_value={"UP": "Up", "FLAT": "Flat", "DOWN": "Down"}), \
              patch.object(bt, "_load_price_matrix", return_value=mat), \
-             patch.object(bt, "_upsert_backtest", side_effect=fake_upsert):
+             patch.object(bt, "_load_regime_frame", return_value=pd.DataFrame()), \
+             patch.object(bt, "_load_index_matrix", return_value=pd.DataFrame()), \
+             patch.object(bt, "_upsert_backtest_row", side_effect=fake_upsert):
             res = bt.compute_momentum_backtest(conn, top_n=1)
 
         assert res["ok"] is True
         names = {u["name"] for u in upserts}
-        assert names == {"momentum_top8", "equal_weight_benchmark", "buy_hold_benchmark"}
-        # 모든 결과가 true_backtest
-        assert all(u["mtype"] == "true_backtest" for u in upserts)
-        # 모멘텀(top1=UP) 누적수익이 동일가중 벤치마크보다 높아야 함
-        mom = next(u for u in upserts if u["name"] == "momentum_top8")["metrics"]
-        eqw = next(u for u in upserts if u["name"] == "equal_weight_benchmark")["metrics"]
+        assert names == {"momentum_12_1", "low_vol", "equal_weight_bh"}
+        assert all(u["track"] == "true" for u in upserts)
+        mom = next(u for u in upserts if u["name"] == "momentum_12_1")["metrics"]
+        eqw = next(u for u in upserts if u["name"] == "equal_weight_bh")["metrics"]
         assert mom["cum_return"] > eqw["cum_return"]
         # 최근 선정에 UP 포함
-        sel = next(u for u in upserts if u["name"] == "momentum_top8")["payload"]["selections"]
+        sel = next(u for u in upserts if u["name"] == "momentum_12_1")["payload"]["selection_examples"]
         assert any("UP" in s["tickers"] for s in sel)
 
     def test_retrospective_maps_top_factors(self):
         mat = _make_matrix(300)
         upserts = []
 
-        def fake_upsert(conn, name, mtype, ws, we, m, payload):
-            upserts.append({"name": name, "mtype": mtype, "payload": payload})
+        def fake_upsert(conn, definition, horizon, metrics, regime_returns, payload):
+            if horizon == "5y":
+                upserts.append({"name": definition.name, "track": definition.track, "payload": payload})
 
         # quant_scores fake: UP이 모든 팩터 최고
         quant_rows = [
@@ -157,25 +164,21 @@ class TestBacktestIntegration:
             {"ticker": "FLAT", "momentum": 50, "value": 50, "quality": 50, "growth": 50, "composite": 50},
             {"ticker": "DOWN", "momentum": 10, "value": 20, "quality": 15, "growth": 12, "composite": None},
         ]
-        fake_cur = MagicMock()
-        fake_cur.fetchall.return_value = quant_rows
-        fake_cur.__enter__ = lambda s: fake_cur
-        fake_cur.__exit__ = lambda *a: False
         conn = MagicMock()
-        conn.cursor.return_value = fake_cur
 
         with patch.object(bt, "_load_watchlist", return_value={"UP": "Up", "FLAT": "Flat", "DOWN": "Down"}), \
              patch.object(bt, "_load_price_matrix", return_value=mat), \
-             patch.object(bt, "_latest_quant_asof", return_value=mat.index[-1].date()), \
-             patch.object(bt, "_upsert_backtest", side_effect=fake_upsert):
+             patch.object(bt, "_load_latest_quant_rows", return_value=(mat.index[-1].date(), quant_rows)), \
+             patch.object(bt, "_load_regime_frame", return_value=pd.DataFrame()), \
+             patch.object(bt, "_load_index_matrix", return_value=pd.DataFrame()), \
+             patch.object(bt, "_upsert_backtest_row", side_effect=fake_upsert):
             res = bt.compute_retrospective(conn)
 
         assert res["ok"] is True
-        assert all(u["mtype"] == "retrospective" for u in upserts)
-        # 각 팩터 회고에 UP이 1위
+        assert all(u["track"] == "retrospective" for u in upserts)
+        assert {u["name"] for u in upserts} == {"value", "quality", "multifactor"}
         for u in upserts:
-            top = u["payload"]["top_tickers"]
+            top = u["payload"]["selected_tickers"]
             assert top[0]["ticker"] == "UP"
-            # composite은 None(DOWN) 제외 → 2종목만
-            if u["payload"]["factor"] == "composite":
+            if u["name"] == "multifactor":
                 assert all(t["ticker"] != "DOWN" for t in top)

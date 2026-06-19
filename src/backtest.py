@@ -1,19 +1,10 @@
 """
-backtest.py — 멀티전략 비교 (진짜 백테스트 + 회고)
+backtest.py — 전략 라이브러리 기반 true / retrospective 분리 백테스트
 
-⚠️ 핵심 원칙 (PRD §F7): 두 개념을 절대 혼동하지 않는다.
-  1) compute_momentum_backtest — **진짜 백테스트(true_backtest)**
-     각 과거 시점 t에서 't까지의 가격 데이터만'으로 모멘텀을 계산·선정한다.
-     미래 정보(look-ahead)가 없으므로 실제 운용 가능한 전략 성과 추정.
-  2) compute_retrospective — **회고(retrospective)**
-     valuation/analyst가 '오늘' 스냅샷 1건뿐이라 과거 재현 불가 → 오늘 선정한 상위 종목의
-     과거 수익률을 '되돌아보는' 것. **선정시점편향(look-ahead/survivorship)** 이 있어
-     백테스트가 아니다. 화면에서 반드시 '참고용 · 백테스트 아님'으로 구분 표기.
-
-모멘텀 공식(PRD §F4): 0.10·Z(1M) + 0.20·Z(3M) + 0.30·Z(6M) + 0.40·Z(12-1M),
-12-1M = 최근 1개월 skip(단기 되돌림 제거). compute_quant._zscore 재사용.
-
-과거 성과는 미래 성과를 보장하지 않는다.
+§F7 원칙:
+  - true track: 과거 시점까지의 가격 데이터만 사용
+  - retrospective track: 최신 스냅샷 상위 종목을 고정 바스켓으로 회고
+  - 두 트랙은 저장/표시에서 절대 섞지 않는다
 """
 
 from __future__ import annotations
@@ -21,33 +12,32 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import numpy as np
 import pandas as pd
-import psycopg
 
-from src.compute_quant import _zscore
+from src.compute_quant import _zscore, compute_regime
 from src.db import get_conn, log_run_finish, log_run_start
+from src.strategies import (
+    RETROSPECTIVE_STRATEGIES,
+    TRUE_STRATEGIES,
+    StrategyDefinition,
+)
 
 logger = logging.getLogger(__name__)
 
-# 리밸런싱·룩백 파라미터 (영업일)
-LOOKBACK_MIN = 252         # 백테스트 시작에 필요한 최소 데이터(12M)
-REBALANCE_STEP = 21        # 약 1개월마다 리밸런싱
+LOOKBACK_MIN = 252
+REBALANCE_STEP = 21
 TOP_N_DEFAULT = 8
-PERIODS_PER_YEAR = 12      # 월별 리밸런싱 → 연 12회
-
-# 회고 룩백 (영업일)
-RETRO_WINDOWS = {"ret1m": 21, "ret3m": 63, "ret6m": 126, "ret12m": 252}
+LOW_VOL_LOOKBACK = 63
+PERIODS_PER_YEAR = 12
 RETRO_TOP_N = 5
-RETRO_FACTORS = ["momentum", "value", "quality", "growth", "composite"]
+HORIZON_YEARS = {"1y": 1, "3y": 3, "5y": 5}
+BENCHMARK_ORDER = ["^KS11", "^GSPC", "^IXIC"]
+RETRO_WINDOWS = {"ret1m": 21, "ret3m": 63, "ret6m": 126, "ret12m": 252}
 
-
-# ──────────────────────────────────────────────────────────────
-# 데이터 로드
-# ──────────────────────────────────────────────────────────────
 
 def _load_watchlist(conn) -> dict[str, str]:
     with conn.cursor() as cur:
@@ -56,13 +46,14 @@ def _load_watchlist(conn) -> dict[str, str]:
 
 
 def _load_price_matrix(conn, tickers: list[str]) -> pd.DataFrame:
-    """
-    prices_daily → date×ticker 종가 매트릭스.
-    KR/US 거래 캘린더가 달라 결측이 생기므로 union 날짜축 + 전일값 ffill로 정렬한다.
-    """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT ticker, date, close FROM prices_daily WHERE ticker = ANY(%s) AND close IS NOT NULL ORDER BY date",
+            """
+            SELECT ticker, date, close
+            FROM prices_daily
+            WHERE ticker = ANY(%s) AND close IS NOT NULL
+            ORDER BY date
+            """,
             (tickers,),
         )
         rows = cur.fetchall()
@@ -71,14 +62,75 @@ def _load_price_matrix(conn, tickers: list[str]) -> pd.DataFrame:
     df = pd.DataFrame([dict(r) for r in rows])
     df["date"] = pd.to_datetime(df["date"])
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
-    mat = df.pivot_table(index="date", columns="ticker", values="close", aggfunc="last")
-    mat = mat.sort_index().ffill()
-    return mat
+    return df.pivot_table(index="date", columns="ticker", values="close", aggfunc="last").sort_index().ffill()
 
 
-# ──────────────────────────────────────────────────────────────
-# 모멘텀 점수 (시점 t까지의 데이터만 사용)
-# ──────────────────────────────────────────────────────────────
+def _load_index_matrix(conn) -> pd.DataFrame:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT index_code, asof, close
+            FROM index_daily
+            WHERE index_code = ANY(%s)
+            ORDER BY asof
+            """,
+            (BENCHMARK_ORDER,),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame([dict(r) for r in rows])
+    df["asof"] = pd.to_datetime(df["asof"])
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    return df.pivot_table(index="asof", columns="index_code", values="close", aggfunc="last").sort_index().ffill()
+
+
+def _load_regime_frame(conn) -> pd.DataFrame:
+    index_mat = _load_index_matrix(conn)
+    if index_mat.empty:
+        return pd.DataFrame(columns=["kospi", "sp500", "vix"])
+    df = pd.DataFrame(index=index_mat.index)
+    if "^KS11" in index_mat.columns:
+        df["kospi"] = pd.to_numeric(index_mat["^KS11"], errors="coerce")
+    if "^GSPC" in index_mat.columns:
+        df["sp500"] = pd.to_numeric(index_mat["^GSPC"], errors="coerce")
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT asof, vix FROM market_daily WHERE vix IS NOT NULL ORDER BY asof")
+        vix_rows = cur.fetchall()
+    if vix_rows:
+        vix_df = pd.DataFrame([dict(r) for r in vix_rows])
+        vix_df["asof"] = pd.to_datetime(vix_df["asof"])
+        vix_df["vix"] = pd.to_numeric(vix_df["vix"], errors="coerce")
+        df = df.join(vix_df.set_index("asof")["vix"], how="left")
+    if "vix" not in df.columns:
+        df["vix"] = np.nan
+    return df.sort_index().ffill()
+
+
+def _latest_quant_asof(conn) -> Optional[date]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT max(asof) AS a FROM quant_scores")
+        row = cur.fetchone()
+    return row["a"] if row and row["a"] else None
+
+
+def _load_latest_quant_rows(conn) -> tuple[Optional[date], list[dict]]:
+    asof = _latest_quant_asof(conn)
+    if not asof:
+        return None, []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ticker, momentum, value, quality, growth, composite
+            FROM quant_scores
+            WHERE asof = %s
+            """,
+            (asof,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    return asof, rows
+
 
 def _log_ret(arr: np.ndarray, i_from: int, i_to: int) -> Optional[float]:
     if i_from < 0 or i_to < 0 or i_from >= len(arr) or i_to >= len(arr):
@@ -90,46 +142,67 @@ def _log_ret(arr: np.ndarray, i_from: int, i_to: int) -> Optional[float]:
 
 
 def _momentum_components(prices: np.ndarray, t: int) -> Optional[dict]:
-    """index t(포함)까지의 가격으로 1M/3M/6M/12-1M 로그수익률. 데이터 부족 시 None."""
     if t < 21 or np.isnan(prices[t]):
         return None
     return {
-        "m_1m":  _log_ret(prices, max(0, t - 21), t),
-        "m_3m":  _log_ret(prices, max(0, t - 63), max(0, t - 5)),
-        "m_6m":  _log_ret(prices, max(0, t - 126), max(0, t - 21)),
+        "m_1m": _log_ret(prices, max(0, t - 21), t),
+        "m_3m": _log_ret(prices, max(0, t - 63), max(0, t - 5)),
+        "m_6m": _log_ret(prices, max(0, t - 126), max(0, t - 21)),
         "m_12m": _log_ret(prices, max(0, t - 252), max(0, t - 21)),
     }
 
 
 def _momentum_scores_at(mat: pd.DataFrame, t: int) -> dict[str, float]:
-    """시점 t에서 유니버스 모멘텀 점수(가중 Z-score). 데이터 없는 종목은 제외."""
     comps: dict[str, dict] = {}
-    for tk in mat.columns:
-        prices = mat[tk].values.astype(float)
-        c = _momentum_components(prices, t)
-        if c and all(c[k] is not None for k in ("m_1m", "m_3m", "m_6m", "m_12m")):
-            comps[tk] = c
+    for ticker in mat.columns:
+        prices = mat[ticker].values.astype(float)
+        comp = _momentum_components(prices, t)
+        if comp and all(comp[k] is not None for k in ("m_1m", "m_3m", "m_6m", "m_12m")):
+            comps[ticker] = comp
     if not comps:
         return {}
-    z1m  = _zscore({tk: c["m_1m"]  for tk, c in comps.items()})
-    z3m  = _zscore({tk: c["m_3m"]  for tk, c in comps.items()})
-    z6m  = _zscore({tk: c["m_6m"]  for tk, c in comps.items()})
-    z12m = _zscore({tk: c["m_12m"] for tk, c in comps.items()})
+    z1 = _zscore({tk: c["m_1m"] for tk, c in comps.items()})
+    z3 = _zscore({tk: c["m_3m"] for tk, c in comps.items()})
+    z6 = _zscore({tk: c["m_6m"] for tk, c in comps.items()})
+    z12 = _zscore({tk: c["m_12m"] for tk, c in comps.items()})
     return {
-        tk: 0.10 * z1m[tk] + 0.20 * z3m[tk] + 0.30 * z6m[tk] + 0.40 * z12m[tk]
+        tk: 0.10 * z1[tk] + 0.20 * z3[tk] + 0.30 * z6[tk] + 0.40 * z12[tk]
         for tk in comps
     }
 
 
-# ──────────────────────────────────────────────────────────────
-# 성과 지표
-# ──────────────────────────────────────────────────────────────
+def _low_vol_scores_at(mat: pd.DataFrame, t: int) -> dict[str, float]:
+    scores: dict[str, float] = {}
+    for ticker in mat.columns:
+        series = mat[ticker].iloc[max(0, t - LOW_VOL_LOOKBACK): t + 1].dropna()
+        if len(series) < 22:
+            continue
+        rets = series.pct_change().dropna()
+        if len(rets) < 20:
+            continue
+        vol = float(rets.std(ddof=1))
+        if not np.isnan(vol):
+            scores[ticker] = -vol
+    return scores
+
+
+def _rebase_curve_from_series(series: pd.Series) -> list[dict]:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    if clean.empty:
+        return []
+    base = float(clean.iloc[0])
+    if base <= 0:
+        return []
+    return [
+        {"date": ts.date().isoformat(), "value": round(float(val / base * 100.0), 3)}
+        for ts, val in clean.items()
+    ]
+
 
 def _metrics_from_equity(curve: list[dict]) -> dict:
-    """equity curve [{date, value}] → cum_return, CAGR, MDD, vol, sharpe."""
     if len(curve) < 2:
         return {"cum_return": 0.0, "cagr": 0.0, "mdd": 0.0, "vol": 0.0, "sharpe": 0.0}
-    vals = np.array([p["value"] for p in curve], dtype=float)
+    vals = np.array([float(p["value"]) for p in curve], dtype=float)
     cum_return = float(vals[-1] / vals[0] - 1)
 
     d0 = datetime.fromisoformat(curve[0]["date"]).date()
@@ -137,12 +210,10 @@ def _metrics_from_equity(curve: list[dict]) -> dict:
     years = max((d1 - d0).days / 365.25, 1e-9)
     cagr = float((vals[-1] / vals[0]) ** (1 / years) - 1) if vals[0] > 0 else 0.0
 
-    # MDD
     peak = np.maximum.accumulate(vals)
     dd = (vals - peak) / peak
     mdd = float(dd.min())
 
-    # 기간(월별) 수익률
     rets = vals[1:] / vals[:-1] - 1
     if len(rets) >= 2 and rets.std() > 0:
         vol = float(rets.std(ddof=1) * math.sqrt(PERIODS_PER_YEAR))
@@ -160,220 +231,326 @@ def _metrics_from_equity(curve: list[dict]) -> dict:
     }
 
 
-# ──────────────────────────────────────────────────────────────
-# 1) 진짜 백테스트 (모멘텀 top_n + 벤치마크 2종)
-# ──────────────────────────────────────────────────────────────
-
-def compute_momentum_backtest(conn, top_n: int = TOP_N_DEFAULT) -> dict:
-    """
-    모멘텀 top_n 동일가중 전략 + 동일가중 벤치마크 + Buy&Hold 벤치마크.
-    각 리밸런싱 시점에서 그 시점까지의 데이터만으로 모멘텀 선정(미래정보 없음).
-    결과를 backtest_results(metric_type='true_backtest')에 upsert.
-    """
-    watchlist = _load_watchlist(conn)
-    tickers = list(watchlist.keys())
-    mat = _load_price_matrix(conn, tickers)
-    if mat.empty or len(mat) < LOOKBACK_MIN + REBALANCE_STEP:
-        logger.warning("백테스트: 데이터 부족 (rows=%d) — 스킵", len(mat))
-        return {"ok": False, "reason": "insufficient_data"}
-
-    dates = mat.index
-    n = len(mat)
-    # 리밸런싱 인덱스: 252부터 STEP 간격, 마지막까지
-    rebal_idx = list(range(LOOKBACK_MIN, n, REBALANCE_STEP))
-    if rebal_idx and rebal_idx[-1] != n - 1:
-        rebal_idx.append(n - 1)  # 마지막 시점 포함(평가 종료)
-
-    mom_curve = [{"date": dates[rebal_idx[0]].date().isoformat(), "value": 1.0}]
-    eqw_curve = [{"date": dates[rebal_idx[0]].date().isoformat(), "value": 1.0}]
-    bh_curve  = [{"date": dates[rebal_idx[0]].date().isoformat(), "value": 1.0}]
-
-    mom_val, eqw_val = 1.0, 1.0
-    # Buy&Hold: 최초 시점 동일가중, 정규화 가격의 평균
-    bh_start = rebal_idx[0]
-    bh_base = mat.iloc[bh_start]
-    selections: list[dict] = []
-
-    def period_return(sel: list[str], i_from: int, i_to: int) -> float:
-        rets = []
-        for tk in sel:
-            a = mat[tk].iloc[i_from]
-            b = mat[tk].iloc[i_to]
-            if a and b and a > 0 and not (math.isnan(a) or math.isnan(b)):
-                rets.append(b / a - 1)
-        return float(np.mean(rets)) if rets else 0.0
-
-    for k in range(len(rebal_idx) - 1):
-        r, r2 = rebal_idx[k], rebal_idx[k + 1]
-
-        # 모멘텀 선정 (시점 r까지 데이터만)
-        scores = _momentum_scores_at(mat, r)
-        if scores:
-            top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
-            sel = [tk for tk, _ in top]
-        else:
-            sel = list(mat.columns)
-        selections.append({"date": dates[r].date().isoformat(), "tickers": sel})
-
-        # 보유 구간 수익률
-        mom_val *= (1 + period_return(sel, r, r2))
-        eqw_val *= (1 + period_return(list(mat.columns), r, r2))
-
-        # Buy&Hold value at r2 = mean(P[r2]/P[bh_start])
-        bh_norm = (mat.iloc[r2] / bh_base).replace([np.inf, -np.inf], np.nan).dropna()
-        bh_val = float(bh_norm.mean()) if len(bh_norm) else 1.0
-
-        d2 = dates[r2].date().isoformat()
-        mom_curve.append({"date": d2, "value": round(mom_val, 6)})
-        eqw_curve.append({"date": d2, "value": round(eqw_val, 6)})
-        bh_curve.append({"date": d2, "value": round(bh_val, 6)})
-
-    window_start = dates[rebal_idx[0]].date()
-    window_end = dates[rebal_idx[-1]].date()
-    months = round((window_end - window_start).days / 30.44, 1)
-
-    strategies = [
-        ("momentum_top8", mom_curve, {"top_n": top_n, "selections": selections[-3:]}),
-        ("equal_weight_benchmark", eqw_curve, {"note": "전체 동일가중, 매 리밸런싱 재가중"}),
-        ("buy_hold_benchmark", bh_curve, {"note": "최초 동일가중 매수 후 보유"}),
-    ]
-
-    saved = []
-    for name, curve, extra in strategies:
-        m = _metrics_from_equity(curve)
-        payload = {"equity_curve": curve, "months": months, **extra}
-        _upsert_backtest(conn, name, "true_backtest", window_start, window_end, m, payload)
-        saved.append({"name": name, **m})
-    conn.commit()
-    logger.info("진짜 백테스트 저장: %d전략 (%s~%s, %s개월)", len(saved), window_start, window_end, months)
-    return {"ok": True, "strategies": saved, "window": {"start": str(window_start), "end": str(window_end), "months": months}}
+def _regime_returns_from_periods(periods: list[dict]) -> dict[str, float | None]:
+    out: dict[str, float | None] = {"bull": None, "neutral": None, "bear": None}
+    for regime in ("bull", "neutral", "bear"):
+        acc = 1.0
+        used = False
+        for row in periods:
+            if row["regime"] != regime:
+                continue
+            acc *= 1.0 + float(row["return"])
+            used = True
+        out[regime] = round(acc - 1.0, 4) if used else None
+    return out
 
 
-# ──────────────────────────────────────────────────────────────
-# 2) 회고 (오늘 quant 상위 종목의 과거 수익률)
-# ──────────────────────────────────────────────────────────────
+def _rebalancing_points(n_rows: int) -> list[int]:
+    points = list(range(LOOKBACK_MIN, n_rows, REBALANCE_STEP))
+    if points and points[-1] != n_rows - 1:
+        points.append(n_rows - 1)
+    return points
 
-def _latest_quant_asof(conn) -> Optional[date]:
-    with conn.cursor() as cur:
-        cur.execute("SELECT max(asof) AS a FROM quant_scores")
-        r = cur.fetchone()
-    return r["a"] if r and r["a"] else None
+
+def _portfolio_period_return(mat: pd.DataFrame, tickers: list[str], i_from: int, i_to: int) -> float:
+    rets = []
+    for ticker in tickers:
+        a = mat[ticker].iloc[i_from]
+        b = mat[ticker].iloc[i_to]
+        if a and b and a > 0 and not (math.isnan(a) or math.isnan(b)):
+            rets.append(b / a - 1)
+    return float(np.mean(rets)) if rets else 0.0
+
+
+def _sample_index_series(index_mat: pd.DataFrame, dates: pd.Index) -> dict[str, pd.Series]:
+    if index_mat.empty:
+        return {}
+    sampled: dict[str, pd.Series] = {}
+    for code in BENCHMARK_ORDER:
+        if code not in index_mat.columns:
+            continue
+        s = pd.to_numeric(index_mat[code], errors="coerce").reindex(dates).ffill().dropna()
+        if len(s):
+            sampled[code] = s
+    return sampled
+
+
+def _slice_series_by_years(series: pd.Series, years: int) -> pd.Series:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    if len(clean) < 2:
+        return clean
+    end = clean.index[-1]
+    start = end - pd.Timedelta(days=int(years * 365.25))
+    sliced = clean[clean.index >= start]
+    return sliced if len(sliced) >= 2 else clean
+
+
+def _slice_periods_by_start(periods: list[dict], start_date: date) -> list[dict]:
+    return [p for p in periods if p["end"] >= start_date]
+
+
+def _select_top(scores: dict[str, float], top_n: int) -> list[str]:
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    return [ticker for ticker, _ in ranked[:top_n]]
 
 
 def _period_returns_for(mat: pd.DataFrame, ticker: str) -> dict:
-    """ticker의 최근값 기준 1/3/6/12개월 가격수익률(영업일 오프셋)."""
     if ticker not in mat.columns:
         return {k: None for k in RETRO_WINDOWS}
-    s = mat[ticker].dropna()
-    if len(s) == 0:
+    series = pd.to_numeric(mat[ticker], errors="coerce").dropna()
+    if len(series) == 0:
         return {k: None for k in RETRO_WINDOWS}
-    last = float(s.iloc[-1])
+    last = float(series.iloc[-1])
     out = {}
     for key, off in RETRO_WINDOWS.items():
-        if len(s) > off:
-            past = float(s.iloc[-1 - off])
+        if len(series) > off:
+            past = float(series.iloc[-1 - off])
             out[key] = round(last / past - 1, 4) if past > 0 else None
         else:
             out[key] = None
     return out
 
 
-def compute_retrospective(conn) -> dict:
-    """
-    오늘 quant_scores에서 팩터별 상위 RETRO_TOP_N 종목 → 1/3/6/12개월 과거 수익률 + 벤치마크.
-    ⚠️ 선정시점편향 — 백테스트 아님(retrospective).
-    """
-    asof = _latest_quant_asof(conn)
-    if not asof:
-        logger.warning("회고: quant_scores 없음 — 스킵")
-        return {"ok": False, "reason": "no_quant"}
+def _regime_by_date(regime_frame: pd.DataFrame, dates: pd.Index) -> dict[date, str]:
+    if regime_frame.empty:
+        return {ts.date(): "neutral" for ts in dates}
+    out: dict[date, str] = {}
+    for ts in dates:
+        window = regime_frame.loc[:ts]
+        out[ts.date()] = compute_regime(window)
+    return out
 
-    watchlist = _load_watchlist(conn)
-    mat = _load_price_matrix(conn, list(watchlist.keys()))
-    if mat.empty:
-        return {"ok": False, "reason": "no_prices"}
 
-    # 벤치마크: 전체 동일가중 평균 수익률
-    bench_each = [_period_returns_for(mat, tk) for tk in mat.columns]
-    benchmark = {}
-    for key in RETRO_WINDOWS:
-        vals = [d[key] for d in bench_each if d[key] is not None]
-        benchmark[key] = round(float(np.mean(vals)), 4) if vals else None
+def _simulate_rebalanced_strategy(
+    mat: pd.DataFrame,
+    selector,
+    top_n: int,
+    regime_lookup: dict[date, str],
+) -> tuple[pd.Series, list[dict], list[dict]]:
+    rebal = _rebalancing_points(len(mat))
+    dates = mat.index
+    value = 1.0
+    wealth = [(dates[rebal[0]], value)]
+    periods: list[dict] = []
+    selection_examples: list[dict] = []
 
+    for left, right in zip(rebal, rebal[1:]):
+        selection = selector(mat, left, top_n)
+        if not selection:
+            selection = list(mat.columns)
+        ret = _portfolio_period_return(mat, selection, left, right)
+        value *= 1.0 + ret
+        ts_left = dates[left].date()
+        ts_right = dates[right].date()
+        periods.append({"start": ts_left, "end": ts_right, "return": round(ret, 6), "regime": regime_lookup.get(ts_left, "neutral")})
+        wealth.append((dates[right], value))
+        selection_examples.append({"date": ts_left.isoformat(), "tickers": selection})
+
+    wealth_series = pd.Series({ts: val for ts, val in wealth}).sort_index()
+    return wealth_series, periods, selection_examples[-3:]
+
+
+def _simulate_buy_hold(mat: pd.DataFrame, regime_lookup: dict[date, str]) -> tuple[pd.Series, list[dict]]:
+    rebal = _rebalancing_points(len(mat))
+    dates = mat.index
+    base = mat.iloc[rebal[0]]
+    wealth = [(dates[rebal[0]], 1.0)]
+    periods: list[dict] = []
+
+    for left, right in zip(rebal, rebal[1:]):
+        left_norm = (mat.iloc[left] / base).replace([np.inf, -np.inf], np.nan).dropna()
+        right_norm = (mat.iloc[right] / base).replace([np.inf, -np.inf], np.nan).dropna()
+        prev_val = float(left_norm.mean()) if len(left_norm) else 1.0
+        cur_val = float(right_norm.mean()) if len(right_norm) else prev_val
+        ret = cur_val / prev_val - 1 if prev_val > 0 else 0.0
+        ts_left = dates[left].date()
+        ts_right = dates[right].date()
+        periods.append({"start": ts_left, "end": ts_right, "return": round(float(ret), 6), "regime": regime_lookup.get(ts_left, "neutral")})
+        wealth.append((dates[right], cur_val))
+
+    return pd.Series({ts: val for ts, val in wealth}).sort_index(), periods
+
+
+def _build_true_strategy_outputs(
+    definition: StrategyDefinition,
+    mat: pd.DataFrame,
+    regime_lookup: dict[date, str],
+    top_n: int,
+) -> tuple[pd.Series, list[dict], dict]:
+    if definition.name == "momentum_12_1":
+        wealth, periods, selections = _simulate_rebalanced_strategy(
+            mat, lambda m, t, n: _select_top(_momentum_scores_at(m, t), n), top_n, regime_lookup
+        )
+        return wealth, periods, {"selection_examples": selections}
+    if definition.name == "low_vol":
+        wealth, periods, selections = _simulate_rebalanced_strategy(
+            mat, lambda m, t, n: _select_top(_low_vol_scores_at(m, t), n), top_n, regime_lookup
+        )
+        return wealth, periods, {"selection_examples": selections}
+    wealth, periods = _simulate_buy_hold(mat, regime_lookup)
+    return wealth, periods, {"selection_examples": []}
+
+
+def _build_retrospective_output(
+    definition: StrategyDefinition,
+    mat: pd.DataFrame,
+    watchlist: dict[str, str],
+    regime_lookup: dict[date, str],
+    quant_rows: list[dict],
+    top_n: int,
+) -> tuple[pd.Series, list[dict], dict]:
+    factor_key = "composite" if definition.name == "multifactor" else definition.factor_key
+    ranked = [(row["ticker"], row.get(factor_key)) for row in quant_rows if row.get(factor_key) is not None]
+    ranked.sort(key=lambda item: float(item[1]), reverse=True)
+    selected = [ticker for ticker, _ in ranked[:top_n]]
+    if not selected:
+        selected = list(mat.columns[:top_n])
+
+    rebal = _rebalancing_points(len(mat))
+    dates = mat.index
+    value = 1.0
+    wealth = [(dates[rebal[0]], value)]
+    periods: list[dict] = []
+    for left, right in zip(rebal, rebal[1:]):
+        ret = _portfolio_period_return(mat, selected, left, right)
+        value *= 1.0 + ret
+        ts_left = dates[left].date()
+        ts_right = dates[right].date()
+        periods.append({"start": ts_left, "end": ts_right, "return": round(ret, 6), "regime": regime_lookup.get(ts_left, "neutral")})
+        wealth.append((dates[right], value))
+
+    payload = {
+        "selected_tickers": [{"ticker": tk, "name": watchlist.get(tk, tk)} for tk in selected],
+        "warning": "선택편향 경고: 최신 스냅샷 상위 종목을 과거 구간에 고정해 되돌아본 참고용 회고입니다.",
+    }
+    return pd.Series({ts: val for ts, val in wealth}).sort_index(), periods, payload
+
+
+def _upsert_backtest_row(
+    conn,
+    definition: StrategyDefinition,
+    horizon: str,
+    metrics: dict,
+    regime_returns: dict,
+    payload: dict,
+) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT ticker, momentum, value, quality, growth, composite FROM quant_scores WHERE asof = %s",
-            (asof,),
+            "DELETE FROM backtest_results WHERE strategy = %s AND track = %s AND horizon = %s",
+            (definition.name, definition.track, horizon),
         )
-        qrows = [dict(r) for r in cur.fetchall()]
-
-    saved = []
-    for factor in RETRO_FACTORS:
-        # composite은 None(사전필터 제외) 제거
-        candidates = [(r["ticker"], r[factor]) for r in qrows if r.get(factor) is not None]
-        candidates.sort(key=lambda x: float(x[1]), reverse=True)
-        top = candidates[:RETRO_TOP_N]
-
-        top_list = []
-        for tk, score in top:
-            pr = _period_returns_for(mat, tk)
-            top_list.append({
-                "ticker": tk, "name": watchlist.get(tk, tk),
-                "score": round(float(score), 1), **pr,
-            })
-
-        payload = {
-            "factor": factor,
-            "asof": str(asof),
-            "top_tickers": top_list,
-            "benchmark": benchmark,
-            "warning": "선정시점편향 — 오늘 상위 종목의 과거 수익률(백테스트 아님)",
-        }
-        # 대표 수치: 상위 종목 평균 12개월 수익률
-        r12s = [t["ret12m"] for t in top_list if t["ret12m"] is not None]
-        cum = round(float(np.mean(r12s)), 4) if r12s else None
-        _upsert_backtest(conn, f"retrospective_{factor}", "retrospective", None, None,
-                         {"cum_return": cum, "cagr": None, "mdd": None, "vol": None, "sharpe": None},
-                         payload)
-        saved.append(factor)
-
-    conn.commit()
-    logger.info("회고 저장: %d팩터 (asof=%s)", len(saved), asof)
-    return {"ok": True, "factors": saved, "asof": str(asof)}
-
-
-# ──────────────────────────────────────────────────────────────
-# upsert 헬퍼
-# ──────────────────────────────────────────────────────────────
-
-def _upsert_backtest(conn, name: str, metric_type: str,
-                     w_start: Optional[date], w_end: Optional[date],
-                     m: dict, payload: dict) -> None:
-    """동일 strategy_name의 최신 1건만 유지(삭제 후 삽입)."""
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM backtest_results WHERE strategy_name = %s", (name,))
         cur.execute(
             """
             INSERT INTO backtest_results
-                (strategy_name, metric_type, window_start, window_end,
-                 cum_return, cagr, mdd, vol, sharpe, payload)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                (strategy_name, metric_type, strategy, track, horizon,
+                 window_start, window_end, cum_return, cagr, mdd, vol, sharpe,
+                 regime_returns, payload)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
             """,
-            (name, metric_type, w_start, w_end,
-             m.get("cum_return"), m.get("cagr"), m.get("mdd"), m.get("vol"), m.get("sharpe"),
-             json.dumps(payload, ensure_ascii=False)),
+            (
+                definition.name,
+                "true_backtest" if definition.track == "true" else "retrospective",
+                definition.name,
+                definition.track,
+                horizon,
+                payload.get("window_start"),
+                payload.get("window_end"),
+                metrics.get("cum_return"),
+                metrics.get("cagr"),
+                metrics.get("mdd"),
+                metrics.get("vol"),
+                metrics.get("sharpe"),
+                json.dumps(regime_returns, ensure_ascii=False),
+                json.dumps(payload, ensure_ascii=False),
+            ),
         )
 
 
-# ──────────────────────────────────────────────────────────────
-# 실행
-# ──────────────────────────────────────────────────────────────
+def _persist_strategy_family(
+    conn,
+    definition: StrategyDefinition,
+    wealth: pd.Series,
+    periods: list[dict],
+    sampled_benchmarks: dict[str, pd.Series],
+    payload_extra: dict,
+) -> dict:
+    saved = {}
+    for horizon, years in HORIZON_YEARS.items():
+        wealth_slice = _slice_series_by_years(wealth, years)
+        curve = _rebase_curve_from_series(wealth_slice)
+        if len(curve) < 2:
+            continue
+        start_date = datetime.fromisoformat(curve[0]["date"]).date()
+        metrics = _metrics_from_equity(curve)
+        regime_returns = _regime_returns_from_periods(_slice_periods_by_start(periods, start_date))
+        benchmarks = {
+            code: _rebase_curve_from_series(_slice_series_by_years(series[series.index >= pd.Timestamp(start_date)], years))
+            for code, series in sampled_benchmarks.items()
+        }
+        payload = {
+            "label": definition.label,
+            "description": definition.description,
+            "equity_curve": curve,
+            "benchmarks": benchmarks,
+            "window_start": curve[0]["date"],
+            "window_end": curve[-1]["date"],
+            **payload_extra,
+        }
+        _upsert_backtest_row(conn, definition, horizon, metrics, regime_returns, payload)
+        saved[horizon] = metrics
+    return saved
+
+
+def compute_true_backtests(conn, top_n: int = TOP_N_DEFAULT) -> dict:
+    watchlist = _load_watchlist(conn)
+    mat = _load_price_matrix(conn, list(watchlist.keys()))
+    if mat.empty or len(mat) < LOOKBACK_MIN + REBALANCE_STEP:
+        return {"ok": False, "reason": "insufficient_data"}
+
+    regime_frame = _load_regime_frame(conn)
+    regime_lookup = _regime_by_date(regime_frame, mat.index)
+    index_series = _sample_index_series(_load_index_matrix(conn), mat.index[_rebalancing_points(len(mat))])
+
+    saved = []
+    for definition in TRUE_STRATEGIES:
+        wealth, periods, payload_extra = _build_true_strategy_outputs(definition, mat, regime_lookup, top_n)
+        horizons = _persist_strategy_family(conn, definition, wealth, periods, index_series, payload_extra)
+        saved.append({"name": definition.name, "horizons": horizons})
+    conn.commit()
+    return {"ok": True, "strategies": saved}
+
+
+def compute_momentum_backtest(conn, top_n: int = TOP_N_DEFAULT) -> dict:
+    return compute_true_backtests(conn, top_n=top_n)
+
+
+def compute_retrospective(conn, top_n: int = RETRO_TOP_N) -> dict:
+    asof, quant_rows = _load_latest_quant_rows(conn)
+    if not asof or not quant_rows:
+        return {"ok": False, "reason": "no_quant"}
+    watchlist = _load_watchlist(conn)
+    mat = _load_price_matrix(conn, list(watchlist.keys()))
+    if mat.empty or len(mat) < LOOKBACK_MIN + REBALANCE_STEP:
+        return {"ok": False, "reason": "insufficient_data"}
+
+    regime_frame = _load_regime_frame(conn)
+    regime_lookup = _regime_by_date(regime_frame, mat.index)
+    index_series = _sample_index_series(_load_index_matrix(conn), mat.index[_rebalancing_points(len(mat))])
+
+    saved = []
+    for definition in RETROSPECTIVE_STRATEGIES:
+        wealth, periods, payload_extra = _build_retrospective_output(definition, mat, watchlist, regime_lookup, quant_rows, top_n)
+        payload_extra["asof"] = str(asof)
+        horizons = _persist_strategy_family(conn, definition, wealth, periods, index_series, payload_extra)
+        saved.append({"name": definition.name, "horizons": horizons})
+    conn.commit()
+    return {"ok": True, "strategies": saved, "asof": str(asof)}
+
 
 def run_backtest(conn) -> dict:
-    """백테스트 + 회고 실행(파이프라인/단독 공용)."""
-    bt = compute_momentum_backtest(conn)
-    retro = compute_retrospective(conn)
-    return {"true_backtest": bt, "retrospective": retro}
+    true_track = compute_true_backtests(conn)
+    retrospective = compute_retrospective(conn)
+    return {"true": true_track, "retrospective": retrospective}
 
 
 if __name__ == "__main__":
@@ -384,10 +561,9 @@ if __name__ == "__main__":
         status = "success"
         try:
             result = run_backtest(conn)
-            logger.info("백테스트 결과: %s", json.dumps(result, ensure_ascii=False, default=str)[:400])
+            logger.info("backtest result: %s", json.dumps(result, ensure_ascii=False, default=str)[:600])
         except Exception as exc:
-            logger.error("백테스트 실패: %s", exc, exc_info=True)
+            logger.error("backtest failed: %s", exc, exc_info=True)
             errors.append({"step": "backtest", "error": str(exc), "ts": datetime.utcnow().isoformat()})
             status = "failed"
         log_run_finish(conn, run_id, status=status, errors=errors)
-    print("\n과거 성과는 미래 성과를 보장하지 않습니다.")
