@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { C, MonoCaps, Num, ChangePct, HoldDot, fmtPrice, btnGhost } from './ui.jsx';
 import { Panel } from './tabsA.jsx';
+import { portfolioAssetTotal } from './display.js';
 
 const API = "http://127.0.0.1:8765";
 
@@ -49,6 +50,7 @@ export function Portfolio({ D, nav }) {
   const [cashRows, setCashRows] = useState([]);
   const [cashForm, setCashForm] = useState({ currency: "KRW", amount: "" });
   const [cashSaving, setCashSaving] = useState(false);
+  const [summary, setSummary] = useState(D.portfolio || null);
 
   const loadPortfolio = useCallback(async () => {
     try {
@@ -58,6 +60,10 @@ export function Portfolio({ D, nav }) {
       try {
         const cr = await fetch(`${API}/api/cash`);
         if (cr.ok) setCashRows(await cr.json());
+      } catch (_) {}
+      try {
+        const sr = await fetch(`${API}/api/portfolio/summary`);
+        if (sr.ok) setSummary(await sr.json());
       } catch (_) {}
       setApiOk(true);
     } catch (e) {
@@ -133,7 +139,7 @@ export function Portfolio({ D, nav }) {
     const k = toKrw(c.amount || 0, c.currency);
     if (k != null) cashKrw += k;
   });
-  const assetTotalKrw = totalEvalKrw + cashKrw;
+  const assetTotalKrw = portfolioAssetTotal(summary) ?? (totalEvalKrw + cashKrw);
   const hasAny = (rows && rows.length > 0) || cashKrw > 0;
 
   if (!apiOk) return (

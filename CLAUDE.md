@@ -92,6 +92,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **US 뉴스 소스**: yfinance.news + **Yahoo Finance RSS**(`feeds.finance.yahoo.com`, 429 시 무재시도 스킵) + **Finnhub**(`FINNHUB_API_KEY` 있을 때만) + Google News RSS(영문 정식명+티커 복수쿼리). KR은 네이버 HTML + Google News RSS. 전부 url_hash dedupe·종목격리.
 - **텔레그램은 보류(비활성)**. `TELEGRAM_ENABLED=false`(기본)면 `send_telegram.run_send`가 no-op 성공. 살리려면 PRD §F5 메모 참고(플래그 true + 워크플로 step 주석 해제).
 - **포트폴리오 총자산 = 보유종목 평가액 + 현금**(둘 다 KRW 환산). 현금=`portfolio_cash`(통화별), `compute_portfolio`가 `cash_total`/`asset_total`을 snapshot payload에 저장.
+- **총자산 표시는 단일 경로**: 오버뷰·포트폴리오 모두 `portfolio_snapshot.payload.asset_total`을 공용 `portfolioAssetTotal`로 표시한다. 구형 export만 `total_eval + cash_total` 폴백을 허용한다.
 - **관심종목 active 토글**: 제외는 하드딜리트가 아니라 `watchlist.active=false`(데이터 보존). export/quant/recompute는 **active=TRUE만** 대상. 신규 추가는 `backfill_single`로 그 종목만 가격+지표+퀀트 백필(local_api 백그라운드).
 - **운영 모델 = CI가 DB, 집 PC가 화면**: GitHub Actions(auto_run 06시·news_refresh 18시)가 enrich 포함 **DB를 매일 자동 최신화**한다(Secrets: DB_PASSWORD·DART_API_KEY·GEMINI_API_KEY). **`data.json`은 CI 산출이 gitignore라 버려진다** — 화면 최신화는 집 PC의 `./start_dashboard.sh`(export→local_api+vite→브라우저)가 담당. 대시보드는 외부 접근/상시 서버 불필요(로컬 전용). 스크립트는 포트(8765·5173)가 떠 있으면 재사용하고, export 실패 시 DB접속/데이터부재를 구분해 에러를 낸다.
 - **데이터 신선도 가드**: export는 `generatedAt`/`generatedAtLabel`을 data.json에 넣고, 헤더가 "데이터 생성: {시각}"을 표시. 생성 후 2일+이면 헤더에 옅은 경고(스크립트 재실행 권장). 사용자가 지금 보는 게 언제 것인지 항상 인지하게.
