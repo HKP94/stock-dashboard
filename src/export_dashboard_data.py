@@ -476,6 +476,29 @@ def _load_stock_notes(conn) -> dict[str, dict]:
     return {r["ticker"]: {"horizon": r["horizon"], "attractiveness": r["attractiveness"], "thesis": r["thesis"]} for r in cur.fetchall()}
 
 
+def _group_note_history(rows: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        ticker = row["ticker"]
+        grouped.setdefault(ticker, []).append({
+            "id": row["id"],
+            "horizon": row["horizon"],
+            "attractiveness": row["attractiveness"],
+            "thesis": row["thesis"],
+            "created_at": str(row["created_at"]),
+        })
+    return grouped
+
+
+def _load_stock_note_history(conn) -> dict[str, list[dict]]:
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, ticker, horizon, attractiveness, thesis, created_at "
+        "FROM stock_note_history ORDER BY ticker, created_at DESC, id DESC"
+    )
+    return _group_note_history([dict(row) for row in cur.fetchall()])
+
+
 # ── PR-4: 리서치 항목 로드 ────────────────────────────────────────────
 def _load_research_items(conn) -> dict[str, list[dict]]:
     """research_items → {ticker: [item...]}."""
@@ -895,6 +918,7 @@ def build_data() -> dict:
 
         # PR-4(이번): stock_notes
         notes_map = _load_stock_notes(conn)
+        note_history_map = _load_stock_note_history(conn)
 
         # PR-7: 백테스트 / 회고
         backtest_data = _load_backtest(conn)
@@ -1084,6 +1108,7 @@ def build_data() -> dict:
                 "researchItems": research_items_map.get(tk, []),
                 # PR-4(이번): 투자 판단 메모
                 "note": notes_map.get(tk),
+                "noteHistory": note_history_map.get(tk, []),
             })
 
         # PR-3: 액션 신호만 카운트

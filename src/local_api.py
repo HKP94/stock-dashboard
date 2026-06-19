@@ -31,7 +31,7 @@ from typing import Optional
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,14 @@ class WatchlistIn(BaseModel):
 
 
 class WatchlistPatch(BaseModel):
-    active: bool
+    active: Optional[bool] = None
+    sector: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "WatchlistPatch":
+        if not ({"active", "sector"} & self.model_fields_set):
+            raise ValueError("active or sector is required")
+        return self
 
 
 class ResearchIn(BaseModel):
@@ -198,11 +205,32 @@ def _patch_data_json_note(ticker: str, note_data: dict) -> None:
         for s in data.get("stocks", []):
             if s["t"] == ticker:
                 s["note"] = note_data
+                s["noteHistory"] = _fetch_note_history(ticker)
                 break
         with open(_DATA_JSON, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
     except Exception as exc:
         logger.warning("data.json note 갱신 실패: %s", exc)
+
+
+def _fetch_note_history(ticker: str) -> list[dict]:
+    with get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, horizon, attractiveness, thesis, created_at "
+            "FROM stock_note_history WHERE ticker=%s ORDER BY created_at DESC, id DESC",
+            (ticker,),
+        )
+        return [
+            {
+                "id": row["id"],
+                "horizon": row["horizon"],
+                "attractiveness": row["attractiveness"],
+                "thesis": row["thesis"],
+                "created_at": str(row["created_at"]),
+            }
+            for row in cursor.fetchall()
+        ]
 
 
 def _fetch_research_items(ticker: str) -> list[dict]:
@@ -356,14 +384,53 @@ def get_note(ticker: str):
         c.execute("SELECT ticker, horizon, attractiveness, thesis, updated_at FROM stock_notes WHERE ticker=%s", (ticker,))
         r = c.fetchone()
     if not r:
-        return None
-    return {
+        return {"ticker": ticker, "horizon": None, "attractiveness": None, "thesis": "", "history": _fetch_note_history(ticker)}
+    result = {
         "ticker":        r["ticker"],
         "horizon":       r["horizon"],
         "attractiveness": r["attractiveness"],
         "thesis":        r["thesis"],
         "updated_at":    str(r["updated_at"]),
     }
+    result["history"] = _fetch_note_history(ticker)
+    return result
+
+
+def _append_note(conn, ticker: str, body: NoteIn) -> dict:
+    thesis = (body.thesis or "").strip()
+    if not thesis:
+        raise HTTPException(400, "thesis required")
+    if body.horizon and body.horizon not in ("short", "long", "watch"):
+        raise HTTPException(400, "horizon must be short|long|watch")
+    if body.attractiveness is not None and not (1 <= body.attractiveness <= 5):
+        raise HTTPException(400, "attractiveness must be 1~5")
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO stock_note_history (ticker, horizon, attractiveness, thesis) VALUES (%s,%s,%s,%s)",
+            (ticker, body.horizon, body.attractiveness, thesis),
+        )
+        cursor.execute(
+            """INSERT INTO stock_notes (ticker, horizon, attractiveness, thesis, updated_at)
+               VALUES (%s,%s,%s,%s,now())
+               ON CONFLICT (ticker) DO UPDATE SET horizon=EXCLUDED.horizon,
+                 attractiveness=EXCLUDED.attractiveness, thesis=EXCLUDED.thesis, updated_at=now()""",
+            (ticker, body.horizon, body.attractiveness, thesis),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"horizon": body.horizon, "attractiveness": body.attractiveness, "thesis": thesis}
+
+
+@app.post("/api/notes/{ticker}", status_code=201)
+def append_note(ticker: str, body: NoteIn):
+    """새 판단을 이력에 추가하고 최신 3축 판단도 함께 갱신."""
+    with get_conn() as conn:
+        note_data = _append_note(conn, ticker, body)
+    _patch_data_json_note(ticker, note_data)
+    return {"ok": True, "ticker": ticker, "note": note_data, "history": _fetch_note_history(ticker)}
 
 
 @app.put("/api/notes/{ticker}", status_code=200)
@@ -497,6 +564,29 @@ def _backfill_and_export(ticker: str, market: str) -> None:
     _regenerate_data_json()
 
 
+def _patch_watchlist_row(conn, ticker: str, body: WatchlistPatch) -> dict:
+    fields = body.model_fields_set
+    sector = (body.sector or "").strip() or None if "sector" in fields else None
+    cursor = conn.cursor()
+    try:
+        if fields == {"active"}:
+            cursor.execute("UPDATE watchlist SET active=%s WHERE ticker=%s", (body.active, ticker))
+        elif fields == {"sector"}:
+            cursor.execute("UPDATE watchlist SET sector=%s WHERE ticker=%s", (sector, ticker))
+        else:
+            cursor.execute(
+                "UPDATE watchlist SET active=%s, sector=%s WHERE ticker=%s",
+                (body.active, sector, ticker),
+            )
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "ticker not found")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"active": body.active if "active" in fields else None, "sector": sector}
+
+
 @app.get("/api/watchlist")
 def get_watchlist():
     """관심종목 전체(active 포함). 각 종목의 가격 데이터 유무(hasData)도 표시."""
@@ -539,15 +629,11 @@ def add_watchlist(body: WatchlistIn, background: BackgroundTasks):
 
 @app.patch("/api/watchlist/{ticker}", status_code=200)
 def patch_watchlist(ticker: str, body: WatchlistPatch):
-    """active 토글(관심 제외=active false, 데이터 보존). 변경 후 data.json 재생성."""
+    """active 또는 sector 변경 후 data.json 재생성."""
     with get_conn() as conn:
-        c = conn.cursor()
-        c.execute("UPDATE watchlist SET active=%s WHERE ticker=%s", (body.active, ticker))
-        if c.rowcount == 0:
-            raise HTTPException(404, "ticker not found")
-        conn.commit()
+        changed = _patch_watchlist_row(conn, ticker, body)
     _regenerate_data_json()
-    return {"ok": True, "ticker": ticker, "active": body.active}
+    return {"ok": True, "ticker": ticker, **changed}
 
 
 # ── 실행 ──────────────────────────────────────────────────────────

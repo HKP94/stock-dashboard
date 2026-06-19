@@ -262,6 +262,18 @@ CREATE TABLE IF NOT EXISTS stock_notes (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS stock_note_history (
+    id              BIGSERIAL   PRIMARY KEY,
+    ticker          TEXT        NOT NULL,
+    horizon         TEXT        CHECK (horizon IN ('short', 'long', 'watch')),
+    attractiveness  INT         CHECK (attractiveness BETWEEN 1 AND 5),
+    thesis          TEXT        NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_note_history_ticker
+    ON stock_note_history (ticker, created_at DESC, id DESC);
+
 -- =============================================================
 -- 포트폴리오 전략 조언 (CoT 결과 캐시) — cache_key = 보유·현금·레짐 시그니처
 -- 투자 자문 아님 / 관찰·정보. 보유 변경 시 cache_key가 달라져 stale 판정.

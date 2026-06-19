@@ -9,7 +9,7 @@ import {
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { portfolioAssetTotal } from './display.js';
+import { filterStocks, portfolioAssetTotal, sortStocksBySentiment } from './display.js';
 
 // PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
 function fmtBig(v, cur) {
@@ -316,17 +316,17 @@ export function Overview({ D, nav, goNews }) {
         {/* 랭킹 테이블 */}
         <Panel
           title="관심종목 랭킹"
-          sub={`COMPOSITE 내림차순 · ${rows.length}종목`}
+          sub={`종합 점수 내림차순 · ${rows.length}종목`}
           right={<FilterTabs value={filter} onChange={setFilter} options={[{ k: "all", label: "전체" }, { k: "KR", label: "KR" }, { k: "US", label: "US" }, { k: "hold", label: "보유" }]} />}
         >
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-                {["", "종목", "현재가", "COMPOSITE", "M·V·Q·G·S", "RSI", "추세", "주요 플래그", "판단"].map((h, i) => {
+                {["", "종목", "현재가", "종합", "모멘텀·가치·우량성·성장·심리", "RSI", "추세", "주요 플래그", "판단"].map((h, i) => {
                   // PR-5: 약어 헤더 툴팁
                   const tip = {
-                    "COMPOSITE": "5개 팩터를 레짐 가중치로 합산한 종합 점수(0~100)",
-                    "M·V·Q·G·S": "모멘텀 · 가치 · 퀄리티 · 성장 · 감성 (5팩터 점수)",
+                    "종합": "5개 팩터를 국면 가중치로 합산한 종합 점수(0~100)",
+                    "모멘텀·가치·우량성·성장·심리": "모멘텀 · 가치 · 우량성 · 성장 · 심리 (5팩터 점수)",
                     "RSI": "상대강도지수(14일) — 70↑ 과열, 30↓ 과매도",
                     "추세": "이동평균선 정배열(20>60>120) 여부",
                     "판단": "내 투자 판단(방향·매력도)",
@@ -614,19 +614,27 @@ function _level(kind, v) {
 
 function AxesCard({ s }) {
   const [note, setNote] = useState(s.note || { horizon: null, attractiveness: null, thesis: "" });
+  const [history, setHistory] = useState(s.noteHistory || []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  useEffect(() => { setNote(s.note || { horizon: null, attractiveness: null, thesis: "" }); setSaved(false); }, [s.t, s.note]);
+  useEffect(() => { setNote(s.note || { horizon: null, attractiveness: null, thesis: "" }); setHistory(s.noteHistory || []); setSaved(false); }, [s.t, s.note, s.noteHistory]);
   useEffect(() => {
-    fetch(`${API}/api/notes/${s.t}`).then((r) => r.json()).then((d) => { if (d) setNote(d); }).catch(() => {});
+    fetch(`${API}/api/notes/${s.t}`).then((r) => r.json()).then((d) => {
+      if (d) { setNote({ horizon: d.horizon, attractiveness: d.attractiveness, thesis: "" }); setHistory(d.history || []); }
+    }).catch(() => {});
   }, [s.t]);
 
-  const saveNote = async (next) => {
-    setNote(next); setSaving(true);
+  const saveNote = async () => {
+    if (!(note.thesis || "").trim()) return;
+    setSaving(true);
     try {
-      await fetch(`${API}/api/notes/${s.t}`, { method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ horizon: next.horizon, attractiveness: next.attractiveness, thesis: next.thesis }) });
+      const response = await fetch(`${API}/api/notes/${s.t}`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ horizon: note.horizon, attractiveness: note.attractiveness, thesis: note.thesis }) });
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      setHistory(data.history || []);
+      setNote((current) => ({ ...current, thesis: "" }));
       setSaved(true); setTimeout(() => setSaved(false), 1800);
     } catch (_) {}
     setSaving(false);
@@ -657,14 +665,14 @@ function AxesCard({ s }) {
       <div style={{ display: "flex", flexWrap: "wrap" }}>
         {/* 축 1: 퀀트 */}
         <div style={colStyle}>
-          <AxisHead label="퀀트" src="데이터 기반 · COMPOSITE" col={C.acc} />
+          <AxisHead label="퀀트" src="데이터 기반 · 종합" col={C.acc} />
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <Num size={30} weight={800} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num>
             <span style={{ fontSize: 11, color: C.ink3 }}>/100</span>
             {qLevel && <span style={{ fontSize: 11, fontWeight: 700, color: qLevel === "높음" ? C.ok : qLevel === "낮음" ? C.bad : C.ink2 }}>{qLevel}</span>}
           </div>
           <div style={{ display: "flex", gap: 4, marginTop: 12, flexWrap: "wrap" }}>
-            {[["모", s.f.m], ["가", s.f.v], ["퀄", s.f.q], ["성", s.f.g], ["감", s.f.s]].map(([k, v]) => (
+            {[["모멘텀", s.f.m], ["가치", s.f.v], ["우량성", s.f.q], ["성장", s.f.g], ["심리", s.f.s]].map(([k, v]) => (
               <span key={k} style={{ fontSize: 10.5, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "3px 6px" }}>{k} <b style={{ color: C.ink }}>{v}</b></span>
             ))}
           </div>
@@ -698,7 +706,7 @@ function AxesCard({ s }) {
           {/* horizon */}
           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
             {["short", "long", "watch"].map((h) => (
-              <button key={h} onClick={() => saveNote({ ...note, horizon: note.horizon === h ? null : h })}
+              <button key={h} onClick={() => setNote((current) => ({ ...current, horizon: current.horizon === h ? null : h }))}
                 style={{ border: `1px solid ${note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.line2}`,
                   background: note.horizon === h ? (h === "short" ? C.accTint : h === "long" ? C.okBg : C.surface2) : C.surface,
                   color: note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.ink2,
@@ -710,18 +718,39 @@ function AxesCard({ s }) {
           {/* attractiveness (별점) */}
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {[1, 2, 3, 4, 5].map((n) => (
-              <button key={n} onClick={() => saveNote({ ...note, attractiveness: note.attractiveness === n ? null : n })}
+              <button key={n} onClick={() => setNote((current) => ({ ...current, attractiveness: current.attractiveness === n ? null : n }))}
                 style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontSize: 22, lineHeight: 1, color: (note.attractiveness || 0) >= n ? "#F59E0B" : C.line2 }}>★</button>
             ))}
             <span style={{ fontSize: 11, color: C.ink3, marginLeft: 4 }}>{note.attractiveness != null ? `${note.attractiveness}/5` : "내 판단 미입력"}</span>
           </div>
           {/* thesis */}
           <textarea value={note.thesis || ""} onChange={(e) => setNote((n) => ({ ...n, thesis: e.target.value }))}
-            onBlur={() => saveNote(note)}
-            placeholder="투자 논거를 기록하세요 (자동 저장)…"
-            style={{ width: "100%", minHeight: 60, marginTop: 10, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, fontFamily: "var(--sans)", lineHeight: 1.55, color: C.ink, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
+            placeholder="현재 판단과 근거를 여러 줄로 기록하세요…"
+            style={{ width: "100%", minHeight: 110, marginTop: 10, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "9px 10px", fontSize: 12.5, fontFamily: "var(--sans)", lineHeight: 1.55, color: C.ink, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
+          <button onClick={saveNote} disabled={saving || !(note.thesis || "").trim()}
+            style={{ marginTop: 8, width: "100%", border: "none", borderRadius: 7, padding: "8px 10px", background: C.ink, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: saving || !(note.thesis || "").trim() ? 0.45 : 1 }}>
+            {saving ? "저장 중…" : "판단 추가"}
+          </button>
         </div>
       </div>
+
+      {history.length > 0 && (
+        <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 16px" }}>
+          <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>판단 이력 · 최신순</MonoCaps>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+            {history.map((item) => (
+              <div key={item.id} style={{ padding: "9px 11px", border: `1px solid ${C.line}`, borderRadius: 7, background: C.surface2 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 5 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: C.ink2 }}>{item.horizon ? HORIZON_LABEL[item.horizon] : "기간 미지정"}</span>
+                  <span style={{ fontSize: 10.5, color: C.warn }}>{item.attractiveness ? `★ ${item.attractiveness}/5` : "별점 없음"}</span>
+                  <span className="mono" style={{ marginLeft: "auto", fontSize: 9.5, color: C.ink3 }}>{new Date(item.created_at).toLocaleString("ko-KR")}</span>
+                </div>
+                <div style={{ whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.55, color: C.ink }}>{item.thesis}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 축 간 괴리 코멘트 */}
       {diverge.length > 0 && (
@@ -775,8 +804,19 @@ export function CuratedNews({ items }) {
 }
 
 export function StockDetail({ D, ticker, nav }) {
+  const [stockQuery, setStockQuery] = useState("");
+  const [marketFilter, setMarketFilter] = useState("all");
+  const [sectorFilter, setSectorFilter] = useState("all");
   const sorted = useMemo(() => [...D.stocks].sort((a, b) => (b.comp ?? 0) - (a.comp ?? 0)), [D.stocks]);
   const s = D.stocks.find((x) => x.t === ticker) || D.stocks[0];
+  const sectors = useMemo(
+    () => [...new Set(D.stocks.map((stock) => stock.sec).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko")),
+    [D.stocks],
+  );
+  const filteredStocks = useMemo(
+    () => filterStocks(sorted, { query: stockQuery, market: marketFilter, sector: sectorFilter }),
+    [sorted, stockQuery, marketFilter, sectorFilter],
+  );
 
   // PR-1: 이전/다음 종목 (composite 내림차순 기준)
   const curIdx = sorted.findIndex((x) => x.t === s.t);
@@ -841,6 +881,23 @@ export function StockDetail({ D, ticker, nav }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10 }}>
+        <input value={stockQuery} onChange={(event) => setStockQuery(event.target.value)} placeholder="티커·종목명 검색"
+          style={{ minWidth: 220, flex: 1, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, color: C.ink, outline: "none" }} />
+        <select value={marketFilter} onChange={(event) => setMarketFilter(event.target.value)}
+          style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+          <option value="all">전체 시장</option><option value="KR">한국</option><option value="US">미국</option>
+        </select>
+        <select value={sectorFilter} onChange={(event) => setSectorFilter(event.target.value)}
+          style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+          <option value="all">전체 섹터</option>{sectors.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
+        </select>
+        <select value="" onChange={(event) => event.target.value && nav(event.target.value)} disabled={filteredStocks.length === 0}
+          style={{ minWidth: 190, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+          <option value="">{filteredStocks.length ? `${filteredStocks.length}개 결과에서 선택` : "검색 결과 없음"}</option>
+          {filteredStocks.map((stock) => <option key={stock.t} value={stock.t}>{stock.name} · {stock.t}</option>)}
+        </select>
+      </div>
       {/* 헤더 */}
       <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "18px 22px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -974,7 +1031,7 @@ export function StockDetail({ D, ticker, nav }) {
         <Panel title="팩터 점수" sub={sectorRankText}>
           <div style={{ padding: "16px 18px", borderBottom: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 18 }}>
             <div>
-              <MonoCaps style={{ fontSize: 9 }}>COMPOSITE</MonoCaps>
+              <MonoCaps style={{ fontSize: 9 }}>종합</MonoCaps>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
                 <Num size={48} weight={800} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num>
                 <span style={{ fontSize: 13, color: C.ink3 }}>/ 100</span>
@@ -1052,11 +1109,11 @@ export function StockDetail({ D, ticker, nav }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 16, alignItems: "start" }}>
         {/* 캐털리스트 + 뉴스탭 링크 */}
-        <Panel title="캐털리스트 & 뉴스" sub="GEMINI SENTIMENT" right={<SentBadge label={s.sent} score={s.sscore} />}>
+        <Panel title="주요 동인과 뉴스" sub="Gemini 심리 분석" right={<SentBadge label={s.sent} score={s.sscore} />}>
           <div style={{ padding: "14px 18px" }}>
             {(s.cat || []).length > 0 ? (
               <>
-                <MonoCaps style={{ fontSize: 9 }}>주요 캐털리스트</MonoCaps>
+                <MonoCaps style={{ fontSize: 9 }}>주요 동인</MonoCaps>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
                   {(s.cat || []).map((c, i) => (
                     <div key={i} style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -1067,14 +1124,14 @@ export function StockDetail({ D, ticker, nav }) {
                 </div>
               </>
             ) : (
-              <span style={{ fontSize: 12.5, color: C.ink3 }}>캐털리스트 정보 없음</span>
+              <span style={{ fontSize: 12.5, color: C.ink3 }}>주요 동인 정보 없음</span>
             )}
           </div>
         </Panel>
 
         <Panel title="점수 히스토리" sub="최근 16주 추이">
           <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
-            {[["COMPOSITE", s.compHist, C.acc, s.comp], ["모멘텀", s.momHist, C.ok, s.f.m]].filter(([, data]) => data).map(([lbl, data, col, cur]) => {
+            {[["종합", s.compHist, C.acc, s.comp], ["모멘텀", s.momHist, C.ok, s.f.m]].filter(([, data]) => data).map(([lbl, data, col, cur]) => {
               const delta = data[data.length - 1] - data[0];
               return (
                 <div key={lbl}>
@@ -1140,7 +1197,8 @@ export function NewsTab({ D, filterTicker, setFilterTicker, nav }) {
       const neg = s.sent === "부정" ? 5 + (seed % 3) : s.sent === "중립" ? 2 : 1;
       const neu = 2 + (seed % 3);
       return { s, pos, neu, neg, total: pos + neu + neg };
-    }).sort((a, b) => b.total - a.total);
+    });
+    return sortStocksBySentiment(rows);
   }, [D.stocks]);
 
   const feed = useMemo(() => {
@@ -1234,7 +1292,7 @@ export function NewsTab({ D, filterTicker, setFilterTicker, nav }) {
         )}
       </Panel>
 
-      <Panel title="종목별 감성" sub="최근 7일 · 클릭 시 필터">
+      <Panel title="종목별 심리" sub="최근 7일 · 클릭 시 필터">
         <div style={{ padding: "6px 0" }}>
           {sentCounts.map(({ s, pos, neu, neg }) => (
             <div key={s.t} onClick={() => setFilterTicker(filterTicker === s.t ? null : s.t)} className="row-hover" style={{

@@ -62,12 +62,12 @@ export default function App() {
 
           {/* center: regime + weights */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}
-               title="현재 시장 레짐에 따라 5개 팩터에 적용되는 가중치(%). 합 100%.">
+               title="현재 시장 국면에 따라 5개 팩터에 적용되는 가중치(%). 합 100%.">
             <RegimeBadge regime={overall} regimes={D.regimes} />
             <span style={{ width: 1, height: 18, background: C.line2 }}></span>
-            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>레짐 가중치</MonoCaps>
+            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>국면 가중치</MonoCaps>
             <span className="mono" style={{ fontSize: 10.5, color: C.ink2, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
-              모멘텀 <b style={{ color: C.acc }}>{w.m}</b> · 가치 <b style={{ color: C.ink }}>{w.v}</b> · 퀄리티 <b style={{ color: C.ink }}>{w.q}</b> · 성장 <b style={{ color: C.ink }}>{w.g}</b> · 감성 <b style={{ color: C.acc }}>{w.s}</b>
+              모멘텀 <b style={{ color: C.acc }}>{w.m}</b> · 가치 <b style={{ color: C.ink }}>{w.v}</b> · 우량성 <b style={{ color: C.ink }}>{w.q}</b> · 성장 <b style={{ color: C.ink }}>{w.g}</b> · 심리 <b style={{ color: C.acc }}>{w.s}</b>
             </span>
           </div>
 

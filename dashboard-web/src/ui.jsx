@@ -1,4 +1,6 @@
 // ATLAS — shared UI primitives + SVG charts
+import { factorLabel, regimeLabel } from './display.js';
+
 export const C = {
   ink: "#0F1419", ink2: "#4A5568", ink3: "#94A3B8",
   line: "#ECEEF1", line2: "#DDE1E6", lineStrong: "#C7CCD3",
@@ -89,13 +91,12 @@ export function CompositeCell({ value, width = 110 }) {
 }
 
 export function MiniBars({ f, h = 26 }) {
-  // PR-5: 약어 → 한글 툴팁
-  const order = [["m", "M", "모멘텀"], ["v", "V", "가치"], ["q", "Q", "퀄리티"], ["g", "G", "성장"], ["s", "S", "감성"]];
+  const order = [["m", "모", factorLabel("m")], ["v", "가", factorLabel("v")], ["q", "우", factorLabel("q")], ["g", "성", factorLabel("g")], ["s", "심", factorLabel("s")]];
   return <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: h }}>
     {order.map(([k, lbl, ko]) => {
       const v = f[k];
       const col = v >= 70 ? C.ok : v >= 45 ? C.ink2 : C.ink3;
-      return <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, cursor: "help" }} title={`${ko}(${lbl}) ${v}`}>
+      return <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, cursor: "help" }} title={`${ko} ${v}`}>
         <div style={{ width: 7, height: h - 10, background: C.surface2, borderRadius: 2, display: "flex", alignItems: "flex-end", overflow: "hidden" }}>
           <div style={{ width: "100%", height: (v / 100) * (h - 10), background: col, borderRadius: 2 }}></div>
         </div>
@@ -276,12 +277,12 @@ export function RegimeBadge({ regime, lg, regimes }) {
     fontSize: lg ? 13 : 11.5, fontWeight: 700, letterSpacing: "-0.01em",
   }}>
     <span style={{ width: 7, height: 7, borderRadius: 999, background: col }}></span>
-    {regime === "bull" ? "강세 (Bull)" : regime === "neutral" ? "중립 (Neutral)" : "약세 (Bear)"}
+    {regimeLabel(regime)}
   </span>;
 }
 
 export function WeightBars({ w }) {
-  const items = [["m", "모멘텀", "timing"], ["v", "가치", "mispricing"], ["q", "퀄리티", "mispricing"], ["g", "성장", "mispricing"], ["s", "감성", "timing"]];
+  const items = [["m", factorLabel("m"), "timing"], ["v", factorLabel("v"), "mispricing"], ["q", factorLabel("q"), "mispricing"], ["g", factorLabel("g"), "mispricing"], ["s", factorLabel("s"), "timing"]];
   const maxW = Math.max(...items.map(([k]) => w[k]));
   return <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
     {items.map(([k, ko, grp]) => {

@@ -406,7 +406,7 @@ function PortfolioAdvice({ D, hasHoldings }) {
       }>
       {!hasHoldings ? (
         <div style={{ padding: "26px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
-          보유종목을 추가하면 포트폴리오 전략 조언(구성·리스크·레짐 정합성·종합 관찰)을 볼 수 있습니다.
+          보유종목을 추가하면 포트폴리오 전략 조언(구성·리스크·국면 정합성·종합 관찰)을 볼 수 있습니다.
         </div>
       ) : !advice || advice.empty ? (
         <div style={{ padding: "26px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
@@ -443,9 +443,9 @@ function PortfolioAdvice({ D, hasHoldings }) {
           <AdviceSection label="② 리스크 식별" color={C.bad} open={open.s2} onToggle={() => setOpen((o) => ({ ...o, s2: !o.s2 }))}>
             <Bullets items={advice.step2?.risks} color={C.bad} />
           </AdviceSection>
-          <AdviceSection label="③ 레짐 정합성" color={C.warn} open={open.s3} onToggle={() => setOpen((o) => ({ ...o, s3: !o.s3 }))}>
+          <AdviceSection label="③ 국면 정합성" color={C.warn} open={open.s3} onToggle={() => setOpen((o) => ({ ...o, s3: !o.s3 }))}>
             <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.6 }}>
-              <div>현재 레짐: <b style={{ color: C.ink }}>{advice.regime}</b></div>
+              <div>현재 국면: <b style={{ color: C.ink }}>{advice.regime}</b></div>
               <div style={{ marginTop: 5 }}>{advice.step3?.tilt_note}</div>
               <div style={{ marginTop: 5 }}>{advice.step3?.alignment_note}</div>
             </div>
