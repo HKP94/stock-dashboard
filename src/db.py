@@ -32,6 +32,8 @@ from src.schemas import (
     MarketDailyRow,
     MarketNewsRow,
     MarketNewsSummaryRow,
+    MacroIndicatorRow,
+    MacroSummaryRow,
     NewsAnalysisRow,
     NewsRawRow,
     PortfolioRow,
@@ -467,6 +469,53 @@ def upsert_market_news_summary(conn: psycopg.Connection, row: MarketNewsSummaryR
     with conn.cursor() as cur:
         cur.execute(sql, (row.summary_date, row.kr_summary, row.us_summary, row.global_summary))
     logger.debug("upsert_market_news_summary: summary_date=%s", row.summary_date)
+
+
+def upsert_macro_indicators(conn: psycopg.Connection, rows: list[MacroIndicatorRow]) -> None:
+    sql = """
+        INSERT INTO macro_indicators
+            (indicator_code, indicator_name, region, asof, value, unit, source)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (indicator_code, asof) DO UPDATE SET
+            indicator_name = EXCLUDED.indicator_name,
+            region         = EXCLUDED.region,
+            value          = EXCLUDED.value,
+            unit           = EXCLUDED.unit,
+            source         = EXCLUDED.source
+    """
+    with conn.cursor() as cur:
+        cur.executemany(
+            sql,
+            [(r.indicator_code, r.indicator_name, r.region, r.asof, r.value, r.unit, r.source) for r in rows],
+        )
+    logger.debug("upsert_macro_indicators: %d rows", len(rows))
+
+
+def upsert_macro_summary(conn: psycopg.Connection, row: MacroSummaryRow) -> None:
+    sql = """
+        INSERT INTO macro_summary
+            (summary_date, headline, support_view, oppose_view, watch_points, summary_md)
+        VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+        ON CONFLICT (summary_date) DO UPDATE SET
+            headline     = EXCLUDED.headline,
+            support_view = EXCLUDED.support_view,
+            oppose_view  = EXCLUDED.oppose_view,
+            watch_points = EXCLUDED.watch_points,
+            summary_md   = EXCLUDED.summary_md
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            sql,
+            (
+                row.summary_date,
+                row.headline,
+                row.support_view,
+                row.oppose_view,
+                _to_json(row.watch_points),
+                row.summary_md,
+            ),
+        )
+    logger.debug("upsert_macro_summary: summary_date=%s", row.summary_date)
 
 
 def replace_ticker_context(conn: psycopg.Connection, row: TickerContextRow) -> None:

@@ -147,6 +147,32 @@ CREATE TABLE IF NOT EXISTS market_news_summary (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS macro_indicators (
+    indicator_code TEXT        NOT NULL,
+    indicator_name TEXT        NOT NULL,
+    region         TEXT        NOT NULL CHECK (region IN ('US', 'KR', 'GLOBAL')),
+    asof           DATE        NOT NULL,
+    value          NUMERIC     NOT NULL,
+    unit           TEXT        NOT NULL,
+    source         TEXT        NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (indicator_code, asof)
+);
+
+CREATE INDEX IF NOT EXISTS idx_macro_indicators_region_code_asof
+    ON macro_indicators (region, indicator_code, asof DESC);
+
+CREATE TABLE IF NOT EXISTS macro_summary (
+    id            BIGSERIAL   PRIMARY KEY,
+    summary_date  DATE        NOT NULL UNIQUE,
+    headline      TEXT        NOT NULL,
+    support_view  TEXT        NOT NULL,
+    oppose_view   TEXT        NOT NULL,
+    watch_points  JSONB       NOT NULL DEFAULT '[]',
+    summary_md    TEXT        NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS ticker_context (
     id           BIGSERIAL   PRIMARY KEY,
     ticker       TEXT        NOT NULL,

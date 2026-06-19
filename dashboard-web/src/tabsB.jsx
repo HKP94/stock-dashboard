@@ -11,10 +11,56 @@ import { cleanDisplayText, extractBullets } from './display.js';
 const grade = (v) => v >= 88 ? "A+" : v >= 80 ? "A" : v >= 72 ? "B+" : v >= 64 ? "B" : v >= 56 ? "C+" : v >= 48 ? "C" : "D";
 const gradeCol = (v) => v >= 80 ? C.ok : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C.bad;
 const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
+const num = (v, digits = 2) => (v == null ? "—" : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits }));
+const deltaLabel = (v, digits = 2) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(digits)}`);
 
 function GradeChip({ value }) {
   const col = gradeCol(value);
   return <span className="mono" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 30, padding: "3px 7px", borderRadius: 6, background: col + "14", border: `1px solid ${col}33`, color: col, fontSize: 12.5, fontWeight: 700 }}>{grade(value)}</span>;
+}
+
+function Sparkline({ series = [], color = C.acc }) {
+  if (!series.length) return <div style={{ height: 30 }} />;
+  const values = series.map((point) => Number(point.value)).filter((value) => Number.isFinite(value));
+  if (!values.length) return <div style={{ height: 30 }} />;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const width = 120;
+  const height = 30;
+  const pts = values.map((value, idx) => {
+    const x = (idx / Math.max(values.length - 1, 1)) * width;
+    const y = height - ((value - min) / range) * height;
+    return `${x},${y}`;
+  }).join(' ');
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden>
+      <polyline fill="none" stroke={color} strokeWidth="2.2" points={pts} />
+    </svg>
+  );
+}
+
+function MacroCard({ item }) {
+  const tone = item.deltaMonth > 0 ? C.ok : item.deltaMonth < 0 ? C.bad : C.ink2;
+  return (
+    <div style={{ border: `1px solid ${C.line2}`, borderRadius: 10, padding: "12px 14px", background: C.surface }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <MonoCaps style={{ fontSize: 9.5 }}>{item.region}</MonoCaps>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{item.name}</span>
+      </div>
+      <div style={{ marginTop: 6, display: "flex", alignItems: "end", justifyContent: "space-between", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 21, fontWeight: 800, color: C.ink }}>{num(item.value, item.unit === "%" ? 2 : 1)}</div>
+          <div style={{ fontSize: 11.5, color: C.ink3 }}>{item.unit} · {item.asof}</div>
+        </div>
+        <Sparkline series={item.series} color={tone === C.ink2 ? C.acc : tone} />
+      </div>
+      <div style={{ marginTop: 8, display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11.5, color: C.ink2 }}>전일 대비 <strong style={{ color: item.deltaDay > 0 ? C.ok : item.deltaDay < 0 ? C.bad : C.ink }}>{deltaLabel(item.deltaDay, 2)}</strong></span>
+        <span style={{ fontSize: 11.5, color: C.ink2 }}>전월 대비 <strong style={{ color: tone }}>{deltaLabel(item.deltaMonth, 2)}</strong></span>
+      </div>
+    </div>
+  );
 }
 
 // ============================ SCREENER ============================
@@ -193,6 +239,7 @@ export function Market({ D }) {
   const overall = D.market.overall;
   const w = D.regimes[overall].w;
   const newsSummary = D.market.newsSummary || {};
+  const macro = D.market.macro || {};
   const refreshContext = D.refreshContext || D.market.refreshContext || {};
   const strategyGuidance = D.strategyGuidance;
   const interp = overall === "bull"
@@ -254,6 +301,55 @@ export function Market({ D }) {
       <MarketColumn title="🇰🇷 한국 시장" m={D.market.kr} regimes={D.regimes} />
       <MarketColumn title="🇺🇸 미국 시장" m={D.market.us} regimes={D.regimes} />
     </div>
+
+    <Panel title="거시 환경" sub={macro.asof ? `${macro.asof} 기준` : "최근 거시 지표"}>
+      <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 16 }}>
+          <div style={{ border: `1px solid ${C.line2}`, borderRadius: 10, padding: "14px 16px", background: C.surface2 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>Macro</MonoCaps>
+              <span style={{ fontSize: 18, fontWeight: 800, color: C.acc }}>{macro.summary?.headline || "거시 환경 요약 준비 중"}</span>
+            </div>
+            {macro.summary?.summaryMd ? (
+              <ul style={{ margin: "10px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
+                {extractBullets(macro.summary.summaryMd, { limit: 4 }).map((bullet, idx) => (
+                  <li key={idx} style={{ display: "flex", gap: 8, fontSize: 13, color: C.ink, lineHeight: 1.6 }}>
+                    <span style={{ color: C.acc, fontWeight: 800, flexShrink: 0 }}>·</span><span>{bullet}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div style={{ marginTop: 10, fontSize: 12.5, color: C.ink3 }}>거시 요약 생성 전입니다.</div>
+            )}
+            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ border: `1px solid ${C.ok}33`, background: C.ok + "10", borderRadius: 9, padding: "10px 12px" }}>
+                <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>우호 해석</MonoCaps>
+                <div style={{ marginTop: 6, fontSize: 12.5, color: C.ink, lineHeight: 1.6 }}>{cleanDisplayText(macro.summary?.support || "—")}</div>
+              </div>
+              <div style={{ border: `1px solid ${C.bad}33`, background: C.bad + "10", borderRadius: 9, padding: "10px 12px" }}>
+                <MonoCaps style={{ fontSize: 9.5 }} color={C.bad}>부담 해석</MonoCaps>
+                <div style={{ marginTop: 6, fontSize: 12.5, color: C.ink, lineHeight: 1.6 }}>{cleanDisplayText(macro.summary?.oppose || "—")}</div>
+              </div>
+            </div>
+            {!!macro.summary?.watchPoints?.length && (
+              <div style={{ marginTop: 12, fontSize: 12, color: C.ink2 }}>
+                체크포인트: {macro.summary.watchPoints.map((item) => cleanDisplayText(item)).join(" · ")}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+            {(macro.indicators || []).slice(0, 4).map((item) => <MacroCard key={item.code} item={item} />)}
+          </div>
+        </div>
+
+        {macro.indicators?.length > 4 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+            {macro.indicators.slice(4).map((item) => <MacroCard key={item.code} item={item} />)}
+          </div>
+        )}
+      </div>
+    </Panel>
 
     <Panel title="오늘의 시장 뉴스 요약" sub={newsSummary.asof ? `${newsSummary.asof} 기준` : "최근 시장 헤드라인 기반"}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, padding: "16px 18px" }}>

@@ -357,8 +357,91 @@ def _build_market(conn, regime_info: dict) -> dict:
         "globalSummary": (digest["global_summary"] or "") if digest else "",
     }
 
+    macro = _load_macro(conn)
+
     return {"overall": overall, "indices": indices, "kr": kr, "us": us,
-            "summaryMd": summary_md, "newsSummary": news_summary}
+            "summaryMd": summary_md, "newsSummary": news_summary, "macro": macro}
+
+
+def _build_macro_payload(rows: list[dict], summary_row: dict | None) -> dict:
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        casted = dict(row)
+        casted["value"] = _f(casted.get("value"))
+        grouped.setdefault(casted["indicator_code"], []).append(casted)
+    for items in grouped.values():
+        items.sort(key=lambda item: item["asof"], reverse=True)
+
+    def _delta(items: list[dict], days: int, window: int = 35) -> float | None:
+        if len(items) < 2 or items[0].get("value") is None:
+            return None
+        latest = items[0]
+        for prev in items[1:]:
+            gap = (latest["asof"] - prev["asof"]).days
+            if gap >= days and gap <= window:
+                return round(float(latest["value"]) - float(prev["value"]), 4)
+        return None
+
+    ordered: list[dict] = []
+    for code, items in grouped.items():
+        latest = items[0]
+        ordered.append({
+            "code": code,
+            "name": latest["indicator_name"],
+            "region": latest["region"],
+            "asof": str(latest["asof"]),
+            "value": latest["value"],
+            "unit": latest["unit"],
+            "source": latest["source"],
+            "deltaDay": _delta(items, 1, 8),
+            "deltaMonth": _delta(items, 28, 62),
+            "series": [{"date": str(item["asof"]), "value": item["value"]} for item in reversed(items[:24]) if item.get("value") is not None],
+        })
+    ordered.sort(key=lambda item: (item["region"], item["name"]))
+
+    by_region = {"KR": [], "US": [], "GLOBAL": []}
+    for item in ordered:
+        by_region.setdefault(item["region"], []).append(item)
+
+    summary = {
+        "headline": summary_row["headline"] if summary_row else "",
+        "support": summary_row["support_view"] if summary_row else "",
+        "oppose": summary_row["oppose_view"] if summary_row else "",
+        "watchPoints": list(summary_row.get("watch_points") or []) if summary_row else [],
+        "summaryMd": summary_row["summary_md"] if summary_row else "",
+    }
+
+    return {
+        "asof": str(summary_row["summary_date"]) if summary_row else (ordered[0]["asof"] if ordered else None),
+        "summary": summary,
+        "indicators": ordered,
+        "regions": by_region,
+    }
+
+
+def _load_macro(conn) -> dict:
+    cur = conn.cursor()
+    cutoff = (date.today() - timedelta(days=400)).isoformat()
+    cur.execute(
+        """
+        SELECT indicator_code, indicator_name, region, asof, value, unit, source
+        FROM macro_indicators
+        WHERE asof >= %s
+        ORDER BY indicator_code, asof DESC
+        """,
+        (cutoff,),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    cur.execute(
+        """
+        SELECT summary_date, headline, support_view, oppose_view, watch_points, summary_md
+        FROM macro_summary
+        ORDER BY summary_date DESC, created_at DESC
+        LIMIT 1
+        """
+    )
+    summary_row = cur.fetchone()
+    return _build_macro_payload(rows, dict(summary_row) if summary_row else None)
 
 
 # ── 종목 가격·거래량 시계열 (6개월) ──────────────────────────────────

@@ -33,6 +33,7 @@ from src.db import (
     log_run_start,
     replace_ticker_context,
     upsert_market_daily,
+    upsert_macro_summary,
     upsert_market_news_summary,
     upsert_news_analysis,
 )
@@ -41,6 +42,8 @@ from src.schemas import (
     MarketNewsDigestOutput,
     MarketNewsSummaryRow,
     MarketSummaryOutput,
+    MacroSummaryOutput,
+    MacroSummaryRow,
     NewsAnalysisRow,
     NewsSummaryOutput,
     TickerContextRow,
@@ -195,6 +198,11 @@ def _parse_market_output(text: str) -> MarketSummaryOutput:
 def _parse_market_news_digest_output(text: str) -> MarketNewsDigestOutput:
     data = json.loads(text)
     return MarketNewsDigestOutput.model_validate(data)
+
+
+def _parse_macro_summary_output(text: str) -> MacroSummaryOutput:
+    data = json.loads(text)
+    return MacroSummaryOutput.model_validate(data)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -381,6 +389,23 @@ def _build_market_news_digest_prompt(grouped_news: dict[str, list[dict]]) -> str
         "아래 JSON으로만 답하라:\n"
         '{"kr_summary":"한국 시장 요약","us_summary":"미국 시장 요약","global_summary":"글로벌 거시 요약"}\n\n'
         f"{sections}"
+    )
+
+
+def _build_macro_summary_prompt(snapshot: dict) -> str:
+    snapshot_json = json.dumps(snapshot, ensure_ascii=False, default=str)
+    return (
+        "너는 글로벌 매크로 스트래티지스트다. 아래 최신 거시 지표와 직전 대비 변화를 읽고 "
+        "현재 거시 환경을 양면으로 해석하라.\n"
+        "- support_view: 위험자산에 우호적인 해석 1~2문장\n"
+        "- oppose_view: 위험자산에 부담이 되는 해석 1~2문장\n"
+        "- watch_points: 앞으로 확인할 거시 체크포인트 2~4개\n"
+        "- 매수/매도 지시 금지, 관찰·해석까지만.\n"
+        "- 금리·물가·고용·변동성·환율의 상충 신호를 과도하게 단정하지 마라.\n"
+        "- 과도한 강조 표시(*, **)는 쓰지 마라. 꼭 필요한 강조가 아니면 평문으로 써라.\n\n"
+        f"[거시 스냅샷]\n{snapshot_json}\n\n"
+        "아래 JSON으로만 답하라:\n"
+        '{"headline":"40자 내외 요약","support_view":"우호 해석","oppose_view":"부담 해석","watch_points":["체크포인트"],"summary_md":"- 핵심 요약 3~5줄"}'
     )
 
 
@@ -641,6 +666,42 @@ def _get_market_news_digest_rows(conn: psycopg.Connection, limit: int = 12) -> d
                 bucket = "US"
             grouped[bucket].append(dict(row))
     return {k: v[:limit] for k, v in grouped.items()}
+
+
+def _get_macro_indicator_snapshot(conn: psycopg.Connection, asof: date, lookback_days: int = 400) -> dict:
+    cutoff = asof.fromordinal(asof.toordinal() - lookback_days)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT indicator_code, indicator_name, region, asof, value, unit, source
+            FROM macro_indicators
+            WHERE asof >= %s AND asof <= %s
+            ORDER BY indicator_code, asof DESC
+            """,
+            (cutoff, asof),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row["indicator_code"], []).append(row)
+
+    snapshot = {"asof": str(asof), "indicators": []}
+    for code, items in grouped.items():
+        latest = items[0]
+        prev = items[1] if len(items) > 1 else None
+        prev_month = next((item for item in items[1:] if (latest["asof"] - item["asof"]).days >= 28), None)
+        snapshot["indicators"].append({
+            "code": code,
+            "name": latest["indicator_name"],
+            "region": latest["region"],
+            "value": float(latest["value"]),
+            "unit": latest["unit"],
+            "asof": str(latest["asof"]),
+            "delta_prev": round(float(latest["value"]) - float(prev["value"]), 4) if prev else None,
+            "delta_month": round(float(latest["value"]) - float(prev_month["value"]), 4) if prev_month else None,
+        })
+    return snapshot
 
 
 def _get_sentiment_rollup(
@@ -962,6 +1023,39 @@ def summarize_market_news_digest(
     return True
 
 
+def summarize_macro_environment(
+    conn: psycopg.Connection,
+    asof: Optional[date] = None,
+) -> bool:
+    asof = asof or date.today()
+    snapshot = _get_macro_indicator_snapshot(conn, asof)
+    if not snapshot.get("indicators"):
+        logger.warning("macro_indicators 없음 — 거시 요약 스킵")
+        return False
+
+    client = _get_gemini_client()
+    model = _get_synth_model()
+    try:
+        prompt = _build_macro_summary_prompt(snapshot)
+        text = _call_gemini_with_backoff(client, model, prompt)
+        output = _parse_macro_summary_output(text)
+    except Exception as exc:
+        logger.error("거시 요약 실패: %s", exc, exc_info=True)
+        return False
+
+    row = MacroSummaryRow(
+        summary_date=asof,
+        headline=output.headline,
+        support_view=output.support_view,
+        oppose_view=output.oppose_view,
+        watch_points=output.watch_points,
+        summary_md=output.summary_md,
+    )
+    upsert_macro_summary(conn, row)
+    logger.info("거시 요약 저장 완료 (%s)", asof)
+    return True
+
+
 # ──────────────────────────────────────────────────────────────
 # 실행 진입점 (python -m src.enrich_gemini)
 # ──────────────────────────────────────────────────────────────
@@ -993,6 +1087,9 @@ if __name__ == "__main__":
 
             digest_ok = summarize_market_news_digest(conn)
             logger.info("시장 뉴스 요약: %s", "완료" if digest_ok else "스킵/실패")
+
+            macro_ok = summarize_macro_environment(conn)
+            logger.info("거시 환경 요약: %s", "완료" if macro_ok else "스킵/실패")
 
         except Exception as exc:
             logger.error("enrich_gemini 전체 오류: %s", exc, exc_info=True)
