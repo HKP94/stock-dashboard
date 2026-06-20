@@ -839,6 +839,45 @@ def _load_stock_note_history(conn) -> dict[str, list[dict]]:
     return _group_note_history([dict(row) for row in cur.fetchall()])
 
 
+def _group_analyst_views_rows(rows: list[dict]) -> dict[str, dict[str, list[dict]]]:
+    grouped: dict[str, dict[str, list[dict]]] = {}
+    for row in rows:
+        ticker = row["ticker"]
+        stance = row["stance"]
+        grouped.setdefault(ticker, {"bull": [], "bear": []})
+        grouped[ticker][stance].append({
+            "point": row["point"],
+            "source": row["source"],
+            "sourceUrl": row["source_url"],
+            "asof": str(row["asof"]),
+        })
+    return grouped
+
+
+def _load_analyst_views(conn, tickers: list[str]) -> dict[str, dict[str, list[dict]]]:
+    if not tickers:
+        return {}
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT ticker, stance, point, source, source_url, asof
+        FROM (
+            SELECT ticker, stance, point, source, source_url, asof,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY ticker, stance
+                     ORDER BY asof DESC, created_at DESC
+                   ) AS rn
+            FROM analyst_views
+            WHERE ticker = ANY(%s)
+        ) t
+        WHERE rn <= 5
+        ORDER BY ticker, stance, asof DESC
+        """,
+        (tickers,),
+    )
+    return _group_analyst_views_rows([dict(row) for row in cur.fetchall()])
+
+
 # ── PR-4: 리서치 항목 로드 ────────────────────────────────────────────
 def _load_research_items(conn) -> dict[str, list[dict]]:
     """research_items → {ticker: [item...]}."""
@@ -1243,7 +1282,7 @@ def build_data() -> dict:
         val_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
 
         cur.execute("""
-            SELECT DISTINCT ON (ticker) ticker, rating, target_price, upside
+            SELECT DISTINCT ON (ticker) ticker, rating, rating_label, rating_score, target_price, upside, eps_fwd, n_analysts, source, asof
             FROM analyst ORDER BY ticker, asof DESC
         """)
         ana_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
@@ -1316,6 +1355,7 @@ def build_data() -> dict:
 
         # PR-4: 리서치 항목
         research_items_map = _load_research_items(conn)
+        analyst_views_map = _load_analyst_views(conn, tickers)
 
         # PR-4(이번): stock_notes
         notes_map = _load_stock_notes(conn)
@@ -1390,6 +1430,12 @@ def build_data() -> dict:
             tp     = _f(ana.get("target_price"))
             upside = _f(ana.get("upside"))
             rating = ana.get("rating")
+            rating_label = ana.get("rating_label") or rating
+            rating_score = _f(ana.get("rating_score"))
+            eps_fwd = _f(ana.get("eps_fwd"))
+            n_analysts = ana.get("n_analysts")
+            analyst_source = ana.get("source")
+            analyst_asof = str(ana.get("asof")) if ana.get("asof") else None
 
             # 뉴스 sentiment (PR-1: 종목별 최근 1건, asof 포함)
             n_sent = news.get("sentiment") or "중립"
@@ -1475,6 +1521,16 @@ def build_data() -> dict:
                 "tp":     round(tp) if tp else None,
                 "up":     round(upside, 1) if upside else None,
                 "rating": rating,
+                "consensus": {
+                    "targetPrice": round(tp) if tp else None,
+                    "ratingLabel": rating_label,
+                    "ratingScore": rating_score,
+                    "epsFwd": round(eps_fwd, 2) if eps_fwd is not None else None,
+                    "nAnalysts": int(n_analysts) if n_analysts is not None else None,
+                    "source": analyst_source,
+                    "asof": analyst_asof,
+                } if any(v is not None for v in (tp, rating_label, rating_score, eps_fwd, n_analysts, analyst_source)) else None,
+                "analystViews": analyst_views_map.get(tk, {"bull": [], "bear": []}),
                 "sent":   n_sent,
                 "sscore": round(n_score * 100) if n_score else 50,
                 "sum":    sum_bullets,

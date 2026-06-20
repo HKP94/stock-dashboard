@@ -172,8 +172,11 @@ class TestFetchKrValuationAnalyst:
         # upside = 329227/248000 - 1
         assert ana.target_price == 329227.0
         assert ana.rating == "매수"
+        assert ana.rating_label == "매수"
+        assert ana.rating_score == 1.0
         assert ana.upside == pytest.approx(329227.0 / 248000.0 - 1, rel=1e-4)
         assert ana.n_analysts == 4
+        assert ana.source == "naver+fnguide"
 
     def test_none_when_pages_empty(self):
         with patch("src.ingest_kr._get_html", return_value=b"<html></html>"), \

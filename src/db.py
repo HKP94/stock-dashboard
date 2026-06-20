@@ -26,6 +26,7 @@ from psycopg.types.numeric import FloatLoader, NumericBinaryLoader
 
 from src.schemas import (
     AnalystRow,
+    AnalystViewRow,
     DriverPriceRow,
     FundamentalsRow,
     IndexDailyRow,
@@ -271,20 +272,55 @@ def upsert_valuation(conn: psycopg.Connection, rows: list[ValuationRow]) -> None
 
 def upsert_analyst(conn: psycopg.Connection, rows: list[AnalystRow]) -> None:
     sql = """
-        INSERT INTO analyst (ticker, asof, rating, target_price, upside, n_analysts)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO analyst
+            (ticker, asof, rating, rating_label, rating_score, target_price, upside, eps_fwd, n_analysts, source)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (ticker, asof) DO UPDATE SET
             rating       = EXCLUDED.rating,
+            rating_label = EXCLUDED.rating_label,
+            rating_score = EXCLUDED.rating_score,
             target_price = EXCLUDED.target_price,
             upside       = EXCLUDED.upside,
-            n_analysts   = EXCLUDED.n_analysts
+            eps_fwd      = EXCLUDED.eps_fwd,
+            n_analysts   = EXCLUDED.n_analysts,
+            source       = EXCLUDED.source,
+            created_at   = now()
     """
     with conn.cursor() as cur:
         cur.executemany(
             sql,
-            [(r.ticker, r.asof, r.rating, r.target_price, r.upside, r.n_analysts) for r in rows],
+            [
+                (
+                    r.ticker,
+                    r.asof,
+                    r.rating,
+                    r.rating_label,
+                    r.rating_score,
+                    r.target_price,
+                    r.upside,
+                    r.eps_fwd,
+                    r.n_analysts,
+                    r.source,
+                )
+                for r in rows
+            ],
         )
     logger.debug("upsert_analyst: %d rows", len(rows))
+
+
+def upsert_analyst_views(conn: psycopg.Connection, rows: list[AnalystViewRow]) -> None:
+    sql = """
+        INSERT INTO analyst_views
+            (ticker, asof, stance, point, source, source_url)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ticker, asof, stance, point, source, source_url) DO NOTHING
+    """
+    with conn.cursor() as cur:
+        cur.executemany(
+            sql,
+            [(r.ticker, r.asof, r.stance, r.point, r.source, r.source_url) for r in rows],
+        )
+    logger.debug("upsert_analyst_views: %d rows", len(rows))
 
 
 def insert_news_raw(conn: psycopg.Connection, rows: list[NewsRawRow]) -> int:

@@ -98,11 +98,30 @@ CREATE TABLE IF NOT EXISTS analyst (
     ticker        TEXT    NOT NULL,
     asof          DATE    NOT NULL,
     rating        TEXT,
+    rating_label  TEXT,
+    rating_score  NUMERIC,
     target_price  NUMERIC,
     upside        NUMERIC,
+    eps_fwd       NUMERIC,
     n_analysts    INT,
+    source        TEXT    NOT NULL DEFAULT 'legacy',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (ticker, asof)
 );
+
+CREATE TABLE IF NOT EXISTS analyst_views (
+    ticker      TEXT        NOT NULL,
+    asof        DATE        NOT NULL,
+    stance      TEXT        NOT NULL CHECK (stance IN ('bull', 'bear')),
+    point       TEXT        NOT NULL,
+    source      TEXT        NOT NULL,
+    source_url  TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (ticker, asof, stance, point, source, source_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analyst_views_lookup
+    ON analyst_views (ticker, stance, asof DESC, created_at DESC);
 
 -- =============================================================
 -- 뉴스 원천 (url_hash 로 dedupe)

@@ -45,7 +45,14 @@ from src.db import (
     upsert_quant_scores,
     upsert_valuation,
 )
-from src.enrich_gemini import enrich_market_summary, enrich_news_batch, reenrich_stale_fallbacks, summarize_macro_environment, summarize_market_news_digest
+from src.enrich_gemini import (
+    enrich_market_summary,
+    enrich_news_batch,
+    extract_analyst_views_batch,
+    reenrich_stale_fallbacks,
+    summarize_macro_environment,
+    summarize_market_news_digest,
+)
 from src.ingest_kr import run_kr_ingest
 from src.ingest_drivers import run_driver_price_ingest
 from src.ingest_macro import run_macro_ingest
@@ -308,6 +315,16 @@ def _step_enrich_gemini(conn: psycopg.Connection, errors: list) -> None:
         conn.rollback()
         logger.error("Step 7a'(reenrich) 실패: %s", exc, exc_info=True)
         errors.append(_err("reenrich_fallback", exc))
+
+    try:
+        extracted, analyst_errs = extract_analyst_views_batch(conn)
+        conn.commit()
+        errors.extend(analyst_errs)
+        logger.info("Step 7a'' 완료: 애널리스트 논거 %d건 저장 (commit)", extracted)
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Step 7a''(analyst_views) 실패: %s", exc, exc_info=True)
+        errors.append(_err("analyst_views", exc))
 
     try:
         ok = enrich_market_summary(conn)

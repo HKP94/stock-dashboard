@@ -99,6 +99,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **신선도 라벨(W2-D)**: export는 `generatedAt`와 시장별 최신 거래일로 `refreshContext`를 계산한다. 헤더/시장전망 탭은 반드시 "미국 종가 기준 (06시 갱신)" 또는 "한국 종가 기준 (18시 갱신)"을 표시하고, 18시 갱신본에서는 KR 가격·뉴스만 최신이며 US 가격은 전날 종가임을 명시한다.
 - **시장 등락률**: `ingest_market`이 거래일 기준 전일대비 등락을 `market_daily.payload.changes`에 저장(주말 carry-over 0.00% 버그 방지). export는 changes 우선, 폴백은 상대오차 1e-5 초과 시만 인정.
 - **KR 밸류/컨센서스 = 네이버금융 + FnGuide 무료 스크래핑** (`ingest_kr.fetch_kr_valuation_analyst`). PER/PBR/현재가/목표가/투자의견=네이버 종목메인, ROE/부채비율=FnGuide `#highlight_D_A`. **yfinance KR 절대 금지**. KIS(`ingest_kis.py`)는 키 있을 때만 활성 보조. ROE는 비율(0.07) 단위로 정규화해 US와 통일(표시 시 ×100 %).
+- **애널리스트 컨센서스/논거 (Wave 4-D-1)**: 기존 `analyst` 저장 경로를 정규 컨센서스 저장소로 재사용하고 `rating_label/rating_score/eps_fwd/source`를 함께 저장한다(중복 테이블 금지). 정성 논거는 `analyst_views`에 `stance='bull'|'bear'`로 분리 저장하며, Gemini는 `news_raw`·`news_analysis`·`ticker_context`를 읽어 **실제 기사에 인용된 애널리스트/증권사 코멘트만** 추출하고 `source_url`을 반드시 보존한다.
 - **export는 종목별 '최신' 조회만 사용**(`SELECT DISTINCT ON (ticker) ... ORDER BY ticker, asof/date DESC`). 글로벌 `max(asof)`/특정날짜 고정 금지 — KR/US 수집일이 달라 한쪽이 통째로 누락되는 버그의 근원(indicators·quant·price·**valuation·analyst** 전부 적용).
 - **UI 텍스트에 내부 스크립트명·명령어(.py / `python -m ...`) 노출 금지.** 사용자 친화 문구만. 빈 상태/에러도 "잠시 후 다시" 식으로.
 - **가격 갱신 = 하루 2회** (06:00 auto_run + 18:00 news_refresh 경량). 18:00은 KR 장마감 후라 KR 당일종가, 06:00은 US 종가 직후. 헤더는 `priceAsof`(실제 가격 기준일) 표시.

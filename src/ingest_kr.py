@@ -36,6 +36,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from src.analyst_common import normalize_rating_label_score
 from src.schemas import AnalystRow, FundamentalsRow, PriceDailyRow, ValuationRow
 
 logger = logging.getLogger(__name__)
@@ -557,13 +558,18 @@ def fetch_kr_valuation_analyst(
     target = naver.get("target_price")
     curr = naver.get("current_price")
     upside = ((target / curr) - 1) if (target and curr and curr != 0) else None
+    rating_raw = naver.get("rating")
+    rating_label, rating_score = normalize_rating_label_score(rating_raw)
     ana = AnalystRow(
         ticker=ticker,
         asof=asof,
-        rating=naver.get("rating"),
+        rating=rating_label or rating_raw,
+        rating_label=rating_label,
+        rating_score=rating_score,
         target_price=target,
         upside=upside,
         n_analysts=fn.get("n_analysts"),
+        source="naver+fnguide",
     )
 
     has_val = any(v is not None for v in (val.per_t, val.pbr, val.roe, val.debt_ratio))
