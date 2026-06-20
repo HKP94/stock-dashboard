@@ -24,10 +24,12 @@ import yfinance as yf
 import psycopg
 
 from src.db import get_conn, log_run_finish, log_run_start, upsert_quant_scores
+from src.external_timeout import run_with_timeout
 from src.rules import check_rules
 from src.schemas import QuantScoresRow
 
 logger = logging.getLogger(__name__)
+YFINANCE_TIMEOUT_SECONDS: float = 20.0
 
 # ── 레짐별 가중치 ─────────────────────────────────────────────
 _REGIME_WEIGHTS: dict[str, dict[str, float]] = {
@@ -61,7 +63,7 @@ def _fetch_market_history() -> pd.DataFrame:
     cols: list[pd.Series] = []
     for sym, col in symbols.items():
         try:
-            df = yf.Ticker(sym).history(period="2y")
+            df = run_with_timeout(YFINANCE_TIMEOUT_SECONDS, lambda sym=sym: yf.Ticker(sym).history(period="2y"))
             if not df.empty:
                 cols.append(df["Close"].rename(col))
         except Exception as exc:

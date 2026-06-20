@@ -23,9 +23,11 @@ import requests
 import yfinance as yf
 from dotenv import load_dotenv
 
+from src.external_timeout import run_with_timeout
 from src.schemas import MacroIndicatorRow
 
 logger = logging.getLogger(__name__)
+YFINANCE_TIMEOUT_SECONDS: float = 20.0
 
 
 @dataclass(frozen=True)
@@ -194,7 +196,7 @@ def _fetch_ecos_macro_rows(spec: MacroSpec, start: date, end: date) -> list[Macr
 def _fetch_market_macro_rows(spec: MacroSpec, period: str = "6mo") -> list[MacroIndicatorRow]:
     if not spec.symbol:
         return []
-    history = yf.Ticker(spec.symbol).history(period=period)
+    history = run_with_timeout(YFINANCE_TIMEOUT_SECONDS, lambda: yf.Ticker(spec.symbol).history(period=period))
     if history.empty or "Close" not in history:
         return []
     rows: list[MacroIndicatorRow] = []

@@ -715,6 +715,8 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ### 안정화 (운영 중 발견·수정)
 - [x] **Wave 4-C 종목 드라이버** (2026-06-19): `ticker_drivers`/`driver_prices`를 추가해 종목별 핵심 가격 동인을 자동 추정(Gemini + 휴리스틱 fallback)하고 local_api CRUD로 사용자가 수정할 수 있게 했다. `origin='user'`는 auto 재생성에 덮어쓰이지 않으며, 공용 동인은 `macro_indicators`/`index_daily`를 재사용하고 전용 프록시(SOXX/LIT)만 별도 적재한다. 종목상세 탭은 "핵심 동인" 카드에서 추정 뱃지·영향도·미니차트·support/oppose 함의를 함께 보여준다.
+- [x] **Wave 4-C 후속 보강** (2026-06-20): 활성 유니버스 전체(39종목) 자동 매핑 경로와 5년 프록시 가격 백필 기준을 운영 규칙으로 확정했다. 자동 추정은 원자재/공급망 연관(리튬·메모리·유가·구리 등)까지 추론하되 `origin='user'` 보호를 유지하고, LG디스플레이/LCD는 무료 프록시 부재 시 `DISPLAY_PROXY_NONE`으로 남긴다.
+- [x] **CI hang 가드** (2026-06-20): 무인 06시/18시 워크플로는 외부 호출 timeout과 workflow `timeout-minutes`를 함께 둔다. Gemini 단계는 단건 HTTP timeout + 재시도 상한 + 배치 총 시간 예산을 넘기면 폴백/이월로 종료하며, 한 종목·한 소스 지연이 전체 잡을 붙잡지 못하게 한다.
 - [x] **Wave 4-B 매크로 분석** (2026-06-19): `macro_indicators`/`macro_summary`를 추가해 미국(FRED) 기준금리·10년물·CPI·실업률, 한국(ECOS) 기준금리·CPI, 글로벌(yfinance) VIX·DXY·USDKRW·WTI를 정기 수집·요약한다. FRED/ECOS 키는 요청에만 사용하고 DB·로그·저장 URL에 남기지 않도록 회귀 테스트와 에러 마스킹을 추가했다. 시장전망 탭은 "거시 환경" 카드에서 최신 값·전일/전월 대비·미니 추세와 우호/부담 양면 해석을 함께 보여준다.
 - [x] **Wave 4-A 긴급 버그·정리** (2026-06-19): 관심종목 관리 섹터 입력이 매 글자마다 행 리마운트로 포커스/스크롤을 잃던 문제를 top-level 행 컴포넌트 + local draft 저장 구조로 안정화했다. KR 일봉 조회 종료일을 KST 장마감 기준으로 명시하고, 18시 경량 갱신은 실제 적재된 마지막 거래일을 로그로 남기도록 해 `priceAsofByMarket["KR"]`와의 정합을 강화했다. 뉴스 요약·시장 시황·포트폴리오 조언은 렌더 단계에서 raw `*`/`**`를 정리하고, Gemini/조언 프롬프트에도 과도한 강조 자제 지침을 추가했다.
 - [x] **Wave 3 백필 재계산 핫픽스** (2026-06-19): `backfill.py`의 5년 백필 경로가 W3-A 변경 중 `recompute_indicators_to_db` import 누락으로 partial run을 내던 문제를 수정했다. `python -m src.backfill` / `--5y` 단독 실행이 다시 가격 백필 → 영향 종목 지표 재계산 → active 유니버스 퀀트 재계산까지 한 번에 마치며, `recompute.py`는 수동 수복 도구로만 남긴다. 회귀 테스트로 NameError 재발을 차단했다.
@@ -748,6 +750,8 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 ---
 *변경 이력:*
 - *v4.4 (2026-06-19) Wave 4-C: `ticker_drivers`/`driver_prices` 스키마, Gemini 기반 드라이버 자동 추정과 사용자 우선 CRUD, 공용 거시 재사용·전용 프록시 적재, 종목상세 "핵심 동인" 카드, `ingest_macro`의 `.env` 자동 로드를 추가 — Codex.*
+- *v4.5 (2026-06-20) Wave 4-C follow-up: 활성 유니버스 전체 자동 매핑, 5년 driver proxy 백필 기준, 원자재/공급망 연관 추론 강화, LCD proxy-none 처리 원칙을 문서화 — Codex.*
+- *v4.6 (2026-06-20) CI hang guard: Gemini HTTP timeout·배치 시간 예산·workflow timeout-minutes·yfinance hard timeout을 추가해 무인 파이프라인의 장시간 매달림을 차단 — Codex.*
 - *v4.3 (2026-06-19) Wave 4-B: `macro_indicators`/`macro_summary` 거시 백본과 FRED·ECOS·yfinance 수집, Gemini 양면 거시 요약, 시장전망 탭의 "거시 환경" 카드 및 시크릿 비저장 회귀 테스트를 추가 — Codex.*
 - *v4.2 (2026-06-19) Wave 4-A: 관심종목 섹터 입력 포커스 튐을 top-level 행 컴포넌트와 로컬 draft 저장 구조로 수정하고, KR 일봉 종료일을 KST 장마감 기준으로 명시·로깅, UI/프롬프트의 과도한 markdown 강조를 정리 — Codex.*
 - *v4.1 (2026-06-19) Wave 3 backfill hotfix: `backfill.py`의 indicators 재계산 import 누락을 복구해 `python -m src.backfill` / `--5y`가 다시 가격→지표→퀀트까지 단독 완결되도록 수정하고, NameError 회귀 테스트를 추가 — Codex.*

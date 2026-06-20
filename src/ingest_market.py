@@ -29,9 +29,11 @@ from tenacity import (
     wait_exponential,
 )
 
+from src.external_timeout import run_with_timeout
 from src.schemas import MarketDailyRow
 
 logger = logging.getLogger(__name__)
+YFINANCE_TIMEOUT_SECONDS: float = 20.0
 
 # ── 심볼 → MarketDailyRow 필드 매핑 ─────────────────────────────
 MARKET_SYMBOLS: dict[str, str] = {
@@ -57,7 +59,7 @@ def _fetch_close_and_change(symbol: str) -> tuple[Optional[float], Optional[floa
     PR-4: 거래일 기준 실제 직전 종가와 비교 → 주말 carry-over로 인한 0.00% 버그 방지.
     데이터 없으면 (None, None).
     """
-    df = yf.Ticker(symbol).history(period="1mo")
+    df = run_with_timeout(YFINANCE_TIMEOUT_SECONDS, lambda: yf.Ticker(symbol).history(period="1mo"))
     if df.empty:
         return None, None
     closes = df["Close"].dropna()

@@ -19,6 +19,7 @@ import yfinance as yf
 from tenacity import before_sleep_log, retry, stop_after_attempt, wait_exponential
 
 from src.db import get_conn, upsert_index_daily
+from src.external_timeout import run_with_timeout
 from src.schemas import IndexDailyRow
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 BENCHMARK_INDEXES: tuple[str, ...] = ("^KS11", "^GSPC", "^IXIC")
 DEFAULT_PERIOD = "5y"
 MAX_EXPECTED_BUSINESS_GAP = 5
+YFINANCE_TIMEOUT_SECONDS = 20.0
 
 
 def _safe_float(val) -> Optional[float]:
@@ -45,7 +47,7 @@ def _safe_float(val) -> Optional[float]:
     reraise=True,
 )
 def _yf_history(index_code: str, period: str) -> pd.DataFrame:
-    return yf.Ticker(index_code).history(period=period)
+    return run_with_timeout(YFINANCE_TIMEOUT_SECONDS, lambda: yf.Ticker(index_code).history(period=period))
 
 
 def fetch_index_history(index_code: str, period: str = DEFAULT_PERIOD) -> list[IndexDailyRow]:
