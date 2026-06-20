@@ -1041,7 +1041,7 @@ function AxesCard({ s }) {
   );
 }
 
-function InsightHistoryCard({ items }) {
+export function InsightHistoryCard({ items }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const types = useMemo(() => {
     const seen = new Map();

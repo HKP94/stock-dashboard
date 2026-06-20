@@ -29,6 +29,29 @@ export function filterStocks(stocks, { query = '', market = 'all', sector = 'all
   });
 }
 
+export function analystConsensusGap(consensus, price) {
+  if (consensus?.targetPrice === null || consensus?.targetPrice === undefined) return null;
+  if (price === null || price === undefined) return null;
+  const targetPrice = Number(consensus?.targetPrice);
+  const latestPrice = Number(price);
+  if (!Number.isFinite(targetPrice) || !Number.isFinite(latestPrice) || latestPrice === 0) return null;
+  return targetPrice / latestPrice - 1;
+}
+
+export function analystViewCounts(analystViews) {
+  return {
+    bull: Array.isArray(analystViews?.bull) ? analystViews.bull.length : 0,
+    bear: Array.isArray(analystViews?.bear) ? analystViews.bear.length : 0,
+  };
+}
+
+export function hasAnalystCoverage(stock) {
+  if (stock?.consensus) return true;
+  if ((stock?.analystViews?.bull || []).length > 0) return true;
+  if ((stock?.analystViews?.bear || []).length > 0) return true;
+  return (stock?.insightHistory || []).length > 0;
+}
+
 export function cleanDisplayText(text) {
   if (text == null) return '';
   return String(text)
