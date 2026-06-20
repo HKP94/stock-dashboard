@@ -1,12 +1,19 @@
 // ATLAS — Tabs B: Screener, Market, Research
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   C, compColor, flagTone,
   MonoCaps, Num, SentBadge, HoldDot,
   GaugeBar, RegimeBadge, SignalCard, WeightBars, btnGhost,
 } from './ui.jsx';
-import { Panel, ResearchItemCard, RESEARCH_TYPE_LABEL } from './tabsA.jsx';
-import { cleanDisplayText, extractBullets } from './display.js';
+import { InsightHistoryCard, Panel } from './tabsA.jsx';
+import {
+  analystConsensusGap,
+  analystViewCounts,
+  cleanDisplayText,
+  extractBullets,
+  filterStocks,
+  hasAnalystCoverage,
+} from './display.js';
 
 const grade = (v) => v >= 88 ? "A+" : v >= 80 ? "A" : v >= 72 ? "B+" : v >= 64 ? "B" : v >= 56 ? "C+" : v >= 48 ? "C" : "D";
 const gradeCol = (v) => v >= 80 ? C.ok : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C.bad;
@@ -395,100 +402,298 @@ export function Market({ D }) {
   </div>;
 }
 
-// ============================ RESEARCH (PR-4) ============================
+const trendValue = (point) => Number(point?.targetPrice);
 
-export function Research({ D, nav }) {
-  const allTickers = D.stocks.map((s) => s.t);
-  const withItems = D.stocks.filter((s) => (s.researchItems || []).length > 0);
-  const [ticker, setTicker] = useState(withItems.length > 0 ? withItems[0].t : allTickers[0]);
-  const [typeFilter, setTypeFilter] = useState("all");
+function fmtConsensusPrice(value, currency) {
+  if (value == null) return "—";
+  return currency === "₩"
+    ? `₩${Math.round(Number(value)).toLocaleString("ko-KR")}`
+    : `$${Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
 
-  const s = D.stocks.find((x) => x.t === ticker) || D.stocks[0];
-  const items = s?.researchItems || [];
-  const filtered = typeFilter === "all" ? items : items.filter((i) => i.type === typeFilter);
-  const typeCounts = items.reduce((acc, i) => { acc[i.type] = (acc[i.type] || 0) + 1; return acc; }, {});
+function pctText(value) {
+  return value == null ? "—" : `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`;
+}
 
-  // 종목명으로 검색 보조 URL (reportUrl 필드 제거됨 → 여기서 직접 생성)
-  const ytSearchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(s?.name || "")}+주식+분석`;
-  const reportSearchUrl = s
-    ? (s.mk === "KR"
-        ? `https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode=${s.t.split(".")[0]}`
-        : `https://www.tipranks.com/stocks/${s.t}/forecast`)
-    : "";
+function ratingTone(label) {
+  if (label === "매수") return { bg: C.ok + "14", border: C.ok + "33", color: C.ok };
+  if (label === "중립") return { bg: C.warnBg, border: C.warn + "33", color: C.warn };
+  if (label === "매도") return { bg: C.bad + "14", border: C.bad + "33", color: C.bad };
+  return { bg: C.surface2, border: C.line2, color: C.ink2 };
+}
+
+function ConsensusStat({ label, value, note, tone = "neutral" }) {
+  const color = tone === "ok" ? C.ok : tone === "bad" ? C.bad : tone === "warn" ? C.warn : C.ink;
+  return (
+    <div style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: "12px 14px", background: C.surface2 }}>
+      <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{label}</MonoCaps>
+      <div style={{ marginTop: 6, fontSize: 20, fontWeight: 800, color }}>{value}</div>
+      <div style={{ marginTop: 4, fontSize: 11.5, color: note ? C.ink2 : C.ink3 }}>{note || "데이터 없음"}</div>
+    </div>
+  );
+}
+
+function ConsensusSummaryCard({ stock }) {
+  const consensus = stock?.consensus;
+  if (!consensus) {
+    return (
+      <Panel title="컨센서스 요약" sub="목표가 · 의견 · EPS 전망">
+        <div style={{ padding: "26px 18px", fontSize: 12.5, color: C.ink3 }}>
+          컨센서스 미수집
+        </div>
+      </Panel>
+    );
+  }
+
+  const gap = analystConsensusGap(consensus, stock?.price);
+  const labelTone = ratingTone(consensus.ratingLabel);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 16, alignItems: "start" }}>
-      {/* 좌측: 종목 선택 */}
+    <Panel title="컨센서스 요약" sub="최신 기준 원자료">
+      <div style={{ padding: "14px 16px 16px", display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <ConsensusStat
+          label="목표가"
+          value={fmtConsensusPrice(consensus.targetPrice, stock?.cur)}
+          note={consensus.asof ? `기준일 ${consensus.asof}` : "기준일 미상"}
+        />
+        <ConsensusStat
+          label="현재가 대비 괴리율"
+          value={pctText(gap)}
+          note={stock?.price != null ? `현재가 ${fmtConsensusPrice(stock.price, stock.cur)}` : "현재가 없음"}
+          tone={gap != null ? (gap >= 0.1 ? "ok" : gap < 0 ? "bad" : "warn") : "neutral"}
+        />
+        <div style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: "12px 14px", background: C.surface2 }}>
+          <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>투자의견</MonoCaps>
+          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", borderRadius: 999, padding: "5px 10px", fontSize: 12, fontWeight: 700, background: labelTone.bg, border: `1px solid ${labelTone.border}`, color: labelTone.color }}>
+              {consensus.ratingLabel || "의견 없음"}
+            </span>
+            <span style={{ fontSize: 12, color: C.ink2 }}>
+              {consensus.nAnalysts != null ? `${consensus.nAnalysts}명 기준` : "참여 인원 미상"}
+            </span>
+          </div>
+          <div style={{ marginTop: 7, fontSize: 11.5, color: C.ink3 }}>{consensus.source || "출처 미상"}</div>
+        </div>
+        <ConsensusStat
+          label="EPS 전망"
+          value={consensus.epsFwd != null ? Number(consensus.epsFwd).toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}
+          note={consensus.epsFwd != null ? "향후 EPS 전망치" : "EPS 전망 미수집"}
+        />
+      </div>
+    </Panel>
+  );
+}
+
+function ConsensusTrendCard({ history = [], currency }) {
+  const usable = history.filter((point) => Number.isFinite(trendValue(point)));
+  const latest = usable[usable.length - 1];
+
+  return (
+    <Panel title="목표가 · 의견 추이" sub={usable.length > 1 ? "시계열이 있는 만큼 표시" : "단일 관측치"}>
+      {usable.length === 0 ? (
+        <div style={{ padding: "26px 18px", fontSize: 12.5, color: C.ink3 }}>
+          추이 데이터가 없습니다.
+        </div>
+      ) : usable.length === 1 ? (
+        <div style={{ padding: "18px 16px" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: C.ink }}>{fmtConsensusPrice(latest.targetPrice, currency)}</div>
+          <div style={{ marginTop: 6, fontSize: 12, color: C.ink2 }}>{latest.asof} · {latest.ratingLabel || "의견 미상"}</div>
+        </div>
+      ) : (
+        <div style={{ padding: "14px 16px 16px" }}>
+          <div style={{ display: "flex", alignItems: "end", gap: 16, marginBottom: 8 }}>
+            <div>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>최신 목표가</MonoCaps>
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.ink }}>{fmtConsensusPrice(latest.targetPrice, currency)}</div>
+            </div>
+            <div style={{ fontSize: 12, color: C.ink2 }}>{latest.asof} · {latest.ratingLabel || "의견 미상"}</div>
+          </div>
+          <Sparkline series={usable.map((point) => ({ value: point.targetPrice }))} color={C.acc} />
+          <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 11.5, color: C.ink3 }}>
+            <span>{usable[0].asof}</span>
+            <span>{usable[usable.length - 1].asof}</span>
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function AnalystPointsCard({ title, tone, points, emptyText }) {
+  const count = points.length;
+  const color = tone === "bull" ? C.ok : C.bad;
+  return (
+    <Panel
+      title={title}
+      sub={`${count}건`}
+      right={<span style={{ fontSize: 11.5, fontWeight: 700, color, background: color + "14", border: `1px solid ${color}33`, borderRadius: 999, padding: "4px 10px" }}>{count}건</span>}
+    >
+      {points.length === 0 ? (
+        <div style={{ padding: "24px 18px", fontSize: 12.5, color: C.ink3 }}>{emptyText}</div>
+      ) : (
+        <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {points.map((item, idx) => (
+            <div key={`${tone}-${idx}-${item.point}`} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
+              <div style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.6 }}>{cleanDisplayText(item.point)}</div>
+              <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {item.asof && <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>{item.asof}</span>}
+                {item.source && <span style={{ fontSize: 10.5, color: C.ink3 }}>{item.source}</span>}
+                {item.sourceUrl ? (
+                  <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color, textDecoration: "none" }}>
+                    원문 보기 ↗
+                  </a>
+                ) : (
+                  <span style={{ marginLeft: "auto", fontSize: 10.5, color: C.ink3 }}>원문 링크 없음</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+export function Research({ D, nav }) {
+  const [ticker, setTicker] = useState(D.stocks[0]?.t);
+  const [stockQuery, setStockQuery] = useState("");
+  const [marketFilter, setMarketFilter] = useState("all");
+  const [sectorFilter, setSectorFilter] = useState("all");
+
+  const sectors = useMemo(
+    () => [...new Set(D.stocks.map((stock) => stock.sec).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko")),
+    [D.stocks],
+  );
+  const sorted = useMemo(
+    () => [...D.stocks].sort((a, b) => (Number(b.comp ?? -Infinity) - Number(a.comp ?? -Infinity)) || String(a.name).localeCompare(String(b.name), "ko")),
+    [D.stocks],
+  );
+  const filteredStocks = useMemo(
+    () => filterStocks(sorted, { query: stockQuery, market: marketFilter, sector: sectorFilter }),
+    [sorted, stockQuery, marketFilter, sectorFilter],
+  );
+
+  useEffect(() => {
+    if (!filteredStocks.length) return;
+    if (!filteredStocks.some((stock) => stock.t === ticker)) setTicker(filteredStocks[0].t);
+  }, [filteredStocks, ticker]);
+
+  const s = D.stocks.find((x) => x.t === ticker) || filteredStocks[0] || D.stocks[0];
+  const counts = analystViewCounts(s?.analystViews);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, alignItems: "start" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <Panel title="리서치 종목">
+        <Panel title="종목 선택" sub={`${D.stocks.length}종목`}>
           <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <input value={stockQuery} onChange={(event) => setStockQuery(event.target.value)} placeholder="티커·종목명 검색"
+              style={{ width: "100%", border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, color: C.ink, outline: "none", boxSizing: "border-box" }} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <select value={marketFilter} onChange={(event) => setMarketFilter(event.target.value)}
+                style={{ flex: 1, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+                <option value="all">전체 시장</option>
+                <option value="KR">한국</option>
+                <option value="US">미국</option>
+              </select>
+              <select value={sectorFilter} onChange={(event) => setSectorFilter(event.target.value)}
+                style={{ flex: 1, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+                <option value="all">전체 섹터</option>
+                {sectors.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
+              </select>
+            </div>
             <select
-              value={ticker}
-              onChange={(e) => { setTicker(e.target.value); setTypeFilter("all"); }}
+              value={s?.t || ""}
+              onChange={(e) => setTicker(e.target.value)}
+              disabled={filteredStocks.length === 0}
               style={{ width: "100%", border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "var(--sans)", color: C.ink, background: C.surface, cursor: "pointer", outline: "none" }}
             >
-              {D.stocks.map((x) => (
-                <option key={x.t} value={x.t}>
-                  {x.name} ({x.t}) {(x.researchItems || []).length > 0 ? "·" + (x.researchItems || []).length : ""}
-                </option>
-              ))}
+              {filteredStocks.length === 0 ? (
+                <option value="">검색 결과 없음</option>
+              ) : (
+                filteredStocks.map((x) => (
+                  <option key={x.t} value={x.t}>
+                    {x.name} ({x.t})
+                  </option>
+                ))
+              )}
             </select>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Num size={18} weight={800} color={compColor(s?.comp ?? 0)}>{s?.comp ?? "—"}</Num>
-              <span style={{ fontSize: 11, color: C.ink3 }}>종합</span>
-              <button onClick={() => nav(s.t)} style={{ ...btnGhost, marginLeft: "auto", fontSize: 11 }}>상세 →</button>
-            </div>
           </div>
         </Panel>
 
-        <Panel title="검색 보조">
-          <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-            <a href={ytSearchUrl} target="_blank" rel="noopener noreferrer"
-              style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 7, background: "#FF000014", border: "1px solid #FF000033", color: C.bad, fontSize: 12.5, fontWeight: 600, textDecoration: "none" }}>
-              ▶ 유튜브에서 "{s?.name}" 분석 찾기
-            </a>
-            {reportSearchUrl && (
-              <a href={reportSearchUrl} target="_blank" rel="noopener noreferrer"
-                style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 7, background: C.warnBg, border: "1px solid #B4530933", color: C.warn, fontSize: 12.5, fontWeight: 600, textDecoration: "none" }}>
-                📄 리포트 검색 ({s?.mk === "KR" ? "네이버" : "TipRanks"})
-              </a>
-            )}
-            <span style={{ fontSize: 11, color: C.ink3 }}>리서치 항목은 종목 상세의 '리서치' 섹션에서 추가·삭제할 수 있습니다.</span>
+        <Panel title="선택 종목 요약" sub="애널리스트 뷰 기준">
+          <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                <HoldDot on={s?.hold} />
+                <span style={{ fontSize: 16, fontWeight: 800, color: C.ink }}>{s?.name}</span>
+                <span className="mono" style={{ fontSize: 10.5, color: C.ink3 }}>{s?.t} · {s?.mk}</span>
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12, color: C.ink2 }}>{s?.sec || "섹터 미분류"}</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+              <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 10px", background: C.surface2 }}>
+                <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>종합 점수</MonoCaps>
+                <div style={{ marginTop: 4 }}><Num size={18} weight={800} color={compColor(s?.comp ?? 0)}>{s?.comp ?? "—"}</Num></div>
+              </div>
+              <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 10px", background: C.surface2 }}>
+                <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>강세 논거</MonoCaps>
+                <div style={{ marginTop: 4, fontSize: 18, fontWeight: 800, color: C.ok }}>{counts.bull}</div>
+              </div>
+              <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 10px", background: C.surface2 }}>
+                <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>약세 논거</MonoCaps>
+                <div style={{ marginTop: 4, fontSize: 18, fontWeight: 800, color: C.bad }}>{counts.bear}</div>
+              </div>
+            </div>
+            <button onClick={() => nav(s.t)} style={{ ...btnGhost, width: "100%", justifyContent: "center", fontSize: 12 }}>
+              종목 상세 보기 →
+            </button>
           </div>
         </Panel>
       </div>
 
-      {/* 우측: 항목 표시 */}
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 14.5, fontWeight: 700, color: C.ink }}>{s?.name} 리서치</span>
-          <MonoCaps style={{ fontSize: 9.5 }}>{items.length}건</MonoCaps>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            {["all", "youtube", "article", "report", "quant", "memo"].map((t) => {
-              if (t !== "all" && !typeCounts[t]) return null;
-              const active = typeFilter === t;
-              return (
-                <button key={t} onClick={() => setTypeFilter(t)} style={{
-                  border: `1px solid ${active ? C.acc : C.line2}`,
-                  background: active ? C.acc : C.surface, color: active ? "#fff" : C.ink2,
-                  borderRadius: 999, padding: "4px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer",
-                }}>
-                  {t === "all" ? "전체" : RESEARCH_TYPE_LABEL[t]}{t !== "all" ? ` ${typeCounts[t]}` : ""}
-                </button>
-              );
-            })}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "18px 22px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 24, fontWeight: 800, color: C.ink }}>{s?.name}</span>
+              <span className="mono" style={{ fontSize: 13, color: C.ink3 }}>{s?.t} · {s?.mk}</span>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 12.5, color: C.ink2 }}>
+              전문가들이 보는 강세·약세 논거와 최신 컨센서스를 한 화면에 모았습니다.
+            </div>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ok, background: C.ok + "14", border: `1px solid ${C.ok}33`, borderRadius: 999, padding: "5px 10px" }}>강세 {counts.bull}</span>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: C.bad, background: C.bad + "14", border: `1px solid ${C.bad}33`, borderRadius: 999, padding: "5px 10px" }}>약세 {counts.bear}</span>
+            {!hasAnalystCoverage(s) && (
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink2, background: C.surface2, border: `1px solid ${C.line2}`, borderRadius: 999, padding: "5px 10px" }}>수집 대기</span>
+            )}
           </div>
         </div>
 
-        {filtered.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: C.ink3, fontSize: 13, background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10 }}>
-            {items.length === 0
-              ? "리서치 항목이 없습니다. 종목 상세의 '리서치' 섹션에서 추가할 수 있습니다."
-              : "해당 유형의 항목이 없습니다."}
-          </div>
-        ) : (
-          filtered.map((item) => <ResearchItemCard key={item.id} item={item} />)
-        )}
+        <ConsensusSummaryCard stock={s} />
+
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.05fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+          <ConsensusTrendCard history={s?.consensusHistory || []} currency={s?.cur} />
+          <Panel title="표시 원칙" sub="이 탭이 보여주는 것">
+            <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {[
+                "컨센서스는 전문가 의견의 현재 상태를 보여주는 참고 자료입니다.",
+                "강세와 약세 논거를 나란히 보여 주며, 한쪽이 비어 있으면 비어 있는 그대로 표시합니다.",
+                "현재가 대비 괴리율은 화면에서만 계산하며 저장값을 다시 쓰지 않습니다.",
+              ].map((line) => (
+                <div key={line} style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.6 }}>{line}</div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
+          <AnalystPointsCard title="강세 논거" tone="bull" points={s?.analystViews?.bull || []} emptyText="수집된 강세 논거 없음" />
+          <AnalystPointsCard title="약세 논거" tone="bear" points={s?.analystViews?.bear || []} emptyText="수집된 약세 논거 없음" />
+        </div>
+
+        <InsightHistoryCard items={s?.insightHistory || []} />
       </div>
     </div>
   );

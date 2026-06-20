@@ -31,7 +31,7 @@ export default function App() {
     { k: "news", label: "뉴스" },
     { k: "screener", label: "스크리너" },
     { k: "market", label: "시장 전망" },
-    { k: "research", label: "리서치 노트" },
+    { k: "research", label: "애널리스트 뷰" },
     { k: "portfolio", label: "포트폴리오" },
     { k: "strategy", label: "전략 비교" },
     { k: "manage", label: "관심종목 관리" },

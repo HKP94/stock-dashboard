@@ -854,6 +854,48 @@ def _group_analyst_views_rows(rows: list[dict]) -> dict[str, dict[str, list[dict
     return grouped
 
 
+def _group_analyst_consensus_history_rows(rows: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        ticker = row["ticker"]
+        grouped.setdefault(ticker, []).append({
+            "asof": str(row["asof"]),
+            "targetPrice": round(_f(row["target_price"])) if _f(row["target_price"]) is not None else None,
+            "ratingLabel": row["rating_label"],
+            "ratingScore": _f(row["rating_score"]),
+            "epsFwd": round(_f(row["eps_fwd"]), 2) if _f(row["eps_fwd"]) is not None else None,
+            "nAnalysts": int(row["n_analysts"]) if row["n_analysts"] is not None else None,
+            "source": row["source"],
+        })
+    for ticker in grouped:
+        grouped[ticker].sort(key=lambda item: item["asof"])
+    return grouped
+
+
+def _load_analyst_consensus_history(conn, tickers: list[str], *, limit_per_ticker: int = 12) -> dict[str, list[dict]]:
+    if not tickers:
+        return {}
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT ticker, asof, target_price, rating_label, rating_score, eps_fwd, n_analysts, source
+        FROM (
+            SELECT ticker, asof, target_price, rating_label, rating_score, eps_fwd, n_analysts, source,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY ticker
+                     ORDER BY asof DESC, created_at DESC
+                   ) AS rn
+            FROM analyst
+            WHERE ticker = ANY(%s)
+        ) t
+        WHERE rn <= %s
+        ORDER BY ticker, asof ASC
+        """,
+        (tickers, limit_per_ticker),
+    )
+    return _group_analyst_consensus_history_rows([dict(row) for row in cur.fetchall()])
+
+
 def _load_analyst_views(conn, tickers: list[str]) -> dict[str, dict[str, list[dict]]]:
     if not tickers:
         return {}
@@ -1356,6 +1398,7 @@ def build_data() -> dict:
         # PR-4: 리서치 항목
         research_items_map = _load_research_items(conn)
         analyst_views_map = _load_analyst_views(conn, tickers)
+        analyst_consensus_history_map = _load_analyst_consensus_history(conn, tickers)
 
         # PR-4(이번): stock_notes
         notes_map = _load_stock_notes(conn)
@@ -1530,6 +1573,7 @@ def build_data() -> dict:
                     "source": analyst_source,
                     "asof": analyst_asof,
                 } if any(v is not None for v in (tp, rating_label, rating_score, eps_fwd, n_analysts, analyst_source)) else None,
+                "consensusHistory": analyst_consensus_history_map.get(tk, []),
                 "analystViews": analyst_views_map.get(tk, {"bull": [], "bear": []}),
                 "sent":   n_sent,
                 "sscore": round(n_score * 100) if n_score else 50,
