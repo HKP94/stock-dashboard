@@ -220,6 +220,26 @@ def _parse_macro_summary_output(text: str) -> MacroSummaryOutput:
 
 def _parse_analyst_views_output(text: str) -> AnalystViewsOutput:
     data = json.loads(text)
+    for stance in ("bull", "bear"):
+        items = data.get(stance) or []
+        if not isinstance(items, list):
+            data[stance] = []
+            continue
+        cleaned = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            point = str(item.get("point") or "").strip()
+            source = str(item.get("source") or "").strip()
+            source_url = str(item.get("source_url") or "").strip()
+            if not (point and source and source_url):
+                continue
+            cleaned.append({
+                "point": point,
+                "source": source,
+                "source_url": source_url,
+            })
+        data[stance] = cleaned
     return AnalystViewsOutput.model_validate(data)
 
 
@@ -371,6 +391,10 @@ def _build_analyst_views_prompt(
         "- 각 논거는 반드시 입력 기사 URL 하나에 연결돼야 한다.\n"
         "- 기사에 애널리스트/증권사 인용이 없으면 빈 배열을 반환한다.\n"
         "- bull=강세 논거, bear=약세 논거로 분리한다.\n\n"
+        "- 같은 기사 안에도 강세 요인과 약세/우려 요인이 함께 있으면 각각 bull·bear로 분리하라.\n"
+        "- 약세·리스크·우려·밸류에이션 부담·경쟁심화 등은 bear로 명확히 분류하라.\n"
+        "- 수요 둔화·재고 부담·과열 경고처럼 하방 우려를 키우는 문장도 bear에 포함하라.\n"
+        "- 균형을 맞추기 위해 가짜 bear를 만들지 마라. 실제 기사 근거가 없으면 비워 둔다.\n\n"
         "출력은 순수 JSON만 허용:\n"
         '{"bull":[{"point":"논거 1개","source":"매체명","source_url":"https://..."}],'
         '"bear":[{"point":"논거 1개","source":"매체명","source_url":"https://..."}]}\n\n'
@@ -974,6 +998,66 @@ def _get_recent_analyst_news(conn: psycopg.Connection, ticker: str, asof: date) 
         return [dict(row) for row in cur.fetchall()]
 
 
+def _get_recent_risk_analyst_news(conn: psycopg.Connection, ticker: str, asof: date) -> list[dict]:
+    sql = """
+        SELECT DISTINCT ON (url) title, body, published_at, source, url
+        FROM news_raw
+        WHERE ticker = %s
+          AND published_at::date <= %s
+          AND published_at::date >= %s - INTERVAL '14 days'
+          AND (
+                url IN (
+                    SELECT DISTINCT item->>'url'
+                    FROM news_analysis na,
+                         LATERAL jsonb_array_elements(na.curated) AS item
+                    WHERE na.ticker = %s
+                      AND na.asof <= %s
+                      AND na.asof >= %s - INTERVAL '14 days'
+                      AND item->>'direction' = '악재'
+                      AND COALESCE(item->>'url', '') <> ''
+                )
+             OR title ~* '(우려|리스크|악재|부담|하락|둔화|과열|고평가|밸류에이션|경쟁심화|경쟁 심화|재고 부담|수요 둔화|압박|부진|warning|risk|bearish|overvalued|competition|slowdown|inventory)'
+             OR COALESCE(body, '') ~* '(우려|리스크|악재|부담|하락|둔화|과열|고평가|밸류에이션|경쟁심화|경쟁 심화|재고 부담|수요 둔화|압박|부진|warning|risk|bearish|overvalued|competition|slowdown|inventory)'
+          )
+        ORDER BY url, published_at DESC NULLS LAST, fetched_at DESC
+        LIMIT 8
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (ticker, asof, asof, ticker, asof, asof))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _merge_analyst_view_news_inputs(
+    analyst_items: list[dict],
+    risk_items: list[dict],
+    *,
+    limit: int = 12,
+) -> list[dict]:
+    analyst_queue = list(analyst_items)
+    risk_queue = list(risk_items)
+    merged: list[dict] = []
+    seen_urls: set[str] = set()
+
+    target_risk = min(len(risk_queue), max(1, limit // 2)) if risk_queue else 0
+    risk_used = 0
+
+    while len(merged) < limit and (analyst_queue or risk_queue):
+        pick_risk = risk_queue and (
+            risk_used < target_risk and (len(merged) % 2 == 0 or not analyst_queue)
+        )
+        queue = risk_queue if pick_risk else analyst_queue or risk_queue
+        item = queue.pop(0)
+        url = (item.get("url") or "").strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        merged.append(item)
+        if queue is risk_queue:
+            risk_used += 1
+
+    return merged
+
+
 def _get_ticker_context_items(conn: psycopg.Connection, ticker: str, asof: date) -> list[dict]:
     sql = """
         SELECT content, source, valid_from
@@ -1111,7 +1195,13 @@ def extract_analyst_views_batch(
             })
             break
         try:
-            news_items = _get_recent_analyst_news(conn, ticker, asof)
+            analyst_news_items = _get_recent_analyst_news(conn, ticker, asof)
+            risk_news_items = _get_recent_risk_analyst_news(conn, ticker, asof)
+            news_items = _merge_analyst_view_news_inputs(
+                analyst_news_items,
+                risk_news_items,
+                limit=12,
+            )
             if not news_items:
                 continue
             company_name = _get_company_name(conn, ticker)
