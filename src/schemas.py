@@ -86,9 +86,24 @@ class AnalystRow(BaseModel):
     ticker: str
     asof: date
     rating: Optional[str] = None
+    rating_label: Optional[str] = None
+    rating_score: Optional[float] = None
     target_price: Optional[float] = None
     upside: Optional[float] = None
+    eps_fwd: Optional[float] = None
     n_analysts: Optional[int] = None
+    source: str = "legacy"
+    created_at: Optional[datetime] = None
+
+
+class AnalystViewRow(BaseModel):
+    ticker: str
+    asof: date
+    stance: Literal["bull", "bear"]
+    point: str = Field(min_length=1)
+    source: str
+    source_url: str
+    created_at: Optional[datetime] = None
 
 
 class NewsRawRow(BaseModel):
@@ -277,6 +292,7 @@ class AnalystView(BaseModel):
     rating: Optional[str] = None
     target: Optional[float] = None
     upside: Optional[float] = None
+    source: Optional[str] = None
 
 
 class NewsView(BaseModel):
@@ -347,6 +363,17 @@ class NewsSummaryOutput(BaseModel):
         if not v:
             raise ValueError("key_points must have at least one item")
         return v
+
+
+class AnalystArgumentItem(BaseModel):
+    point: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    source_url: str = Field(min_length=1)
+
+
+class AnalystViewsOutput(BaseModel):
+    bull: list[AnalystArgumentItem] = Field(default_factory=list)
+    bear: list[AnalystArgumentItem] = Field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────

@@ -32,12 +32,15 @@ from src.db import (
     log_run_finish,
     log_run_start,
     replace_ticker_context,
+    upsert_analyst_views,
     upsert_market_daily,
     upsert_macro_summary,
     upsert_market_news_summary,
     upsert_news_analysis,
 )
 from src.schemas import (
+    AnalystViewRow,
+    AnalystViewsOutput,
     MarketDailyRow,
     MarketNewsDigestOutput,
     MarketNewsSummaryRow,
@@ -215,6 +218,31 @@ def _parse_macro_summary_output(text: str) -> MacroSummaryOutput:
     return MacroSummaryOutput.model_validate(data)
 
 
+def _parse_analyst_views_output(text: str) -> AnalystViewsOutput:
+    data = json.loads(text)
+    for stance in ("bull", "bear"):
+        items = data.get(stance) or []
+        if not isinstance(items, list):
+            data[stance] = []
+            continue
+        cleaned = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            point = str(item.get("point") or "").strip()
+            source = str(item.get("source") or "").strip()
+            source_url = str(item.get("source_url") or "").strip()
+            if not (point and source and source_url):
+                continue
+            cleaned.append({
+                "point": point,
+                "source": source,
+                "source_url": source_url,
+            })
+        data[stance] = cleaned
+    return AnalystViewsOutput.model_validate(data)
+
+
 # ──────────────────────────────────────────────────────────────
 # Gemini 호출 + 검증 + 재시도
 # ──────────────────────────────────────────────────────────────
@@ -264,6 +292,25 @@ def _call_gemini_for_market(
     return None
 
 
+def _call_gemini_for_analyst_views(
+    client,
+    model: str,
+    prompt: str,
+    ticker: str,
+) -> AnalystViewsOutput:
+    for attempt in range(2):
+        try:
+            text = _call_gemini_with_backoff(client, model, prompt)
+            return _parse_analyst_views_output(text)
+        except Exception as exc:
+            if attempt == 0:
+                logger.warning("%s: 애널리스트 논거 파싱/호출 실패 (재시도): %s", ticker, exc)
+                time.sleep(API_SLEEP)
+            else:
+                logger.error("%s: 애널리스트 논거 2회 실패 — 빈 결과 저장: %s", ticker, exc)
+    return AnalystViewsOutput()
+
+
 # ──────────────────────────────────────────────────────────────
 # 프롬프트 빌더 (prompt/GEMINI_PROMPT.md 템플릿)
 # ──────────────────────────────────────────────────────────────
@@ -310,6 +357,49 @@ def _build_news_prompt(
         '"risks":["하방리스크0~4개"],'
         '"summary_md":"- 한 줄 결론(의미)\\n- [사실]→[의미] 불릿","confidence":"상|중|하","based_on":"recent|fallback_old"}\n\n'
         f"[분석할 뉴스 리스트]\n{news_text}"
+    )
+
+
+def _build_analyst_views_prompt(
+    ticker: str,
+    company_name: str,
+    news_items: list[dict],
+    context_items: list[dict],
+) -> str:
+    lines: list[str] = []
+    for item in news_items[:12]:
+        pub_dt = item.get("published_at")
+        date_str = pub_dt.strftime("%Y-%m-%d") if pub_dt else "날짜미상"
+        title = item.get("title", "")
+        body = (item.get("body") or "")[:BODY_CAP]
+        source = item.get("source") or "unknown"
+        url = item.get("url") or ""
+        lines.append(f"- {date_str} | {source} | {url}\n  제목: {title}\n  본문: {body}")
+
+    context_text = "\n".join(
+        f"- {item.get('valid_from')} | {item.get('source')} | {item.get('content')}"
+        for item in context_items[:4]
+    ) or "(보조 컨텍스트 없음)"
+    news_text = "\n".join(lines) if lines else "(관련 뉴스 없음)"
+
+    return (
+        f"너는 증권사 코멘트만 근거로 강세/약세 논거를 구조화하는 리서치 어시스턴트다. "
+        f"[{company_name}({ticker})] 관련 기사와 보조 컨텍스트를 읽고, 기사에 실제로 인용된 애널리스트/증권사 의견만 추출하라.\n\n"
+        "규칙:\n"
+        "- 기사나 보조 컨텍스트에 없는 주장 창작 금지.\n"
+        "- 매수/매도 지시나 목표주가 창작 금지. 왜 강세/약세인지의 논거만 적는다.\n"
+        "- 각 논거는 반드시 입력 기사 URL 하나에 연결돼야 한다.\n"
+        "- 기사에 애널리스트/증권사 인용이 없으면 빈 배열을 반환한다.\n"
+        "- bull=강세 논거, bear=약세 논거로 분리한다.\n\n"
+        "- 같은 기사 안에도 강세 요인과 약세/우려 요인이 함께 있으면 각각 bull·bear로 분리하라.\n"
+        "- 약세·리스크·우려·밸류에이션 부담·경쟁심화 등은 bear로 명확히 분류하라.\n"
+        "- 수요 둔화·재고 부담·과열 경고처럼 하방 우려를 키우는 문장도 bear에 포함하라.\n"
+        "- 균형을 맞추기 위해 가짜 bear를 만들지 마라. 실제 기사 근거가 없으면 비워 둔다.\n\n"
+        "출력은 순수 JSON만 허용:\n"
+        '{"bull":[{"point":"논거 1개","source":"매체명","source_url":"https://..."}],'
+        '"bear":[{"point":"논거 1개","source":"매체명","source_url":"https://..."}]}\n\n'
+        f"[기사]\n{news_text}\n\n"
+        f"[보조 컨텍스트]\n{context_text}"
     )
 
 
@@ -860,7 +950,7 @@ def _tickers_with_stale_fallback(conn: psycopg.Connection) -> list[str]:
 def _get_recent_ticker_news(conn: psycopg.Connection, ticker: str) -> list[dict]:
     """ticker의 '가장 최근' 뉴스 최대 MAX_NEWS_PER_TICKER건 (날짜 무관)."""
     sql = """
-        SELECT title, body, published_at, source
+        SELECT title, body, published_at, source, url
         FROM news_raw WHERE ticker = %s
         ORDER BY published_at DESC NULLS LAST, fetched_at DESC
         LIMIT %s
@@ -868,6 +958,149 @@ def _get_recent_ticker_news(conn: psycopg.Connection, ticker: str) -> list[dict]
     with conn.cursor() as cur:
         cur.execute(sql, (ticker, MAX_NEWS_PER_TICKER))
         return [dict(row) for row in cur.fetchall()]
+
+
+def _tickers_needing_analyst_views(conn: psycopg.Connection, asof: date) -> list[str]:
+    sql = """
+        SELECT DISTINCT nr.ticker
+        FROM news_raw nr
+        JOIN watchlist w ON w.ticker = nr.ticker
+        WHERE w.active = TRUE
+          AND nr.published_at::date <= %s
+          AND nr.published_at::date >= %s - INTERVAL '7 days'
+          AND (
+                nr.title ~* '(애널리스트|증권사|리포트|목표가|투자의견|recommendation|analyst|brokerage|target price)'
+             OR COALESCE(nr.body, '') ~* '(애널리스트|증권사|리포트|목표가|투자의견|recommendation|analyst|brokerage|target price)'
+          )
+        ORDER BY nr.ticker
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (asof, asof))
+        return [row["ticker"] for row in cur.fetchall()]
+
+
+def _get_recent_analyst_news(conn: psycopg.Connection, ticker: str, asof: date) -> list[dict]:
+    sql = """
+        SELECT title, body, published_at, source, url
+        FROM news_raw
+        WHERE ticker = %s
+          AND published_at::date <= %s
+          AND published_at::date >= %s - INTERVAL '14 days'
+          AND (
+                title ~* '(애널리스트|증권사|리포트|목표가|투자의견|recommendation|analyst|brokerage|target price)'
+             OR COALESCE(body, '') ~* '(애널리스트|증권사|리포트|목표가|투자의견|recommendation|analyst|brokerage|target price)'
+          )
+        ORDER BY published_at DESC NULLS LAST, fetched_at DESC
+        LIMIT 12
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (ticker, asof, asof))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _get_recent_risk_analyst_news(conn: psycopg.Connection, ticker: str, asof: date) -> list[dict]:
+    sql = """
+        SELECT DISTINCT ON (url) title, body, published_at, source, url
+        FROM news_raw
+        WHERE ticker = %s
+          AND published_at::date <= %s
+          AND published_at::date >= %s - INTERVAL '14 days'
+          AND (
+                url IN (
+                    SELECT DISTINCT item->>'url'
+                    FROM news_analysis na,
+                         LATERAL jsonb_array_elements(na.curated) AS item
+                    WHERE na.ticker = %s
+                      AND na.asof <= %s
+                      AND na.asof >= %s - INTERVAL '14 days'
+                      AND item->>'direction' = '악재'
+                      AND COALESCE(item->>'url', '') <> ''
+                )
+             OR title ~* '(우려|리스크|악재|부담|하락|둔화|과열|고평가|밸류에이션|경쟁심화|경쟁 심화|재고 부담|수요 둔화|압박|부진|warning|risk|bearish|overvalued|competition|slowdown|inventory)'
+             OR COALESCE(body, '') ~* '(우려|리스크|악재|부담|하락|둔화|과열|고평가|밸류에이션|경쟁심화|경쟁 심화|재고 부담|수요 둔화|압박|부진|warning|risk|bearish|overvalued|competition|slowdown|inventory)'
+          )
+        ORDER BY url, published_at DESC NULLS LAST, fetched_at DESC
+        LIMIT 8
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (ticker, asof, asof, ticker, asof, asof))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _merge_analyst_view_news_inputs(
+    analyst_items: list[dict],
+    risk_items: list[dict],
+    *,
+    limit: int = 12,
+) -> list[dict]:
+    analyst_queue = list(analyst_items)
+    risk_queue = list(risk_items)
+    merged: list[dict] = []
+    seen_urls: set[str] = set()
+
+    target_risk = min(len(risk_queue), max(1, limit // 2)) if risk_queue else 0
+    risk_used = 0
+
+    while len(merged) < limit and (analyst_queue or risk_queue):
+        pick_risk = risk_queue and (
+            risk_used < target_risk and (len(merged) % 2 == 0 or not analyst_queue)
+        )
+        queue = risk_queue if pick_risk else analyst_queue or risk_queue
+        item = queue.pop(0)
+        url = (item.get("url") or "").strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        merged.append(item)
+        if queue is risk_queue:
+            risk_used += 1
+
+    return merged
+
+
+def _get_ticker_context_items(conn: psycopg.Connection, ticker: str, asof: date) -> list[dict]:
+    sql = """
+        SELECT content, source, valid_from
+        FROM ticker_context
+        WHERE ticker = %s
+          AND valid_from <= %s
+        ORDER BY valid_from DESC, created_at DESC
+        LIMIT 4
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (ticker, asof))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _build_analyst_view_rows(
+    ticker: str,
+    asof: date,
+    payload: AnalystViewsOutput,
+    news_items: list[dict] | None = None,
+) -> list[AnalystViewRow]:
+    allowed_sources_by_url = {
+        (item.get("url") or "").strip(): (item.get("source") or "").strip()
+        for item in (news_items or [])
+        if (item.get("url") or "").strip()
+    }
+    rows: list[AnalystViewRow] = []
+    for stance, items in (("bull", payload.bull), ("bear", payload.bear)):
+        for item in items:
+            source_url = item.source_url.strip()
+            source = allowed_sources_by_url.get(source_url)
+            if not source:
+                continue
+            rows.append(
+                AnalystViewRow(
+                    ticker=ticker,
+                    asof=asof,
+                    stance=stance,
+                    point=item.point,
+                    source=source,
+                    source_url=source_url,
+                )
+            )
+    return rows
 
 
 def reenrich_stale_fallbacks(
@@ -935,6 +1168,62 @@ def reenrich_stale_fallbacks(
 
     logger.info("폴백 재시도 완료: %d종목 복구", fixed)
     return fixed, errors
+
+
+def extract_analyst_views_batch(
+    conn: psycopg.Connection,
+    asof: Optional[date] = None,
+) -> tuple[int, list[dict]]:
+    """최근 애널리스트/증권사 인용 뉴스에서 bull/bear 논거를 추출해 analyst_views에 저장."""
+    asof = asof or date.today()
+    client = _get_gemini_client()
+    model = _get_bulk_model()
+    errors: list[dict] = []
+    saved = 0
+    started_at = time.monotonic()
+
+    tickers = _tickers_needing_analyst_views(conn, asof)
+    logger.info("애널리스트 논거 추출 대상: %d개 종목", len(tickers))
+
+    for ticker in tickers:
+        if not _within_budget(started_at):
+            errors.append({
+                "ticker": ticker,
+                "step": "analyst_views_budget",
+                "error": f"Gemini 애널리스트 논거 추출 시간 예산 초과({GEMINI_BATCH_BUDGET_SECONDS:.0f}s)",
+                "ts": datetime.utcnow().isoformat(),
+            })
+            break
+        try:
+            analyst_news_items = _get_recent_analyst_news(conn, ticker, asof)
+            risk_news_items = _get_recent_risk_analyst_news(conn, ticker, asof)
+            news_items = _merge_analyst_view_news_inputs(
+                analyst_news_items,
+                risk_news_items,
+                limit=12,
+            )
+            if not news_items:
+                continue
+            company_name = _get_company_name(conn, ticker)
+            context_items = _get_ticker_context_items(conn, ticker, asof)
+            prompt = _build_analyst_views_prompt(ticker, company_name, news_items, context_items)
+            payload = _call_gemini_for_analyst_views(client, model, prompt, ticker)
+            rows = _build_analyst_view_rows(ticker, asof, payload, news_items=news_items)
+            if rows:
+                upsert_analyst_views(conn, rows)
+                saved += len(rows)
+        except Exception as exc:
+            logger.error("%s: 애널리스트 논거 추출 실패: %s", ticker, exc, exc_info=True)
+            errors.append({
+                "ticker": ticker,
+                "step": "analyst_views",
+                "error": str(exc),
+                "ts": datetime.utcnow().isoformat(),
+            })
+        time.sleep(API_SLEEP)
+
+    logger.info("애널리스트 논거 추출 완료: %d건 저장", saved)
+    return saved, errors
 
 
 # ──────────────────────────────────────────────────────────────

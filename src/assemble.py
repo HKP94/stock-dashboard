@@ -150,7 +150,7 @@ def _q_valuation(ticker: str, conn: psycopg.Connection) -> Optional[dict]:
 
 def _q_analyst(ticker: str, conn: psycopg.Connection) -> Optional[dict]:
     """가장 최근 애널리스트 컨센서스. 없으면 None."""
-    sql = "SELECT rating, target_price, upside FROM analyst WHERE ticker=%s ORDER BY asof DESC LIMIT 1"
+    sql = "SELECT rating, target_price, upside, source FROM analyst WHERE ticker=%s ORDER BY asof DESC LIMIT 1"
     with conn.cursor() as cur:
         cur.execute(sql, (ticker,))
         row = cur.fetchone()
@@ -307,9 +307,9 @@ def _bulk_analyst(tickers: list[str], conn: psycopg.Connection) -> dict[str, Opt
     if not tickers:
         return out
     sql = """
-        SELECT ticker, rating, target_price, upside
+        SELECT ticker, rating, target_price, upside, source
         FROM (
-            SELECT ticker, rating, target_price, upside,
+            SELECT ticker, rating, target_price, upside, source,
                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY asof DESC) AS rn
             FROM analyst
             WHERE ticker = ANY(%s)
@@ -403,6 +403,7 @@ def _build_record(
         rating=ana.get("rating") if ana else None,
         target=ana.get("target_price") if ana else None,
         upside=ana.get("upside") if ana else None,
+        source=ana.get("source") if ana else None,
     )
 
     # NewsView: sentiment Literal 검증 후 할당

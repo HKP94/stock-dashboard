@@ -25,6 +25,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from src.analyst_common import normalize_rating_label_score
 from src.external_timeout import run_with_timeout
 from src.schemas import AnalystRow, FundamentalsRow, PriceDailyRow, ValuationRow
 
@@ -280,14 +281,19 @@ def fetch_us_analyst(ticker: str, asof: Optional[date] = None) -> Optional[Analy
 
     rating_raw = info.get("recommendationKey")
     rating: Optional[str] = str(rating_raw).upper() if rating_raw else None
+    rating_label, rating_score = normalize_rating_label_score(rating_raw)
 
     row = AnalystRow(
         ticker=ticker,
         asof=asof,
-        rating=rating,
+        rating=rating_label or rating,
+        rating_label=rating_label,
+        rating_score=rating_score,
         target_price=target,
         upside=upside,
+        eps_fwd=_safe_float(info.get("forwardEps")),
         n_analysts=_safe_int(info.get("numberOfAnalystOpinions")),
+        source="yfinance",
     )
     logger.info(
         "%s: analyst rating=%s target=%s upside=%s",

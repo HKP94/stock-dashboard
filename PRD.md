@@ -5,8 +5,8 @@
 
 | 항목 | 값 |
 |---|---|
-| 버전 | v3.7 |
-| 작성일 | 2026-06-08 |
+| 버전 | v3.8 |
+| 작성일 | 2026-06-20 |
 | PM | Claude (대화 세션) |
 | 빌더 | Claude Code |
 | 런타임 LLM | Gemini (정량 보조), Hermes Agent (오케스트레이션·전달) |
@@ -201,8 +201,15 @@ CREATE TABLE valuation (
 
 -- 애널리스트 컨센서스
 CREATE TABLE analyst (
-  ticker TEXT, asof DATE, rating TEXT, target_price NUMERIC,
-  upside NUMERIC, n_analysts INT, PRIMARY KEY (ticker, asof)
+  ticker TEXT, asof DATE, rating TEXT, rating_label TEXT, rating_score NUMERIC,
+  target_price NUMERIC, upside NUMERIC, eps_fwd NUMERIC, n_analysts INT,
+  source TEXT, created_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (ticker, asof)
+);
+
+CREATE TABLE analyst_views (
+  ticker TEXT, asof DATE, stance TEXT, point TEXT, source TEXT,
+  source_url TEXT, created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (ticker, asof, stance, point, source, source_url)
 );
 
 -- 뉴스 원천 (URL 해시로 dedupe)
@@ -309,7 +316,7 @@ CREATE TABLE backtest_results (
   "price": {"close": 218000, "chg_pct": 1.2, "rsi14": 58.3, "disparity20": 101.4, "is_aligned": true},
   "fundamentals": {"rev_yoy": 0.11, "op_margin": 0.19, "last_q_rev_b": 2.7},
   "valuation": {"per_f": 18.2, "pbr": 1.3, "roe": 0.09},
-  "analyst": {"rating": "BUY", "target": 260000, "upside": 0.19},
+  "analyst": {"rating": "매수", "target": 260000, "upside": 0.19, "source": "naver+fnguide"},
   "news": {"sentiment": "긍정", "score": 0.4, "summary_md": "- ...", "based_on": "recent"},
   "quant": {"composite": 71, "momentum": 78, "value": 55, "quality": 64, "growth": 70, "sentiment": 66,
             "flags": ["RSI 모멘텀 양호", "밸류에이션 부담 없음"],
@@ -370,6 +377,7 @@ LLM은 **반드시 아래 JSON만** 반환한다. 상세 프롬프트는 `prompt
 **소스(시장별 분리, 이게 핵심 개선):**
 - **US**: 가격은 yfinance(폴백) + FMP/Finnhub/Alpha Vantage 중 1개(키 무료 티어), 재무·컨센서스는 FMP/Finnhub.
 - **KR**: 가격/거래량은 **pykrx**(KRX), 재무·공시는 **DART OpenAPI**(무료). **밸류에이션(PER/PBR)·컨센서스(목표가·투자의견)·ROE·부채비율은 네이버금융 종목메인 + FnGuide Company Guide 무료 스크래핑**(계좌 불필요, `ingest_kr.fetch_kr_valuation_analyst`). **KIS Developers는 옵션**(환경변수 `KIS_APPKEY/KIS_APPSECRET` 있을 때만 활성, `ingest_kis.py` — ROE/부채/컨센서스 '있으면 우선' 보강). → **yfinance KR 사용 금지**(절대규칙).
+- **애널리스트 컨센서스/논거 (Wave 4-D-1)**: 기존 `analyst` 경로를 정규 컨센서스 저장소로 재사용하고 `rating_label/rating_score/eps_fwd/source`를 함께 저장한다(중복 테이블 금지). 정성 논거는 `analyst_views`에 `stance='bull'|'bear'`로 분리 저장하며, Gemini는 `news_raw`·`news_analysis`·`ticker_context`를 읽어 **실제 기사에 인용된 애널리스트/증권사 코멘트만** 추출하고 `source_url`을 반드시 보존한다.
 **산출 항목**(기존 `main.py` 컬럼 계승 + 정비): 현재가·등락률, SMA20/50/200·RSI14·이격도·추세기울기·정배열, 최근 1~3년·1~3분기 매출/영업이익률, PER(T/F)·PBR·EV/EBITDA·ROE·ROA·부채비율·매출성장률, 컨센서스(의견·목표가·상승여력), 뉴스 감성·요약.
 **증분 처리**: `news_raw`에 새 기사(URL 해시 신규)가 있는 종목만 Gemini 재요약 → 토큰 절약.
 
@@ -717,6 +725,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [x] **Wave 4-C 종목 드라이버** (2026-06-19): `ticker_drivers`/`driver_prices`를 추가해 종목별 핵심 가격 동인을 자동 추정(Gemini + 휴리스틱 fallback)하고 local_api CRUD로 사용자가 수정할 수 있게 했다. `origin='user'`는 auto 재생성에 덮어쓰이지 않으며, 공용 동인은 `macro_indicators`/`index_daily`를 재사용하고 전용 프록시(SOXX/LIT)만 별도 적재한다. 종목상세 탭은 "핵심 동인" 카드에서 추정 뱃지·영향도·미니차트·support/oppose 함의를 함께 보여준다.
 - [x] **Wave 4-C 후속 보강** (2026-06-20): 활성 유니버스 전체(39종목) 자동 매핑 경로와 5년 프록시 가격 백필 기준을 운영 규칙으로 확정했다. 자동 추정은 원자재/공급망 연관(리튬·메모리·유가·구리 등)까지 추론하되 `origin='user'` 보호를 유지하고, LG디스플레이/LCD는 무료 프록시 부재 시 `DISPLAY_PROXY_NONE`으로 남긴다.
 - [x] **CI hang 가드** (2026-06-20): 무인 06시/18시 워크플로는 외부 호출 timeout과 workflow `timeout-minutes`를 함께 둔다. Gemini 단계는 단건 HTTP timeout + 재시도 상한 + 배치 총 시간 예산을 넘기면 폴백/이월로 종료하며, 한 종목·한 소스 지연이 전체 잡을 붙잡지 못하게 한다.
+- [x] **Wave 4-D-1 애널리스트 컨센서스·논거 백엔드** (2026-06-20): 기존 `analyst` 저장 경로를 확장해 `rating_label/rating_score/eps_fwd/source`를 정규화 저장하고, `analyst_views`에 출처 URL이 있는 bull/bear 논거를 분리 저장한다. 06시 전체 파이프라인 Step 7에 논거 추출을 편입하고 export는 종목별 최신 `consensus`와 `analystViews(bull/bear)`를 함께 내보낸다.
 - [x] **Wave 4-B 매크로 분석** (2026-06-19): `macro_indicators`/`macro_summary`를 추가해 미국(FRED) 기준금리·10년물·CPI·실업률, 한국(ECOS) 기준금리·CPI, 글로벌(yfinance) VIX·DXY·USDKRW·WTI를 정기 수집·요약한다. FRED/ECOS 키는 요청에만 사용하고 DB·로그·저장 URL에 남기지 않도록 회귀 테스트와 에러 마스킹을 추가했다. 시장전망 탭은 "거시 환경" 카드에서 최신 값·전일/전월 대비·미니 추세와 우호/부담 양면 해석을 함께 보여준다.
 - [x] **Wave 4-A 긴급 버그·정리** (2026-06-19): 관심종목 관리 섹터 입력이 매 글자마다 행 리마운트로 포커스/스크롤을 잃던 문제를 top-level 행 컴포넌트 + local draft 저장 구조로 안정화했다. KR 일봉 조회 종료일을 KST 장마감 기준으로 명시하고, 18시 경량 갱신은 실제 적재된 마지막 거래일을 로그로 남기도록 해 `priceAsofByMarket["KR"]`와의 정합을 강화했다. 뉴스 요약·시장 시황·포트폴리오 조언은 렌더 단계에서 raw `*`/`**`를 정리하고, Gemini/조언 프롬프트에도 과도한 강조 자제 지침을 추가했다.
 - [x] **Wave 3 백필 재계산 핫픽스** (2026-06-19): `backfill.py`의 5년 백필 경로가 W3-A 변경 중 `recompute_indicators_to_db` import 누락으로 partial run을 내던 문제를 수정했다. `python -m src.backfill` / `--5y` 단독 실행이 다시 가격 백필 → 영향 종목 지표 재계산 → active 유니버스 퀀트 재계산까지 한 번에 마치며, `recompute.py`는 수동 수복 도구로만 남긴다. 회귀 테스트로 NameError 재발을 차단했다.
@@ -778,6 +787,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v2.0 (2026-06-16) 데이터·UX 정비 PR-0~6: US valuation/analyst 누락 근본수정(글로벌 max(asof)→종목별 DISTINCT ON, ROE %표시, US뉴스쿼리 영문정식명), 내부스크립트명 노출제거, 알림 중복렌더 수정, 추세 nowrap, 포트폴리오 폼 안전장치, 약어/상태 툴팁, 종목상세 empty state + 팩터 중립폴백 구분 — Claude Code.*
 - *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*
 - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
+- *v3.8 (2026-06-20) Wave 4-D-1: 기존 `analyst` 컨센서스 경로를 확장해 `rating_label/rating_score/eps_fwd/source`를 저장하고, `analyst_views`에 출처 URL이 있는 bull/bear 논거를 추가. 06시 파이프라인에 논거 추출 단계와 export `consensus`/`analystViews` 계약을 편입 — Codex.*
 - *v2.3 (2026-06-16) Gemini "분석 실패" 진단·수정 PR-0~2: 근본원인=Gemini 키 일일쿼터 소진(429)+구버전 폴백행 잔존+파이프라인 정체+폴백 무기록+.env 미로딩. 수정=`_ensure_env`(.env 로드), `_call_gemini_with_backoff`(429/503 지수백오프 3회), 폴백 `based_on='fallback_old'` 표식+runs.errors 기록, `reenrich_stale_fallbacks`(run_pipeline Step 7a'), export 실제요약 우선+규칙기반 한 줄(`is_fallback_summary`). "분석 실패" UI 노출 0. 단위테스트 +11(272 passed) — Claude Code.*
 - *v3.0 (2026-06-17) Gemini 재활성+중요뉴스 큐레이션 PR-1~3: 크레딧 충전 실호출 검증(enrich/CoT 실제경로), GEMINI_SYNTH_MODEL 3.5-flash→2.5-flash 정리(워크플로 동기화). 2단계 큐레이션(STEP A 스코어링=Flash-Lite·impact/category/direction, 임계값≥60 통과분만 STEP B 인사이트=2.5-Flash), news_analysis.curated 저장·증분·캡. export curatedNews/curatedFeed, React 종목상세 중요뉴스 카드+뉴스탭 중요도순. 라이브 검증(네이버/알파벳), 21종목·feed 60건, 단위테스트 +8(321 passed). §5.1 news_analysis.curated 추가 — Claude Code.*
 - *v2.9 (2026-06-17) 포트폴리오 전략조언(단계분리 CoT) PR-1~3: src/portfolio_advice.py — 당시 관찰형 정책 주입, CoT 4단계(구성/리스크/국면/종합) 코드 분리·단계간 전달, response_mime_type=json+pydantic 검증, 키없음/STEP1실패 시 전체 규칙기반 단락, cache_key 증분캐시. portfolio_advice 테이블, local_api POST/GET /api/portfolio/advice, export portfolioAdvice, React 포트폴리오 탭 전략조언 카드. 단위테스트 +13(313 passed) — §5.1 portfolio_advice 추가 — Claude Code.*
