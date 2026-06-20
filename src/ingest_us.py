@@ -25,12 +25,14 @@ from tenacity import (
     wait_exponential,
 )
 
+from src.external_timeout import run_with_timeout
 from src.schemas import AnalystRow, FundamentalsRow, PriceDailyRow, ValuationRow
 
 logger = logging.getLogger(__name__)
 
 # ── 상수 ─────────────────────────────────────────────────────────
 PRICE_PERIOD: str = "2y"  # SMA200 계산에 최소 200봉 필요
+YFINANCE_TIMEOUT_SECONDS: float = 20.0
 
 # yfinance financials index 후보
 _YF_REVENUE_LABELS: list[str] = ["Total Revenue", "Operating Revenue"]
@@ -86,7 +88,7 @@ def _find_yf_value(df: pd.DataFrame, candidates: list[str], col) -> Optional[flo
     reraise=True,
 )
 def _yf_history(ticker: str, period: str) -> pd.DataFrame:
-    return yf.Ticker(ticker).history(period=period)
+    return run_with_timeout(YFINANCE_TIMEOUT_SECONDS, lambda: yf.Ticker(ticker).history(period=period))
 
 
 def fetch_us_prices(
@@ -132,8 +134,10 @@ def fetch_us_prices(
     reraise=True,
 )
 def _yf_financials(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    stock = yf.Ticker(ticker)
-    return stock.financials, stock.quarterly_financials
+    def _load():
+        stock = yf.Ticker(ticker)
+        return stock.financials, stock.quarterly_financials
+    return run_with_timeout(YFINANCE_TIMEOUT_SECONDS, _load)
 
 
 @retry(
@@ -144,8 +148,10 @@ def _yf_financials(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 )
 def _yf_cashflow(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """PR-2: 연간·분기 현금흐름표."""
-    stock = yf.Ticker(ticker)
-    return stock.cashflow, stock.quarterly_cashflow
+    def _load():
+        stock = yf.Ticker(ticker)
+        return stock.cashflow, stock.quarterly_cashflow
+    return run_with_timeout(YFINANCE_TIMEOUT_SECONDS, _load)
 
 
 def _cashflow_for(cf_df: Optional[pd.DataFrame], period_end: date) -> tuple[Optional[float], Optional[float]]:
@@ -232,7 +238,7 @@ def fetch_us_fundamentals(ticker: str) -> list[FundamentalsRow]:
     reraise=True,
 )
 def _yf_info(ticker: str) -> dict:
-    return yf.Ticker(ticker).info
+    return run_with_timeout(YFINANCE_TIMEOUT_SECONDS, lambda: yf.Ticker(ticker).info)
 
 
 def fetch_us_valuation(ticker: str, asof: Optional[date] = None) -> Optional[ValuationRow]:

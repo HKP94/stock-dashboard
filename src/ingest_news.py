@@ -35,6 +35,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from src.external_timeout import run_with_timeout
 from src.schemas import NewsRawRow
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ GOOGLE_NEWS_RSS_BASE: str = "https://news.google.com/rss/search"
 MAX_PAGES: int = 2       # PR-2: 네이버 스크래핑 페이지 수 (1→2, 더 자세히)
 MAX_ITEMS: int = 40      # PR-2: 종목당 최대 수집 건수 (20/30→40, 소스별 합산)
 GOOGLE_MAX_ITEMS: int = 25  # PR-2: Google News RSS 소스당 최대 건수
+YFINANCE_TIMEOUT_SECONDS: float = 20.0
 
 _SCRAPE_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -420,7 +422,7 @@ def fetch_market_news(max_items: int = GOOGLE_MAX_ITEMS) -> dict[str, list[NewsR
     reraise=True,
 )
 def _yf_news(ticker: str) -> list:
-    return yf.Ticker(ticker).news or []
+    return run_with_timeout(YFINANCE_TIMEOUT_SECONDS, lambda: yf.Ticker(ticker).news or [])
 
 
 def fetch_yahoo_news(

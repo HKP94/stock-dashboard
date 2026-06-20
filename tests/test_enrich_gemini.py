@@ -8,6 +8,7 @@ _call_gemini를 unittest.mock으로 대체해 pydantic 검증 로직·재시도 
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,6 +21,7 @@ from src.enrich_gemini import (
     _build_region_market_prompt,
     _build_market_news_digest_prompt,
     _build_news_prompt,
+    _get_gemini_client,
     _call_gemini_for_market,
     _call_gemini_for_news,
     _call_gemini_with_backoff,
@@ -28,6 +30,7 @@ from src.enrich_gemini import (
     _parse_market_news_digest_output,
     _parse_market_output,
     _parse_news_output,
+    _within_budget,
     is_fallback_summary,
 )
 
@@ -221,6 +224,26 @@ class TestTransientBackoff:
             with pytest.raises(Exception):
                 _call_gemini_with_backoff(MagicMock(), "m", "p")
             assert mock_call.call_count == TRANSIENT_RETRIES
+
+
+class TestGeminiClientTimeout:
+    def test_client_uses_http_timeout_option(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        with patch("google.genai.Client") as mock_client:
+            _get_gemini_client()
+            kwargs = mock_client.call_args.kwargs
+            assert kwargs["api_key"] == "test-key"
+            assert kwargs["http_options"].timeout is not None
+            assert kwargs["http_options"].timeout > 0
+
+
+class TestBudgetGuard:
+    def test_within_budget_true_for_fresh_start(self):
+        assert _within_budget(time.monotonic(), budget_seconds=1.0) is True
+
+    def test_within_budget_false_after_elapsed(self):
+        started_at = time.monotonic() - 2.0
+        assert _within_budget(started_at, budget_seconds=1.0) is False
 
 
 # ──────────────────────────────────────────────────────────────

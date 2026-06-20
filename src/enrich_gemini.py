@@ -58,6 +58,8 @@ GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-2.5-flash"
 MAX_NEWS_PER_TICKER: int = 15
 BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
+GEMINI_HTTP_TIMEOUT_MS: int = int(os.environ.get("GEMINI_HTTP_TIMEOUT_MS", "45000"))
+GEMINI_BATCH_BUDGET_SECONDS: float = float(os.environ.get("GEMINI_BATCH_BUDGET_SECONDS", "1800"))
 
 # PR-1(진단): 네트워크/일시오류(429·503·타임아웃) 지수 백오프 재시도. 파싱/스키마 실패와 구분.
 TRANSIENT_RETRIES: int = 3        # _call_gemini 일시오류 재시도 횟수 (CLAUDE.md §3)
@@ -121,7 +123,11 @@ def _get_synth_model() -> str:
 def _get_gemini_client():
     """google-genai 클라이언트 반환. 키는 환경변수에서만."""
     from google import genai  # 지연 임포트 (테스트 환경 미설치 대응)
-    return genai.Client(api_key=_get_api_key())
+    from google.genai import types
+    return genai.Client(
+        api_key=_get_api_key(),
+        http_options=types.HttpOptions(timeout=GEMINI_HTTP_TIMEOUT_MS),
+    )
 
 
 def _call_gemini(client, model: str, prompt: str) -> str:
@@ -163,6 +169,10 @@ def _call_gemini_with_backoff(client, model: str, prompt: str) -> str:
             time.sleep(wait)
     assert last is not None
     raise last
+
+
+def _within_budget(started_at: float, budget_seconds: float = GEMINI_BATCH_BUDGET_SECONDS) -> bool:
+    return (time.monotonic() - started_at) < budget_seconds
 
 
 # ──────────────────────────────────────────────────────────────
@@ -741,11 +751,24 @@ def enrich_news_batch(
     model = _get_bulk_model()
     errors: list[dict] = []
     enriched = 0
+    started_at = time.monotonic()
 
     tickers = _tickers_needing_enrichment(conn, asof)
-    logger.info("뉴스 요약 대상: %d개 종목 (asof=%s)", len(tickers), asof)
+    logger.info(
+        "뉴스 요약 대상: %d개 종목 (asof=%s, 최대 Gemini 호출 상한≈%d, 시간 예산=%.0fs)",
+        len(tickers), asof, len(tickers) * 3, GEMINI_BATCH_BUDGET_SECONDS,
+    )
 
     for ticker in tickers:
+        if not _within_budget(started_at):
+            logger.warning("뉴스 요약 예산 초과로 중단: enriched=%d attempted<=%d budget=%.0fs", enriched, len(tickers), GEMINI_BATCH_BUDGET_SECONDS)
+            errors.append({
+                "ticker": ticker,
+                "step": "enrich_news_budget",
+                "error": f"Gemini 뉴스 요약 시간 예산 초과({GEMINI_BATCH_BUDGET_SECONDS:.0f}s) — 나머지 종목은 다음 실행으로 이월",
+                "ts": datetime.utcnow().isoformat(),
+            })
+            break
         try:
             news_items = _get_ticker_news(conn, ticker, asof)
             if not news_items:
@@ -863,11 +886,17 @@ def reenrich_stale_fallbacks(
     model = _get_bulk_model()
     errors: list[dict] = []
     fixed = 0
+    started_at = time.monotonic()
 
     tickers = _tickers_with_stale_fallback(conn)
     logger.info("폴백 재시도 대상: %d개 종목", len(tickers))
 
     for ticker in tickers:
+        if not _within_budget(started_at):
+            errors.append({"ticker": ticker, "step": "reenrich_budget",
+                           "error": f"Gemini 재요약 시간 예산 초과({GEMINI_BATCH_BUDGET_SECONDS:.0f}s)",
+                           "ts": datetime.utcnow().isoformat()})
+            break
         try:
             news_items = _get_recent_ticker_news(conn, ticker)
             if not news_items:

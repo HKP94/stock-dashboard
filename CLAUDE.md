@@ -93,6 +93,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **거시 백본(W4-B)**: `macro_indicators`는 지표별 시계열, `macro_summary`는 일일 양면 해석(우호/부담/체크포인트) 전용이다. 시장전망 탭의 "거시 환경" 카드는 이 두 테이블만 읽고, 종목 export처럼 지표별 최신 행을 개별 선택한다(글로벌 max(asof) 금지).
 - **거시 시크릿 규칙(W4-B)**: FRED/ECOS 키는 요청에만 사용한다. DB 컬럼·저장 URL·로그 메시지·예외 문자열에 키가 남으면 버그다. HTTP 오류는 원본 URL을 그대로 올리지 말고 마스킹/일반화한다.
 - **종목 드라이버(W4-C)**: `ticker_drivers`는 `(ticker, driver_code)` 단위로 저장하며 `origin='user'`가 항상 우선이다. 자동 추정 결과는 user 행을 덮어쓰지 못하고, stale auto만 교체한다. 가격은 `macro_indicators`/`index_daily` 재사용을 우선하고, 전용 프록시만 `driver_prices`에 적재한다.
+- **종목 드라이버 운용(W4-C 후속)**: 자동 매핑은 활성 유니버스 전체(현재 39종목)를 대상으로 돌리고, `driver_prices` 전용 프록시는 5년 깊이로 유지한다. Gemini가 놓치면 종목명·섹터·원자재/공급망 연관(리튬·메모리·유가·구리 등) 휴리스틱으로 보강하되 `origin='user'`는 절대 덮어쓰지 않는다.
 - **드라이버 해석 톤(W4-C)**: 종목상세 "핵심 동인" 카드는 support/oppose 관찰 문장만 보여준다. 자동 추정은 반드시 "추정" 뱃지와 rationale을 같이 노출하고, 매매 단정 문구를 만들지 않는다.
 - **누적 인사이트 영속화(W2-C)**: Gemini 종목 뉴스 요약은 `ticker_context`에도 `context_type='news_summary'`로 저장한다. 종목상세 "누적 인사이트"는 최근 30일만 보여주고, `valid_until < today` 항목은 삭제하지 말고 조회에서만 제외한다.
 - **신선도 라벨(W2-D)**: export는 `generatedAt`와 시장별 최신 거래일로 `refreshContext`를 계산한다. 헤더/시장전망 탭은 반드시 "미국 종가 기준 (06시 갱신)" 또는 "한국 종가 기준 (18시 갱신)"을 표시하고, 18시 갱신본에서는 KR 가격·뉴스만 최신이며 US 가격은 전날 종가임을 명시한다.
@@ -164,6 +165,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - 입력 뉴스는 dedupe + 상위 N건 + 본문 길이 캡. 새 뉴스 없으면 호출 스킵(전일 재사용).
 - 항상 `response_mime_type="application/json"` + 스키마 강제. 파싱 실패 핸들링 필수.
 - **키 쿼터(429)가 진짜 병목**: Gemini 키는 일일 쿼터 한계가 있어, 일일 파이프라인(38종목+시황)이 쿼터를 초과하면 **`429 RESOURCE_EXHAUSTED`로 종목별 폴백이 무더기 발생**(과거 "분석 실패" 광범위 노출의 근본원인). 따라서 ① **ad-hoc enrich/진단 호출로 쿼터를 태우지 말 것**(파이프라인이 유일 소비자가 이상적), ② 일시오류는 `_call_gemini_with_backoff`(429/503/타임아웃 **지수 백오프 3회**, 파싱 재시도와 분리)로 흡수, ③ 그래도 실패하면 **폴백을 `based_on='fallback_old'`로 표식**한다.
+- **무인 CI 시간 상한 필수**: 외부 호출(Gemini·yfinance·FRED·ECOS·RSS/HTML 스크래핑)은 모두 명시적 timeout이 있어야 하며, 배치형 Gemini 단계는 총 시간 예산을 넘기면 남은 종목을 폴백/다음 실행으로 이월한다. GitHub Actions 워크플로 자체에도 `timeout-minutes`를 둬 사람이 강제종료하지 않아도 종료되게 유지한다.
 - **폴백은 절대 UI에 노출 금지**: 폴백 판정은 단일 출처 `is_fallback_summary(summary_md, based_on)`("분석 실패"/"일시 보류" 마커 + `fallback_old`). export(`export_dashboard_data`)는 **실제 요약을 폴백보다 우선**(낡은 실제 > 새 실패)하고, 실제가 없으면 **규칙기반 한 줄 인사이트(수치+해석)**로 채운다 — 사용자 화면에 "분석 실패" 문자열이 나오면 버그.
 - **폴백 가시성·자가치유**: 폴백 발생 시 `runs.errors`에 사유 기록(과거엔 조용히 묻혀 추적 불가했음). 최신 분석이 폴백인 종목은 `reenrich_stale_fallbacks`(run_pipeline Step 7a')가 최근 뉴스로 재요약해 복구한다.
 - **로컬 키 로딩**: `GEMINI_API_KEY`는 `.env`에 있고, `enrich_gemini._ensure_env()`가 `load_dotenv()`로 로드한다(src 어디에도 load_dotenv가 없어 로컬 enrich가 키 UNSET으로 통째 죽던 문제 수정). DB_*는 `.streamlit/secrets.toml`.
