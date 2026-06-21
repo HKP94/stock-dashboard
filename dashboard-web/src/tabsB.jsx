@@ -14,6 +14,7 @@ import {
   extractBullets,
   filterStocks,
   hasAnalystCoverage,
+  sortStocksByLabel,
 } from './display.js';
 
 const API = "http://127.0.0.1:8765";
@@ -23,6 +24,19 @@ const gradeCol = (v) => v >= 80 ? C.ok : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C
 const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
 const num = (v, digits = 2) => (v == null ? "—" : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits }));
 const deltaLabel = (v, digits = 2) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(digits)}`);
+const filterSelectStyle = {
+  flex: 1,
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
+  border: `1px solid ${C.line2}`,
+  borderRadius: 7,
+  padding: "8px 10px",
+  fontSize: 12.5,
+  fontFamily: "var(--sans)",
+  background: C.surface,
+  color: C.ink,
+};
 
 function GradeChip({ value }) {
   const col = gradeCol(value);
@@ -797,7 +811,7 @@ export function Research({ D, nav }) {
     [D.stocks],
   );
   const sorted = useMemo(
-    () => [...D.stocks].sort((a, b) => (Number(b.comp ?? -Infinity) - Number(a.comp ?? -Infinity)) || String(a.name).localeCompare(String(b.name), "ko")),
+    () => sortStocksByLabel(D.stocks),
     [D.stocks],
   );
   const filteredStocks = useMemo(
@@ -867,13 +881,13 @@ export function Research({ D, nav }) {
               style={{ width: "100%", border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, color: C.ink, outline: "none", boxSizing: "border-box" }} />
             <div style={{ display: "flex", gap: 8 }}>
               <select value={marketFilter} onChange={(event) => setMarketFilter(event.target.value)}
-                style={{ flex: 1, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+                style={filterSelectStyle}>
                 <option value="all">전체 시장</option>
                 <option value="KR">한국</option>
                 <option value="US">미국</option>
               </select>
               <select value={sectorFilter} onChange={(event) => setSectorFilter(event.target.value)}
-                style={{ flex: 1, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
+                style={filterSelectStyle}>
                 <option value="all">전체 섹터</option>
                 {sectors.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
               </select>

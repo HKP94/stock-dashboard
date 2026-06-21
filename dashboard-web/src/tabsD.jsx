@@ -119,7 +119,7 @@ function StrategyExplorer({ title, badge, badgeColor, badgeBg, strategies, warni
               <button key={s.name} onClick={() => setSelectedName(s.name)}
                 style={{
                   borderRadius: 999, border: `1px solid ${selected?.name === s.name ? C.acc : C.line2}`,
-                  background: selected?.name === s.name ? C.accBg : C.bg,
+                  background: selected?.name === s.name ? C.accBg : C.surface,
                   color: selected?.name === s.name ? C.acc : C.ink2, padding: "6px 10px", fontSize: 12, fontWeight: 700,
                 }}>
                 {s.label}
@@ -130,9 +130,9 @@ function StrategyExplorer({ title, badge, badgeColor, badgeBg, strategies, warni
             {HORIZONS.filter((h) => selected?.horizons?.[h]).map((h) => (
               <button key={h} onClick={() => setSelectedHorizon(h)}
                 style={{
-                  borderRadius: 8, border: `1px solid ${selectedHorizon === h ? C.ink : C.line2}`,
-                  background: selectedHorizon === h ? C.ink : C.bg,
-                  color: selectedHorizon === h ? C.bg : C.ink2, padding: "6px 10px", fontSize: 12, fontWeight: 700,
+                  borderRadius: 8, border: `1px solid ${selectedHorizon === h ? C.acc : C.line2}`,
+                  background: selectedHorizon === h ? C.accBg : C.surface,
+                  color: selectedHorizon === h ? C.acc : C.ink2, padding: "6px 10px", fontSize: 12, fontWeight: 700,
                 }}>
                 {HORIZON_LABEL[h]}
               </button>

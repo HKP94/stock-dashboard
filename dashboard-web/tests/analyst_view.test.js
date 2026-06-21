@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   analystConsensusGap,
@@ -53,4 +54,21 @@ test('detects whether a stock has any analyst coverage to show', () => {
     analystViews: { bull: [], bear: [] },
     insightHistory: [],
   }), false);
+});
+
+
+test('research stock chooser keeps a shared select style and sorted stock labels', () => {
+  const source = readFileSync(new URL('../src/tabsB.jsx', import.meta.url), 'utf8');
+  assert.match(source, /const filterSelectStyle = \{/);
+  assert.match(source, /minWidth: 0/);
+  assert.match(source, /sortStocksByLabel\(D\.stocks\)/);
+  assert.ok((source.match(/style=\{filterSelectStyle\}/g) || []).length >= 2);
+});
+
+
+test('strategy horizon buttons avoid undefined dark active text colors', () => {
+  const source = readFileSync(new URL('../src/tabsD.jsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /C\.bg/);
+  assert.match(source, /background: selectedHorizon === h \? C\.accBg : C\.surface/);
+  assert.match(source, /color: selectedHorizon === h \? C\.acc : C\.ink2/);
 });

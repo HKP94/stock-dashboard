@@ -10,6 +10,7 @@ import {
   isCompleteSignal,
   portfolioAssetTotal,
   regimeLabel,
+  sortStocksByLabel,
   sortStocksBySentiment,
 } from '../src/display.js';
 
@@ -44,6 +45,17 @@ test('sorts ticker sentiment descending with a deterministic name tie-break', ()
     { name: 'C', sscore: 50 },
   ]);
   assert.deepEqual(out.map((stock) => stock.name), ['A', 'B', 'C']);
+});
+
+
+test('sorts stock labels by Korean name with ticker tie-break', () => {
+  const out = sortStocksByLabel([
+    { t: '005930.KS', name: '나' },
+    { t: '000660.KS', name: '가' },
+    { t: 'AAPL', name: '나' },
+    { t: 'MSFT', name: null },
+  ]);
+  assert.deepEqual(out.map((stock) => stock.t), ['000660.KS', '005930.KS', 'AAPL', 'MSFT']);
 });
 
 
