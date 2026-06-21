@@ -746,6 +746,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [x] **CI hang 가드** (2026-06-20): 무인 06시/18시 워크플로는 외부 호출 timeout과 workflow `timeout-minutes`를 함께 둔다. Gemini 단계는 단건 HTTP timeout + 재시도 상한 + 배치 총 시간 예산을 넘기면 폴백/이월로 종료하며, 한 종목·한 소스 지연이 전체 잡을 붙잡지 못하게 한다.
 - [x] **Wave 4-D-1 애널리스트 컨센서스·논거 백엔드** (2026-06-20): 기존 `analyst` 저장 경로를 확장해 `rating_label/rating_score/eps_fwd/source`를 정규화 저장하고, `analyst_views`에 출처 URL이 있는 bull/bear 논거를 분리 저장한다. 06시 전체 파이프라인 Step 7에 논거 추출을 편입하고 export는 종목별 최신 `consensus`와 `analystViews(bull/bear)`를 함께 내보낸다.
 - [x] **Wave 4-D-2 애널리스트 뷰 탭 재편** (2026-06-21): 리서치 탭을 "애널리스트 뷰"로 재정의해 종목 검색/시장·섹터 필터, 최신 컨센서스 요약(목표가·괴리율·의견·EPS), bull/bear 논거의 균형 배치, 목표가 시계열 미니차트, `ticker_context` 누적 인사이트 재사용을 한 화면에 통합한다. export는 종목별 최신 `consensus`와 함께 `consensusHistory`를 추가하되 조회는 모두 종목별 최신/최근 순으로 수행한다(글로벌 max(asof) 금지).
+- [x] **Wave 4-D-2 UI 핫픽스** (2026-06-21): 애널리스트 뷰 종목 선택 목록을 한글 이름/티커 기준 고정 정렬로 바꾸고, 시장/섹터 select를 동일한 폭·정렬 규칙으로 통일했다. 전략 비교 탭의 1년/3년/5년 active 버튼은 공용 강조 톤(`accBg`/`acc`)으로 맞춰 검은 배경 가독성 문제를 제거했다.
 - [x] **Wave 4-D-3 자유 텍스트 수동 입력 → AI 분해** (2026-06-21): 종목 단위 수동 입력은 `manual_research_entries` 부모 + `manual_research_horizons/points/consensus` 자식 구조로 누적 저장하고, 시장 단위 수동 입력은 `market_view_manual(scope='market')`에 저장한다. raw_text는 DB에 원문 보존·UI 기본 숨김·로그 길이/해시만 기록을 원칙으로 하며, raw_text 재분해는 `is_user_confirmed=false` 행만 교체하고 사용자 확정 자식은 보호한다. export는 `manualResearchLatest/manualResearchHistory/aiDecompositionSummary`와 `market.manualViewLatest/manualViewHistory`를 추가하고, 리서치/종목상세/시장전망 탭은 "내 판단·AI 분해·자동 수집" 3출처를 나란히 보여 주되 합산 점수는 만들지 않는다.
 - [x] **Wave 5-A 종목 액션 제언** (2026-06-21): `stock_action_advice` 일 단위 시계열과 결정론 액션 엔진을 추가해 방향·현재 비중·목표 비중 레인지·진입/이탈 구간·지지/반대 재료·divergence를 저장한다. 상위 모델은 숫자를 바꾸지 않는 서술만 맡고, 06시 파이프라인은 보유종목 우선/이벤트 종목 차순/예산 초과 이월 규칙으로 종합을 수행한다. export는 `actionAdviceLatest/actionAdviceHistory`, 종목상세는 "액션 제언" 카드와 과거 이력 토글을 제공한다.
 - [x] **Wave 4-B 매크로 분석** (2026-06-19): `macro_indicators`/`macro_summary`를 추가해 미국(FRED) 기준금리·10년물·CPI·실업률, 한국(ECOS) 기준금리·CPI, 글로벌(yfinance) VIX·DXY·USDKRW·WTI를 정기 수집·요약한다. FRED/ECOS 키는 요청에만 사용하고 DB·로그·저장 URL에 남기지 않도록 회귀 테스트와 에러 마스킹을 추가했다. 시장전망 탭은 "거시 환경" 카드에서 최신 값·전일/전월 대비·미니 추세와 우호/부담 양면 해석을 함께 보여준다.
@@ -781,6 +782,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 ---
 *변경 이력:*
 - *v4.9 (2026-06-21) Wave 5-A: `stock_action_advice` 일 단위 이력, 결정론 비중/구간 엔진, 상위모델 서술 가드, 보유 우선 예산 기반 06시 파이프라인, export `actionAdviceLatest/actionAdviceHistory`, 종목상세 액션 제언 카드를 추가 — Codex.*
+- *v4.10 (2026-06-21) UI hotfix: 애널리스트 뷰 종목 선택을 한글 이름/티커 기준 정렬로 고정하고, 시장/섹터 select 폭·정렬을 통일했다. 전략 비교 탭의 1년/3년/5년 active 버튼 대비를 `accBg`/`acc` 톤으로 수정해 가독성 문제를 제거 — Codex.*
 - *v4.4 (2026-06-19) Wave 4-C: `ticker_drivers`/`driver_prices` 스키마, Gemini 기반 드라이버 자동 추정과 사용자 우선 CRUD, 공용 거시 재사용·전용 프록시 적재, 종목상세 "핵심 동인" 카드, `ingest_macro`의 `.env` 자동 로드를 추가 — Codex.*
 - *v4.5 (2026-06-20) Wave 4-C follow-up: 활성 유니버스 전체 자동 매핑, 5년 driver proxy 백필 기준, 원자재/공급망 연관 추론 강화, LCD proxy-none 처리 원칙을 문서화 — Codex.*
 - *v4.6 (2026-06-20) CI hang guard: Gemini HTTP timeout·배치 시간 예산·workflow timeout-minutes·yfinance hard timeout을 추가해 무인 파이프라인의 장시간 매달림을 차단 — Codex.*

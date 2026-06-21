@@ -17,6 +17,14 @@ export function sortStocksBySentiment(stocks) {
   });
 }
 
+export function sortStocksByLabel(stocks) {
+  const collator = new Intl.Collator('ko', { sensitivity: 'base', numeric: true });
+  return [...stocks].sort((a, b) => {
+    const nameDiff = collator.compare(String(a.name ?? a.s?.name ?? a.t ?? ''), String(b.name ?? b.s?.name ?? b.t ?? ''));
+    return nameDiff || collator.compare(String(a.t ?? ''), String(b.t ?? ''));
+  });
+}
+
 export function filterStocks(stocks, { query = '', market = 'all', sector = 'all' } = {}) {
   const needle = query.trim().toLocaleLowerCase();
   return stocks.filter((stock) => {
