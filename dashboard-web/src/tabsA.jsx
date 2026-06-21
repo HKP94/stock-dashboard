@@ -1167,6 +1167,106 @@ function PerspectiveComparisonCard({ s, manualEntry }) {
   );
 }
 
+function ActionAdviceCard({ advice, history = [] }) {
+  const [showHistory, setShowHistory] = useState(false);
+  const tone = advice?.direction === "매수" || advice?.direction === "비중확대"
+    ? C.ok
+    : advice?.direction === "비중축소" || advice?.direction === "매도"
+      ? C.bad
+      : C.warn;
+
+  return (
+    <Panel
+      title="액션 제언"
+      sub="근거 기반 제안 · 표시 전용"
+      right={<button onClick={() => setShowHistory((v) => !v)} style={{ ...btnGhost, fontSize: 11.5 }}>{showHistory ? "이력 접기 −" : "과거 제언 +"}</button>}
+    >
+      {!advice ? (
+        <div style={{ padding: "24px 18px", fontSize: 12.5, color: C.ink3 }}>최신 액션 제언이 없습니다.</div>
+      ) : (
+        <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12.5, fontWeight: 800, color: tone, background: tone + "14", border: `1px solid ${tone}33`, borderRadius: 999, padding: "5px 10px" }}>{advice.direction}</span>
+            <span style={{ fontSize: 11.5, color: C.ink2 }}>신뢰도 {advice.confidence}</span>
+            <span className="mono" style={{ fontSize: 10.5, color: C.ink3 }}>{advice.asof}</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>현재 비중</MonoCaps>
+              <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800, color: C.ink }}>{advice.currentWeight != null ? `${advice.currentWeight}%` : "0%"}</div>
+            </div>
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>목표 비중</MonoCaps>
+              <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800, color: C.ink }}>
+                {advice.targetWeightLow != null && advice.targetWeightHigh != null ? `${advice.targetWeightLow}~${advice.targetWeightHigh}%` : "—"}
+              </div>
+            </div>
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>조정 방향</MonoCaps>
+              <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800, color: C.ink }}>{advice.weightAction || "—"}</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>진입 구간</MonoCaps>
+              <div style={{ marginTop: 6, fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>{advice.entryZone || "근거 부족으로 미제시"}</div>
+            </div>
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>이탈 구간</MonoCaps>
+              <div style={{ marginTop: 6, fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>{advice.exitZone || "근거 부족으로 미제시"}</div>
+            </div>
+          </div>
+          <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.65 }}>{cleanDisplayText(advice.rationale || "")}</div>
+          {!!advice.divergenceNote && (
+            <div style={{ border: `1px solid ${C.warn}33`, background: C.warnBg, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: C.warn, lineHeight: 1.55 }}>
+              {cleanDisplayText(advice.divergenceNote)}
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ border: `1px solid ${C.ok}22`, borderRadius: 8, background: C.ok + "0E", padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>지지 재료</MonoCaps>
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                {(advice.supportingFactors || []).length ? advice.supportingFactors.map((item, idx) => (
+                  <div key={`support-${idx}`} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>
+                    <b style={{ color: C.ink }}>{item.source}</b> · {cleanDisplayText(item.value || "")}
+                  </div>
+                )) : <div style={{ fontSize: 12, color: C.ink3 }}>지지 재료 없음</div>}
+              </div>
+            </div>
+            <div style={{ border: `1px solid ${C.bad}22`, borderRadius: 8, background: C.bad + "0E", padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.bad}>반대 재료</MonoCaps>
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                {(advice.opposingFactors || []).length ? advice.opposingFactors.map((item, idx) => (
+                  <div key={`oppose-${idx}`} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>
+                    <b style={{ color: C.ink }}>{item.source}</b> · {cleanDisplayText(item.value || "")}
+                  </div>
+                )) : <div style={{ fontSize: 12, color: C.ink3 }}>반대 재료 없음</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHistory && (
+        <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {(history || []).length ? history.map((item, idx) => (
+            <div key={`${item.asof}-${idx}`} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink }}>{item.direction}</span>
+                <span style={{ fontSize: 11, color: C.ink2 }}>{item.currentWeight != null ? `${item.currentWeight}% → ${item.targetWeightLow}~${item.targetWeightHigh}%` : `${item.targetWeightLow}~${item.targetWeightHigh}%`}</span>
+                <span style={{ fontSize: 11, color: C.ink2 }}>신뢰도 {item.confidence}</span>
+                <span className="mono" style={{ marginLeft: "auto", fontSize: 10, color: C.ink3 }}>{item.asof}</span>
+              </div>
+            </div>
+          )) : (
+            <div style={{ fontSize: 12, color: C.ink3 }}>과거 제언 이력이 없습니다.</div>
+          )}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 export function InsightHistoryCard({ items }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const types = useMemo(() => {
@@ -1577,6 +1677,8 @@ export function StockDetail({ D, ticker, nav }) {
       <AxesCard s={s} />
 
       <PerspectiveComparisonCard s={s} manualEntry={manualEntry} />
+
+      <ActionAdviceCard advice={s.actionAdviceLatest} history={s.actionAdviceHistory || []} />
 
       {/* PR-2: 재무 추이 (매출·영업이익·순이익·OCF·FCF + 추세 + 컨센서스) */}
       <FinancialsCard s={s} />
