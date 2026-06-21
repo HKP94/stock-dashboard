@@ -52,6 +52,17 @@ export function hasAnalystCoverage(stock) {
   return (stock?.insightHistory || []).length > 0;
 }
 
+export function buildAiDecompositionBadges(summary) {
+  if (!summary?.labels) return [];
+  return [
+    ['short', '단기'],
+    ['mid', '중기'],
+    ['long', '장기'],
+  ]
+    .filter(([key]) => summary.labels[key])
+    .map(([key, label]) => `${label} · ${summary.labels[key]}`);
+}
+
 export function cleanDisplayText(text) {
   if (text == null) return '';
   return String(text)

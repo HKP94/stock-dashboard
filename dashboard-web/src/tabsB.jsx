@@ -9,11 +9,14 @@ import { InsightHistoryCard, Panel } from './tabsA.jsx';
 import {
   analystConsensusGap,
   analystViewCounts,
+  buildAiDecompositionBadges,
   cleanDisplayText,
   extractBullets,
   filterStocks,
   hasAnalystCoverage,
 } from './display.js';
+
+const API = "http://127.0.0.1:8765";
 
 const grade = (v) => v >= 88 ? "A+" : v >= 80 ? "A" : v >= 72 ? "B+" : v >= 64 ? "B" : v >= 56 ? "C+" : v >= 48 ? "C" : "D";
 const gradeCol = (v) => v >= 80 ? C.ok : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C.bad;
@@ -554,11 +557,90 @@ function AnalystPointsCard({ title, tone, points, emptyText }) {
   );
 }
 
+function buildAiSummaryFromEntry(entry) {
+  if (!entry) return null;
+  return {
+    labels: Object.fromEntries((entry.horizons || []).map((item) => [item.horizon, item.attractivenessLabel])),
+    bullCount: (entry.bull || []).length,
+    bearCount: (entry.bear || []).length,
+  };
+}
+
+function ManualAiDecompositionCard({ entry, summary, emptyText = "직접 입력한 분석 없음" }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const badges = buildAiDecompositionBadges(summary);
+  if (!entry) {
+    return (
+      <Panel title="AI 분해 분석" sub="외부 자료 구조화">
+        <div style={{ padding: "24px 18px", fontSize: 12.5, color: C.ink3 }}>{emptyText}</div>
+      </Panel>
+    );
+  }
+  return (
+    <Panel title="AI 분해 분석" sub="최신 직접 입력 1건">
+      <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: C.acc, background: C.accTint, border: `1px solid ${C.acc}33`, borderRadius: 999, padding: "4px 9px" }}>직접입력</span>
+          {(badges.length ? badges : ["단·중·장 분석 대기"]).map((badge) => (
+            <span key={badge} style={{ fontSize: 11, fontWeight: 700, color: C.ink2, background: C.surface2, border: `1px solid ${C.line2}`, borderRadius: 999, padding: "4px 9px" }}>{badge}</span>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+          {(entry.horizons || []).map((item) => (
+            <div key={item.horizon} style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", background: C.surface2 }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{item.horizon === "short" ? "단기" : item.horizon === "mid" ? "중기" : "장기"}</MonoCaps>
+              <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800, color: C.ink }}>{item.attractivenessLabel}</div>
+              <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.6, color: C.ink2 }}>{cleanDisplayText(item.rationale)}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", background: C.surface2 }}>
+            <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>강세 논거</MonoCaps>
+            <div style={{ marginTop: 6, fontSize: 12, color: C.ink }}>{(entry.bull || []).length ? `${entry.bull.length}건` : "수집된 강세 논거 없음"}</div>
+          </div>
+          <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", background: C.surface2 }}>
+            <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>약세 논거</MonoCaps>
+            <div style={{ marginTop: 6, fontSize: 12, color: C.ink }}>{(entry.bear || []).length ? `${entry.bear.length}건` : "수집된 약세 논거 없음"}</div>
+          </div>
+        </div>
+        {entry.consensus && (
+          <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", background: C.surface2 }}>
+            <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>원문에서 추출한 컨센서스</MonoCaps>
+            <div style={{ marginTop: 6, fontSize: 12.5, color: C.ink }}>
+              {entry.consensus.targetPrice != null ? `목표가 ${entry.consensus.targetPrice.toLocaleString("ko-KR")}` : "목표가 미추출"}
+              {" · "}
+              {entry.consensus.ratingLabel || "의견 미추출"}
+            </div>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button onClick={() => setShowRaw((v) => !v)} style={{ ...btnGhost, fontSize: 11.5 }}>
+            {showRaw ? "원문 숨기기" : "원문 보기"}
+          </button>
+          <span style={{ fontSize: 11, color: C.ink3 }}>{entry.createdAt ? `입력 시각 ${entry.createdAt}` : "입력 시각 미상"}</span>
+        </div>
+        {showRaw && (
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.6, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px" }}>
+            {entry.rawText}
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 export function Research({ D, nav }) {
   const [ticker, setTicker] = useState(D.stocks[0]?.t);
   const [stockQuery, setStockQuery] = useState("");
   const [marketFilter, setMarketFilter] = useState("all");
   const [sectorFilter, setSectorFilter] = useState("all");
+  const [manualText, setManualText] = useState("");
+  const [manualSource, setManualSource] = useState("");
+  const [manualSourceUrl, setManualSourceUrl] = useState("");
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualError, setManualError] = useState("");
+  const [showManualHistory, setShowManualHistory] = useState(false);
 
   const sectors = useMemo(
     () => [...new Set(D.stocks.map((stock) => stock.sec).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko")),
@@ -580,6 +662,34 @@ export function Research({ D, nav }) {
 
   const s = D.stocks.find((x) => x.t === ticker) || filteredStocks[0] || D.stocks[0];
   const counts = analystViewCounts(s?.analystViews);
+  const manualLatest = s?.manualResearchLatest || null;
+  const manualHistory = s?.manualResearchHistory || [];
+
+  const submitManualResearch = async () => {
+    if (!manualText.trim() || !s?.t) return;
+    setManualSaving(true);
+    setManualError("");
+    try {
+      const response = await fetch(`${API}/api/manual-research`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: s.t,
+          raw_text: manualText,
+          source: manualSource || null,
+          source_url: manualSourceUrl || null,
+        }),
+      });
+      if (!response.ok) throw new Error("manual research submit failed");
+      setManualText("");
+      setManualSource("");
+      setManualSourceUrl("");
+    } catch (_) {
+      setManualError("직접 입력 분석 저장에 실패했습니다. 로컬 API 상태를 확인해 주세요.");
+    } finally {
+      setManualSaving(false);
+    }
+  };
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, alignItems: "start" }}>
@@ -649,6 +759,37 @@ export function Research({ D, nav }) {
             </button>
           </div>
         </Panel>
+
+        <Panel title="직접 분석 입력" sub="외부 자료 자유 텍스트">
+          <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <textarea
+              value={manualText}
+              onChange={(event) => setManualText(event.target.value)}
+              placeholder="애널리스트 보고서·유튜브 요약·시장 코멘트를 붙여넣으세요."
+              style={{ width: "100%", minHeight: 160, border: `1px solid ${C.line2}`, borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: C.ink, resize: "vertical", boxSizing: "border-box", outline: "none" }}
+            />
+            <input
+              value={manualSource}
+              onChange={(event) => setManualSource(event.target.value)}
+              placeholder="출처 메모 (증권사명·유튜버명 등)"
+              style={{ width: "100%", border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, color: C.ink, boxSizing: "border-box", outline: "none" }}
+            />
+            <input
+              value={manualSourceUrl}
+              onChange={(event) => setManualSourceUrl(event.target.value)}
+              placeholder="출처 URL (선택)"
+              style={{ width: "100%", border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, color: C.ink, boxSizing: "border-box", outline: "none" }}
+            />
+            <button
+              onClick={submitManualResearch}
+              disabled={manualSaving || !manualText.trim()}
+              style={{ border: "none", borderRadius: 8, padding: "10px 12px", background: C.ink, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: manualSaving || !manualText.trim() ? 0.45 : 1 }}
+            >
+              {manualSaving ? "분석 중…" : "분석"}
+            </button>
+            {manualError && <div style={{ fontSize: 11.5, color: C.bad }}>{manualError}</div>}
+          </div>
+        </Panel>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -672,6 +813,37 @@ export function Research({ D, nav }) {
         </div>
 
         <ConsensusSummaryCard stock={s} />
+
+        <ManualAiDecompositionCard
+          entry={manualLatest}
+          summary={s?.aiDecompositionSummary}
+        />
+
+        <Panel
+          title="과거 입력 보기"
+          sub={`${manualHistory.length}건`}
+          right={<button onClick={() => setShowManualHistory((v) => !v)} style={{ ...btnGhost, fontSize: 11.5 }}>{showManualHistory ? "접기 −" : "펼치기 +"}</button>}
+        >
+          {!showManualHistory ? (
+            <div style={{ padding: "18px 16px", fontSize: 12, color: C.ink3 }}>
+              {manualHistory.length ? "최신 입력만 보이는 상태입니다. 펼치면 이전 입력 이력을 확인할 수 있습니다." : "직접 입력한 분석 이력이 없습니다."}
+            </div>
+          ) : (
+            <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {manualHistory.map((entry) => (
+                <div key={entry.id} style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", background: C.surface2 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.acc, background: C.accTint, border: `1px solid ${C.acc}33`, borderRadius: 999, padding: "4px 8px" }}>entry #{entry.id}</span>
+                    <span style={{ fontSize: 11, color: C.ink3 }}>{entry.createdAt}</span>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
+                    {buildAiDecompositionBadges(_buildAiSummaryFromEntry(entry)).join(" · ") || "분해 결과 없음"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
 
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.05fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
           <ConsensusTrendCard history={s?.consensusHistory || []} currency={s?.cur} />
