@@ -170,7 +170,7 @@ flowchart TD
 
 `src/export_dashboard_data.py`는 DB를 읽어 기존 JSON 계약으로 직렬화하고 `data.json`을 쓰는 표시 경계다. 외부 수집, LLM 호출, DB 쓰기를 하지 않는다. 종목별 최신 조회만 사용하고 글로벌 `max(asof)`를 새로 도입하지 않는다.
 
-현재 export에는 표시 신호, 오늘의 요약 밴드, 시장 진입 환경, 전략 가이드 같은 **순수 표시 파생값** 계산이 있다. 이를 모두 DB에 미리 저장하려면 새 테이블/컬럼과 계약 변경이 필요해 행위 보존 범위를 벗어난다. 따라서 이번 리팩터링에서 “계산 안 함”은 **원천/도메인 재계산과 DB 쓰기 없음**으로 한정하고, 기존 순수 표시 파생과 포맷팅은 그대로 둔다. 이를 완전히 영속 계산으로 옮기는 작업은 별도 Wave와 PRD 변경이 있어야 한다.
+현재 export에는 표시 신호, 오늘의 요약 밴드, 시장 진입 환경, 전략 가이드 같은 **순수 표시 파생값** 계산이 있다. 이를 모두 DB에 미리 저장하려면 새 테이블/컬럼과 계약 변경이 필요해 행위 보존 범위를 벗어난다. 따라서 이번 리팩터링에서 “계산 안 함”은 **원천/도메인 재계산과 DB 쓰기 없음**으로 한정하고, 기존 순수 표시 파생과 포맷팅은 그대로 둔다. 새 도메인 계산을 export에 추가하지 않는다. 이를 완전히 영속 계산으로 옮기는 작업은 별도 Wave와 PRD 변경이 있어야 한다.
 
 액션 제언의 `export_dashboard_data.build_data()` 역의존은 단계적으로 제거한다. 액션 제언이 실제로 소비하는 종목·포트폴리오·국면 입력을 `stock_action_advice`의 읽기 함수로 옮기고, 고정 fixture에서 기존 `build_data()` 기반 입력과 완전 동일함을 먼저 검증한다. 그 전까지는 역의존을 유지해 결과 변화보다 이동 속도를 우선하지 않는다.
 
@@ -239,7 +239,8 @@ GitHub Actions는 네 명령을 한 step에 묶지 않고 step별로 둔다. 어
 
 ### 비교 기준 고정
 
-- 기준 커밋: 리팩터링 시작 시의 `main` SHA를 기록한다.
+- 기준 커밋: `6bcb8f230692990ec284ebc7c9e13ccac87a8797` (`docs: design pipeline separation refactor`)
+- 구현 시작 기준 테스트 수: Python `431`, Node `18`
 - 외부 API와 LLM은 전후 비교에서 호출하지 않는다. 반환값과 현재 시간을 고정 fixture/monkeypatch로 통제한다.
 - 동일 seed DB를 두 개의 격리된 스키마 또는 임시 DB에 복제해 legacy와 신규 경로를 각각 실행한다. 운영 DB에서 비교 실행하지 않는다.
 
@@ -294,7 +295,7 @@ npm --prefix dashboard-web run build
    현재 Step 7과 액션 제언을 `pipeline_synthesis.py`로 이동한다. `daily`/`refresh` 차이를 고정하고 LLM은 모두 mock으로 검증한다. 액션 숫자 불변·예산 이월 `runs.errors` 기록을 비교한다.
 
 5. **액션 제언의 표시 모듈 역의존 제거**
-   기존 `build_data()` 기반 입력과 완전히 같은 최소 입력 읽기 함수를 `stock_action_advice`에 둔다. 골든 fixture가 먼저 실패하는 것을 확인한 뒤 import만 교체한다. JSON/DB 결과가 다르면 이 단계는 롤백한다.
+   기존 `build_data()` 기반 입력과 완전히 같은 최소 입력 읽기 함수를 `stock_action_advice`에 둔다. 골든 fixture가 먼저 실패하는 것을 확인한 뒤 import만 교체한다. `build_data()` 입력과 새 읽기 함수 입력이 fixture에서 조금이라도 다르면 이 단계는 보류하고, 역의존을 유지한 채 6~8단계를 진행한다. 이 단계는 독립 커밋으로 남겨 단독 revert가 가능해야 한다.
 
 6. **호환 래퍼 전환**
    `run_pipeline.py`는 새 세 실행기를 기존 `daily` 순서로 호출하고 마지막에 `assemble_daily()`를 실행한다. 기존 import 경로와 반환형을 유지한다. `news_refresh.py`도 새 `refresh` 실행기를 호출하는 얇은 호환 래퍼로 남긴다.
