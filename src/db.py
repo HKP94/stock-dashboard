@@ -48,6 +48,7 @@ from src.schemas import (
     PriceDailyRow,
     QuantScoresRow,
     RunRow,
+    StockActionAdviceRow,
     TickerContextRow,
     TickerDriverRow,
     ValuationRow,
@@ -411,6 +412,52 @@ def insert_market_view_manual(conn: psycopg.Connection, row: MarketViewManualRow
     row_id = int(created["id"])
     logger.debug("insert_market_view_manual: id=%d asof=%s", row_id, row.asof)
     return row_id
+
+
+def upsert_stock_action_advice(conn: psycopg.Connection, row: StockActionAdviceRow) -> None:
+    sql = """
+        INSERT INTO stock_action_advice
+            (ticker, asof, direction, current_weight, target_weight_low, target_weight_high,
+             weight_action, entry_zone, exit_zone, confidence, rationale,
+             supporting_factors, opposing_factors, divergence_note, model)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
+        ON CONFLICT (ticker, asof) DO UPDATE SET
+            direction = EXCLUDED.direction,
+            current_weight = EXCLUDED.current_weight,
+            target_weight_low = EXCLUDED.target_weight_low,
+            target_weight_high = EXCLUDED.target_weight_high,
+            weight_action = EXCLUDED.weight_action,
+            entry_zone = EXCLUDED.entry_zone,
+            exit_zone = EXCLUDED.exit_zone,
+            confidence = EXCLUDED.confidence,
+            rationale = EXCLUDED.rationale,
+            supporting_factors = EXCLUDED.supporting_factors,
+            opposing_factors = EXCLUDED.opposing_factors,
+            divergence_note = EXCLUDED.divergence_note,
+            model = EXCLUDED.model
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            sql,
+            (
+                row.ticker,
+                row.asof,
+                row.direction,
+                row.current_weight,
+                row.target_weight_low,
+                row.target_weight_high,
+                row.weight_action,
+                row.entry_zone,
+                row.exit_zone,
+                row.confidence,
+                row.rationale,
+                json.dumps(row.supporting_factors, ensure_ascii=False),
+                json.dumps(row.opposing_factors, ensure_ascii=False),
+                row.divergence_note,
+                row.model,
+            ),
+        )
+    logger.debug("upsert_stock_action_advice: ticker=%s asof=%s", row.ticker, row.asof)
 
 
 def insert_news_raw(conn: psycopg.Connection, rows: list[NewsRawRow]) -> int:

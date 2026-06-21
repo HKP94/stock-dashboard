@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import time
 from datetime import date, datetime
 from typing import Optional
@@ -51,6 +52,7 @@ from src.schemas import (
     ManualResearchOutput,
     NewsAnalysisRow,
     NewsSummaryOutput,
+    StockActionAdviceNarrativeOutput,
     TickerContextRow,
 )
 
@@ -66,6 +68,7 @@ BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
 GEMINI_HTTP_TIMEOUT_MS: int = int(os.environ.get("GEMINI_HTTP_TIMEOUT_MS", "45000"))
 GEMINI_BATCH_BUDGET_SECONDS: float = float(os.environ.get("GEMINI_BATCH_BUDGET_SECONDS", "1800"))
+ACTION_ADVICE_LLM_TIMEOUT_SECONDS: int = int(os.environ.get("ACTION_ADVICE_LLM_TIMEOUT_SECONDS", "20"))
 
 # PR-1(진단): 네트워크/일시오류(429·503·타임아웃) 지수 백오프 재시도. 파싱/스키마 실패와 구분.
 TRANSIENT_RETRIES: int = 3        # _call_gemini 일시오류 재시도 횟수 (CLAUDE.md §3)
@@ -278,6 +281,11 @@ def _parse_market_manual_output(text: str) -> MarketManualOutput:
     return MarketManualOutput.model_validate(data)
 
 
+def _parse_stock_action_advice_output(text: str) -> StockActionAdviceNarrativeOutput:
+    data = json.loads(text)
+    return StockActionAdviceNarrativeOutput.model_validate(data)
+
+
 # ──────────────────────────────────────────────────────────────
 # Gemini 호출 + 검증 + 재시도
 # ──────────────────────────────────────────────────────────────
@@ -325,6 +333,31 @@ def _call_gemini_for_market(
             else:
                 logger.error("시황 종합 2회 실패 — 스킵: %s", exc)
     return None
+
+
+def summarize_stock_action_advice(context: dict) -> StockActionAdviceNarrativeOutput | None:
+    previous = None
+    try:
+        def _handle_timeout(_signum, _frame):
+            raise TimeoutError("action advice llm hard timeout")
+
+        previous = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.alarm(ACTION_ADVICE_LLM_TIMEOUT_SECONDS)
+        client = _get_gemini_client()
+        text = _call_gemini_with_backoff(client, _get_manual_research_model(), _build_stock_action_advice_prompt(context))
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+        return _parse_stock_action_advice_output(text)
+    except Exception as exc:
+        try:
+            signal.alarm(0)
+            if previous is not None:
+                signal.signal(signal.SIGALRM, previous)
+        except Exception:
+            pass
+        logger.warning("%s action advice narrative fallback: %s", context.get("ticker", "unknown"), str(exc)[:120])
+        return None
 
 
 def _call_gemini_for_analyst_views(
@@ -494,6 +527,26 @@ def _build_market_manual_prompt(
         "{\"bullScenario\": \"...\", \"bearScenario\": \"...\"}\n\n"
         f"{source_line}\n{url_line}\n{asof_line}\n\n"
         f"[원문]\n{raw_text}"
+    )
+
+
+def _build_stock_action_advice_prompt(context: dict) -> str:
+    return (
+        "너는 종목 액션 제언의 해설을 담당하는 시니어 전략가다.\n"
+        "중요 규칙:\n"
+        "- 새로운 숫자나 가격대를 만들지 마라.\n"
+        "- 비중 low/high, 현재 비중, 진입/이탈 구간 숫자는 입력으로 받은 값만 사용하라.\n"
+        "- 입력에 없는 숫자를 추가하거나 수정하지 마라.\n"
+        "- 재료가 갈리면 갈리는 그대로 설명하라.\n"
+        "- 자동 주문/즉시 집행처럼 들리는 표현은 금지한다.\n\n"
+        "출력은 순수 JSON만 허용:\n"
+        "{"
+        "\"rationale\":\"왜 이런 방향과 레인지인지 설명\","
+        "\"divergenceNote\":\"재료 충돌 설명 또는 null\","
+        "\"supportingFactors\":[{\"source\":\"재료명\",\"value\":\"지지 이유\"}],"
+        "\"opposingFactors\":[{\"source\":\"재료명\",\"value\":\"반대 이유\"}]"
+        "}\n\n"
+        f"[입력 컨텍스트]\n{json.dumps(context, ensure_ascii=False)}"
     )
 
 

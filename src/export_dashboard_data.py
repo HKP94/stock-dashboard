@@ -888,6 +888,35 @@ def _build_ai_decomposition_summary(entry: dict | None) -> dict | None:
     }
 
 
+def _group_action_advice_rows(rows: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    ordered = sorted(
+        rows,
+        key=lambda row: (row["ticker"], str(row["asof"]), row.get("created_at") or ""),
+        reverse=True,
+    )
+    for row in ordered:
+        grouped.setdefault(row["ticker"], []).append({
+            "ticker": row["ticker"],
+            "asof": str(row["asof"]),
+            "direction": row["direction"],
+            "currentWeight": _f(row["current_weight"]),
+            "targetWeightLow": _f(row["target_weight_low"]),
+            "targetWeightHigh": _f(row["target_weight_high"]),
+            "weightAction": row["weight_action"],
+            "entryZone": row["entry_zone"],
+            "exitZone": row["exit_zone"],
+            "confidence": row["confidence"],
+            "rationale": row["rationale"],
+            "supportingFactors": row["supporting_factors"] or [],
+            "opposingFactors": row["opposing_factors"] or [],
+            "divergenceNote": row["divergence_note"],
+            "model": row["model"],
+            "createdAt": str(row["created_at"]) if row.get("created_at") is not None else None,
+        })
+    return grouped
+
+
 def _group_manual_research_rows(
     entry_rows: list[dict],
     horizon_rows: list[dict],
@@ -1037,6 +1066,34 @@ def _load_market_manual_views(conn, *, limit: int = 5) -> list[dict]:
         "createdAt": str(row["created_at"]),
         "updatedAt": str(row["updated_at"]),
     } for row in cur.fetchall()]
+
+
+def _load_action_advice_history(conn, tickers: list[str], *, limit_per_ticker: int = 5) -> dict[str, list[dict]]:
+    if not tickers:
+        return {}
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT ticker, asof, direction, current_weight, target_weight_low, target_weight_high,
+               weight_action, entry_zone, exit_zone, confidence, rationale,
+               supporting_factors, opposing_factors, divergence_note, model, created_at
+        FROM (
+            SELECT ticker, asof, direction, current_weight, target_weight_low, target_weight_high,
+                   weight_action, entry_zone, exit_zone, confidence, rationale,
+                   supporting_factors, opposing_factors, divergence_note, model, created_at,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY ticker
+                     ORDER BY asof DESC, created_at DESC
+                   ) AS rn
+            FROM stock_action_advice
+            WHERE ticker = ANY(%s)
+        ) t
+        WHERE rn <= %s
+        ORDER BY ticker, asof DESC, created_at DESC
+        """,
+        (tickers, limit_per_ticker),
+    )
+    return _group_action_advice_rows([dict(row) for row in cur.fetchall()])
 
 
 def _load_analyst_consensus_history(conn, tickers: list[str], *, limit_per_ticker: int = 12) -> dict[str, list[dict]]:
@@ -1567,6 +1624,7 @@ def build_data() -> dict:
         analyst_views_map = _load_analyst_views(conn, tickers)
         analyst_consensus_history_map = _load_analyst_consensus_history(conn, tickers)
         manual_research_history_map = _load_manual_research_history(conn, tickers)
+        action_advice_history_map = _load_action_advice_history(conn, tickers)
         market_manual_views = _load_market_manual_views(conn)
 
         # PR-4(이번): stock_notes
@@ -1747,6 +1805,8 @@ def build_data() -> dict:
                 "manualResearchLatest": (manual_research_history_map.get(tk) or [None])[0],
                 "manualResearchHistory": manual_research_history_map.get(tk, []),
                 "aiDecompositionSummary": _build_ai_decomposition_summary((manual_research_history_map.get(tk) or [None])[0]),
+                "actionAdviceLatest": (action_advice_history_map.get(tk) or [None])[0],
+                "actionAdviceHistory": action_advice_history_map.get(tk, []),
                 "sent":   n_sent,
                 "sscore": round(n_score * 100) if n_score else 50,
                 "sum":    sum_bullets,
