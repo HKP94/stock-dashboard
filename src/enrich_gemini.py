@@ -51,6 +51,7 @@ from src.schemas import (
     ManualResearchOutput,
     NewsAnalysisRow,
     NewsSummaryOutput,
+    StockActionAdviceNarrativeOutput,
     TickerContextRow,
 )
 
@@ -494,6 +495,26 @@ def _build_market_manual_prompt(
         "{\"bullScenario\": \"...\", \"bearScenario\": \"...\"}\n\n"
         f"{source_line}\n{url_line}\n{asof_line}\n\n"
         f"[원문]\n{raw_text}"
+    )
+
+
+def _build_stock_action_advice_prompt(context: dict) -> str:
+    return (
+        "너는 종목 액션 제언의 해설을 담당하는 시니어 전략가다.\n"
+        "중요 규칙:\n"
+        "- 새로운 숫자나 가격대를 만들지 마라.\n"
+        "- 비중 low/high, 현재 비중, 진입/이탈 구간 숫자는 입력으로 받은 값만 사용하라.\n"
+        "- 입력에 없는 숫자를 추가하거나 수정하지 마라.\n"
+        "- 재료가 갈리면 갈리는 그대로 설명하라.\n"
+        "- 자동 주문/즉시 집행처럼 들리는 표현은 금지한다.\n\n"
+        "출력은 순수 JSON만 허용:\n"
+        "{"
+        "\"rationale\":\"왜 이런 방향과 레인지인지 설명\","
+        "\"divergenceNote\":\"재료 충돌 설명 또는 null\","
+        "\"supportingFactors\":[{\"source\":\"재료명\",\"value\":\"지지 이유\"}],"
+        "\"opposingFactors\":[{\"source\":\"재료명\",\"value\":\"반대 이유\"}]"
+        "}\n\n"
+        f"[입력 컨텍스트]\n{json.dumps(context, ensure_ascii=False)}"
     )
 
 

@@ -489,6 +489,13 @@ class MarketManualOutput(BaseModel):
     bearScenario: str = Field(min_length=1)
 
 
+class StockActionAdviceNarrativeOutput(BaseModel):
+    rationale: str = Field(min_length=1)
+    divergenceNote: Optional[str] = None
+    supportingFactors: list[dict[str, Any]] = Field(default_factory=list)
+    opposingFactors: list[dict[str, Any]] = Field(default_factory=list)
+
+
 # ──────────────────────────────────────────────────────────────
 # §5.3-B LLM 출력 — 일일 시황 종합 (Gemini, 1회/일)
 # ──────────────────────────────────────────────────────────────
