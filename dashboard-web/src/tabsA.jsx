@@ -1041,6 +1041,132 @@ function AxesCard({ s }) {
   );
 }
 
+function ManualAiPerspectiveCard({ entry }) {
+  const [showRaw, setShowRaw] = useState(false);
+  if (!entry) {
+    return (
+      <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "12px 14px", fontSize: 12.5, color: C.ink3 }}>
+        직접 입력한 외부 자료 분석 없음
+      </div>
+    );
+  }
+  return (
+    <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "12px 14px" }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.acc, background: C.accTint, border: `1px solid ${C.acc}33`, borderRadius: 999, padding: "3px 8px" }}>직접입력</span>
+        {(entry.horizons || []).map((item) => (
+          <span key={item.horizon} style={{ fontSize: 10.5, color: C.ink2, background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 999, padding: "3px 8px" }}>
+            {item.horizon === "short" ? "단기" : item.horizon === "mid" ? "중기" : "장기"} · {item.attractivenessLabel}
+          </span>
+        ))}
+      </div>
+      <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <div style={{ border: `1px solid ${C.ok}22`, borderRadius: 7, padding: "9px 10px", background: C.ok + "0E", fontSize: 12, color: C.ink2 }}>
+          강세 {(entry.bull || []).length}건
+        </div>
+        <div style={{ border: `1px solid ${C.bad}22`, borderRadius: 7, padding: "9px 10px", background: C.bad + "0E", fontSize: 12, color: C.ink2 }}>
+          약세 {(entry.bear || []).length}건
+        </div>
+      </div>
+      {(entry.horizons || []).length > 0 && (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          {entry.horizons.map((item) => (
+            <div key={item.horizon} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>
+              <b style={{ color: C.ink }}>{item.horizon === "short" ? "단기" : item.horizon === "mid" ? "중기" : "장기"}</b> · {cleanDisplayText(item.rationale)}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: 10 }}>
+        <button onClick={() => setShowRaw((v) => !v)} style={{ ...btnGhost, fontSize: 11.5 }}>
+          {showRaw ? "원문 숨기기" : "원문 보기"}
+        </button>
+      </div>
+      {showRaw && (
+        <div style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.6, color: C.ink2, background: C.surface, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px" }}>
+          {entry.rawText}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AutoCollectionPerspectiveCard({ s }) {
+  const bull = s.analystViews?.bull || [];
+  const bear = s.analystViews?.bear || [];
+  const insights = s.insightHistory || [];
+  return (
+    <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "12px 14px" }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.ok, background: C.okBg, border: `1px solid ${C.ok}33`, borderRadius: 999, padding: "3px 8px" }}>자동수집</span>
+        <span style={{ fontSize: 10.5, color: C.ink2 }}>강세 {bull.length} · 약세 {bear.length}</span>
+        {s.consensus?.ratingLabel && <span style={{ fontSize: 10.5, color: C.ink2 }}>의견 {s.consensus.ratingLabel}</span>}
+      </div>
+      <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+        {bull.slice(0, 2).map((item, idx) => (
+          <div key={`bull-${idx}`} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>
+            <b style={{ color: C.ok }}>강세</b> · {cleanDisplayText(item.point)}
+          </div>
+        ))}
+        {bear.slice(0, 2).map((item, idx) => (
+          <div key={`bear-${idx}`} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>
+            <b style={{ color: C.bad }}>약세</b> · {cleanDisplayText(item.point)}
+          </div>
+        ))}
+        {insights.slice(0, 2).map((item) => (
+          <div key={item.id} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>
+            <b style={{ color: C.ink }}>인사이트</b> · {cleanDisplayText(item.content)}
+          </div>
+        ))}
+        {bull.length === 0 && bear.length === 0 && insights.length === 0 && (
+          <div style={{ fontSize: 12.5, color: C.ink3 }}>자동 수집 근거 없음</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PerspectiveComparisonCard({ s, manualEntry }) {
+  return (
+    <Panel title="세 출처 비교" sub="합산하지 않음 · 관점의 일치와 괴리를 직접 읽기">
+      <div style={{ padding: "14px 16px", display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+        <div>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink }}>내 판단</div>
+            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>나 · 직접 입력</MonoCaps>
+          </div>
+          <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "12px 14px", minHeight: 140 }}>
+            {s.note?.thesis ? (
+              <>
+                <div style={{ fontSize: 11.5, color: C.ink3 }}>
+                  {s.note.horizon ? HORIZON_LABEL[s.note.horizon] : "기간 미지정"} · {s.note.attractiveness != null ? `★ ${s.note.attractiveness}/5` : "별점 없음"}
+                </div>
+                <div style={{ marginTop: 8, whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.6, color: C.ink2 }}>{s.note.thesis}</div>
+              </>
+            ) : (
+              <div style={{ fontSize: 12.5, color: C.ink3 }}>직접 입력한 판단 없음</div>
+            )}
+          </div>
+        </div>
+        <div>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.acc }}>AI 분해 분석</div>
+            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>외부 자료 · 구조화</MonoCaps>
+          </div>
+          <ManualAiPerspectiveCard entry={manualEntry} />
+        </div>
+        <div>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ok }}>자동 수집 근거</div>
+            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>뉴스 · 컨센서스</MonoCaps>
+          </div>
+          <AutoCollectionPerspectiveCard s={s} />
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 export function InsightHistoryCard({ items }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const types = useMemo(() => {
@@ -1167,6 +1293,7 @@ export function StockDetail({ D, ticker, nav }) {
   const [stockQuery, setStockQuery] = useState("");
   const [marketFilter, setMarketFilter] = useState("all");
   const [sectorFilter, setSectorFilter] = useState("all");
+  const [manualEntry, setManualEntry] = useState(null);
   const sorted = useMemo(() => [...D.stocks].sort((a, b) => (b.comp ?? 0) - (a.comp ?? 0)), [D.stocks]);
   const s = D.stocks.find((x) => x.t === ticker) || D.stocks[0];
   const sectors = useMemo(
@@ -1200,6 +1327,19 @@ export function StockDetail({ D, ticker, nav }) {
   // PR-4: SMA 토글 상태
   const [smaViz, setSmaViz] = useState({ sma20: true, sma60: false, sma120: false });
   const toggleSma = (key) => setSmaViz((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  useEffect(() => {
+    let active = true;
+    setManualEntry(s.manualResearchLatest || null);
+    fetch(`${API}/api/manual-research/${s.t}`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (!active || !payload) return;
+        setManualEntry(payload.latest || null);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [s.t, s.manualResearchLatest]);
 
   const indicators = [
     { label: "RSI (14)", val: s.rsi?.toFixed(1) ?? "—", tone: s.rsi >= 70 ? "bad" : s.rsi <= 35 ? "acc" : "neutral", note: s.rsi >= 70 ? "과열" : s.rsi <= 35 ? "과매도" : "중립" },
@@ -1435,6 +1575,8 @@ export function StockDetail({ D, ticker, nav }) {
 
       {/* PR-1+3: 매력도 3축 카드 (퀀트·컨센서스·내 판단 나란히, 단일점수 금지) */}
       <AxesCard s={s} />
+
+      <PerspectiveComparisonCard s={s} manualEntry={manualEntry} />
 
       {/* PR-2: 재무 추이 (매출·영업이익·순이익·OCF·FCF + 추세 + 컨센서스) */}
       <FinancialsCard s={s} />
