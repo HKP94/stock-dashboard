@@ -438,6 +438,65 @@ def _build_analyst_views_prompt(
     )
 
 
+def _build_manual_research_prompt(
+    ticker: str,
+    company_name: str,
+    raw_text: str,
+    source: str | None = None,
+    source_url: str | None = None,
+) -> str:
+    source_line = f"- 사용자 메모 출처: {source}" if source else "- 사용자 메모 출처: 미입력"
+    url_line = f"- 사용자 URL: {source_url}" if source_url else "- 사용자 URL: 미입력"
+    return (
+        f"너는 외부 리서치 자료를 구조화하는 시니어 애널리스트 어시스턴트다. "
+        f"[{company_name}({ticker})] 관련 자유 텍스트를 읽고, 텍스트에 실제로 등장한 근거만 추출하라.\n\n"
+        "핵심 규칙:\n"
+        "- 원문에 없는 목표가·투자의견·논거를 만들지 마라.\n"
+        "- 강세와 약세가 함께 있으면 bull/bear로 분리하라.\n"
+        "- 단기(0~3개월), 중기(3~12개월), 장기(1년+)를 모두 채우되 숫자 점수는 금지하고 label+rationale만 출력하라.\n"
+        "- 매수/매도 지시 문장 금지. 관찰형 설명만 허용.\n"
+        "- sourceUrl이 원문에 없으면 null 허용.\n\n"
+        "label은 정확히 다음 중 하나만 사용: 매력적, 다소 매력적, 중립, 다소 비매력적, 비매력적\n\n"
+        "출력은 순수 JSON만 허용:\n"
+        "{"
+        "\"inferredSource\": \"추정 출처명 또는 null\","
+        "\"consensus\": {\"targetPrice\": 0, \"ratingLabel\": \"매수|중립|매도\", \"ratingScore\": 1|0|-1} 또는 null,"
+        "\"bullPoints\": [{\"point\": \"논거\", \"sourceLabel\": \"출처명\", \"sourceUrl\": \"https://... 또는 null\"}],"
+        "\"bearPoints\": [{\"point\": \"논거\", \"sourceLabel\": \"출처명\", \"sourceUrl\": \"https://... 또는 null\"}],"
+        "\"horizons\": ["
+        "{\"horizon\": \"short\", \"attractivenessLabel\": \"다소 매력적\", \"rationale\": \"근거\"},"
+        "{\"horizon\": \"mid\", \"attractivenessLabel\": \"중립\", \"rationale\": \"근거\"},"
+        "{\"horizon\": \"long\", \"attractivenessLabel\": \"비매력적\", \"rationale\": \"근거\"}"
+        "]"
+        "}\n\n"
+        f"{source_line}\n{url_line}\n\n"
+        f"[원문]\n{raw_text}"
+    )
+
+
+def _build_market_manual_prompt(
+    raw_text: str,
+    source: str | None = None,
+    source_url: str | None = None,
+    asof: str | None = None,
+) -> str:
+    source_line = f"- 사용자 메모 출처: {source}" if source else "- 사용자 메모 출처: 미입력"
+    url_line = f"- 사용자 URL: {source_url}" if source_url else "- 사용자 URL: 미입력"
+    asof_line = f"- 기준일: {asof}" if asof else "- 기준일: 미입력"
+    return (
+        "너는 시장 코멘트를 양면 시나리오로 정리하는 매크로 전략 보조자다.\n"
+        "아래 자유 텍스트를 읽고 강세 시나리오와 약세 시나리오를 각각 한 단락으로 정리하라.\n\n"
+        "규칙:\n"
+        "- 원문에 없는 낙관/비관 논거 창작 금지.\n"
+        "- 매매 지시 금지.\n"
+        "- 강세/약세를 모두 채우되, 원문 근거가 약하면 그렇게 명시하라.\n\n"
+        "출력은 순수 JSON만 허용:\n"
+        "{\"bullScenario\": \"...\", \"bearScenario\": \"...\"}\n\n"
+        f"{source_line}\n{url_line}\n{asof_line}\n\n"
+        f"[원문]\n{raw_text}"
+    )
+
+
 def _build_market_prompt(
     market_metrics: dict,
     sentiment_rollup: dict,

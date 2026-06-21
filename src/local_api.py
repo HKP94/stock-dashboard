@@ -24,7 +24,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -55,7 +55,24 @@ def _load_secrets() -> None:
 _load_secrets()
 from src.db import get_conn  # noqa: E402
 from src.compute_portfolio import compute_portfolio  # noqa: E402
+from src.db import insert_manual_research_entry, insert_market_view_manual, replace_manual_research_ai_rows  # noqa: E402
+from src.enrich_gemini import (  # noqa: E402
+    _build_manual_research_prompt,
+    _build_market_manual_prompt,
+    _call_gemini_with_backoff,
+    _get_gemini_client,
+    _get_manual_research_model,
+    _parse_manual_research_output,
+    _parse_market_manual_output,
+)
 from src.ingest_drivers import auto_map_ticker_drivers  # noqa: E402
+from src.schemas import (  # noqa: E402
+    ManualResearchConsensusRow,
+    ManualResearchEntryRow,
+    ManualResearchHorizonRow,
+    ManualResearchPointRow,
+    MarketViewManualRow,
+)
 
 # data.json 경로 (포트폴리오 갱신 시 부분 재생성)
 _DATA_JSON = Path(__file__).resolve().parent.parent / "dashboard-web" / "src" / "data.json"
@@ -176,6 +193,49 @@ class MarketManualPatch(BaseModel):
     def require_change(self) -> "MarketManualPatch":
         if not ({"raw_text", "source", "source_url", "bull_scenario", "bear_scenario"} & self.model_fields_set):
             raise ValueError("raw_text, source, source_url, bull_scenario, or bear_scenario is required")
+        return self
+
+
+class ManualResearchHorizonPatch(BaseModel):
+    attractiveness_label: Optional[str] = None
+    rationale: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "ManualResearchHorizonPatch":
+        if not ({"attractiveness_label", "rationale"} & self.model_fields_set):
+            raise ValueError("attractiveness_label or rationale is required")
+        return self
+
+
+class ManualResearchPointIn(BaseModel):
+    stance: str
+    point: str = Field(..., min_length=1)
+    source_label: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+class ManualResearchPointPatch(BaseModel):
+    stance: Optional[str] = None
+    point: Optional[str] = None
+    source_label: Optional[str] = None
+    source_url: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "ManualResearchPointPatch":
+        if not ({"stance", "point", "source_label", "source_url"} & self.model_fields_set):
+            raise ValueError("stance, point, source_label, or source_url is required")
+        return self
+
+
+class ManualResearchConsensusPatch(BaseModel):
+    target_price: Optional[float] = None
+    rating_label: Optional[str] = None
+    rating_score: Optional[float] = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "ManualResearchConsensusPatch":
+        if not ({"target_price", "rating_label", "rating_score"} & self.model_fields_set):
+            raise ValueError("target_price, rating_label, or rating_score is required")
         return self
 
 
@@ -336,6 +396,131 @@ def _raw_text_meta(text: str) -> dict[str, object]:
     }
 
 
+def _manual_research_summary(entry: dict | None) -> dict | None:
+    if not entry:
+        return None
+    labels = {item["horizon"]: item["attractivenessLabel"] for item in entry.get("horizons") or []}
+    return {
+        "entryId": entry["id"],
+        "labels": labels,
+        "bullCount": len(entry.get("bull") or []),
+        "bearCount": len(entry.get("bear") or []),
+    }
+
+
+def _fetch_watchlist_meta(ticker: str) -> tuple[str | None, str | None]:
+    with get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, market FROM watchlist WHERE ticker=%s", (ticker,))
+        row = cursor.fetchone()
+    if not row:
+        return None, None
+    return row["name"], row["market"]
+
+
+def _call_manual_research_decomposition(*, ticker: str, raw_text: str, source: str | None, source_url: str | None):
+    company_name, _market = _fetch_watchlist_meta(ticker)
+    if not company_name:
+        raise HTTPException(404, "ticker not found")
+    prompt = _build_manual_research_prompt(
+        ticker=ticker,
+        company_name=company_name,
+        raw_text=raw_text,
+        source=source,
+        source_url=source_url,
+    )
+    client = _get_gemini_client()
+    text = _call_gemini_with_backoff(client, _get_manual_research_model(), prompt)
+    return _parse_manual_research_output(text)
+
+
+def _call_market_manual_decomposition(*, raw_text: str, source: str | None, source_url: str | None, asof: str):
+    prompt = _build_market_manual_prompt(
+        raw_text=raw_text,
+        source=source,
+        source_url=source_url,
+        asof=asof,
+    )
+    client = _get_gemini_client()
+    text = _call_gemini_with_backoff(client, _get_manual_research_model(), prompt)
+    return _parse_market_manual_output(text)
+
+
+def _replace_manual_research_entry_ai(conn, entry_id: int, parsed) -> None:
+    horizons = [
+        ManualResearchHorizonRow(
+            entry_id=entry_id,
+            horizon=item.horizon,
+            attractiveness_label=item.attractivenessLabel,
+            rationale=item.rationale,
+            is_user_confirmed=False,
+        )
+        for item in parsed.horizons
+    ]
+    points = [
+        ManualResearchPointRow(
+            entry_id=entry_id,
+            stance="bull",
+            point=item.point,
+            source_label=item.sourceLabel,
+            source_url=item.sourceUrl,
+            is_user_confirmed=False,
+        )
+        for item in parsed.bull_points
+    ] + [
+        ManualResearchPointRow(
+            entry_id=entry_id,
+            stance="bear",
+            point=item.point,
+            source_label=item.sourceLabel,
+            source_url=item.sourceUrl,
+            is_user_confirmed=False,
+        )
+        for item in parsed.bear_points
+    ]
+    consensus = None
+    if parsed.consensus:
+        consensus = ManualResearchConsensusRow(
+            entry_id=entry_id,
+            target_price=parsed.consensus.targetPrice,
+            rating_label=parsed.consensus.ratingLabel,
+            rating_score=parsed.consensus.ratingScore,
+            is_user_confirmed=False,
+        )
+    replace_manual_research_ai_rows(conn, entry_id, horizons=horizons, points=points, consensus=consensus)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE manual_research_entries SET inferred_source=%s, updated_at=now() WHERE id=%s",
+        (parsed.inferredSource, entry_id),
+    )
+    conn.commit()
+
+
+def _fetch_manual_research_payload(ticker: str) -> dict:
+    from src.export_dashboard_data import _load_manual_research_history
+
+    with get_conn() as conn:
+        entries = _load_manual_research_history(conn, [ticker], limit_per_ticker=10).get(ticker, [])
+    latest = entries[0] if entries else None
+    return {
+        "ticker": ticker,
+        "latest": latest,
+        "history": entries,
+        "summary": _manual_research_summary(latest),
+    }
+
+
+def _fetch_market_manual_payload() -> dict:
+    from src.export_dashboard_data import _load_market_manual_views
+
+    with get_conn() as conn:
+        items = _load_market_manual_views(conn, limit=10)
+    return {
+        "latest": items[0] if items else None,
+        "history": items,
+    }
+
+
 def _patch_manual_research_entry(conn, entry_id: int, body: ManualResearchPatch) -> dict:
     fields = body.model_fields_set
     raw_text = body.raw_text.strip() if body.raw_text is not None else None
@@ -380,6 +565,194 @@ def _patch_manual_research_entry(conn, entry_id: int, body: ManualResearchPatch)
         "inferred_source": inferred_source,
         "needs_redecomposition": needs_redecomposition,
     }
+
+
+def _patch_manual_research_horizon(conn, entry_id: int, horizon: str, body: ManualResearchHorizonPatch) -> dict:
+    if horizon not in {"short", "mid", "long"}:
+        raise HTTPException(400, "horizon must be short|mid|long")
+    fields = body.model_fields_set
+    sets: list[str] = ["is_user_confirmed=TRUE", "updated_at=now()"]
+    params: list[object] = []
+    changed: dict[str, object] = {}
+    if "attractiveness_label" in fields:
+        sets.append("attractiveness_label=%s")
+        params.append(body.attractiveness_label)
+        changed["attractiveness_label"] = body.attractiveness_label
+    if "rationale" in fields:
+        rationale = (body.rationale or "").strip()
+        sets.append("rationale=%s")
+        params.append(rationale)
+        changed["rationale"] = rationale
+    params.extend([entry_id, horizon])
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"UPDATE manual_research_horizons SET {', '.join(sets)} WHERE entry_id=%s AND horizon=%s",
+            tuple(params),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "manual research horizon not found")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return changed
+
+
+def _patch_manual_research_point(conn, point_id: int, body: ManualResearchPointPatch) -> dict:
+    fields = body.model_fields_set
+    sets: list[str] = ["is_user_confirmed=TRUE", "updated_at=now()"]
+    params: list[object] = []
+    changed: dict[str, object] = {}
+    if "stance" in fields:
+        if body.stance not in {"bull", "bear"}:
+            raise HTTPException(400, "stance must be bull|bear")
+        sets.append("stance=%s")
+        params.append(body.stance)
+        changed["stance"] = body.stance
+    if "point" in fields:
+        point = (body.point or "").strip()
+        if not point:
+            raise HTTPException(400, "point required")
+        sets.append("point=%s")
+        params.append(point)
+        changed["point"] = point
+    if "source_label" in fields:
+        source_label = (body.source_label or "").strip() or None
+        sets.append("source_label=%s")
+        params.append(source_label)
+        changed["source_label"] = source_label
+    if "source_url" in fields:
+        source_url = (body.source_url or "").strip() or None
+        sets.append("source_url=%s")
+        params.append(source_url)
+        changed["source_url"] = source_url
+    params.append(point_id)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"UPDATE manual_research_points SET {', '.join(sets)} WHERE id=%s RETURNING entry_id",
+            tuple(params),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "manual research point not found")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    changed["entry_id"] = int(row["entry_id"])
+    return changed
+
+
+def _upsert_manual_research_consensus(conn, entry_id: int, body: ManualResearchConsensusPatch) -> dict:
+    fields = body.model_fields_set
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO manual_research_consensus (entry_id, target_price, rating_label, rating_score, is_user_confirmed, created_at, updated_at)
+            VALUES (%s,%s,%s,%s,TRUE,now(),now())
+            ON CONFLICT (entry_id) DO UPDATE SET
+                target_price = COALESCE(EXCLUDED.target_price, manual_research_consensus.target_price),
+                rating_label = COALESCE(EXCLUDED.rating_label, manual_research_consensus.rating_label),
+                rating_score = COALESCE(EXCLUDED.rating_score, manual_research_consensus.rating_score),
+                is_user_confirmed = TRUE,
+                updated_at = now()
+            """,
+            (
+                entry_id,
+                body.target_price if "target_price" in fields else None,
+                body.rating_label if "rating_label" in fields else None,
+                body.rating_score if "rating_score" in fields else None,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {
+        "target_price": body.target_price if "target_price" in fields else None,
+        "rating_label": body.rating_label if "rating_label" in fields else None,
+        "rating_score": body.rating_score if "rating_score" in fields else None,
+    }
+
+
+def _insert_manual_research_point(conn, entry_id: int, body: ManualResearchPointIn) -> int:
+    if body.stance not in {"bull", "bear"}:
+        raise HTTPException(400, "stance must be bull|bear")
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO manual_research_points
+                (entry_id, stance, point, source_label, source_url, is_user_confirmed, created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,TRUE,now(),now())
+            RETURNING id
+            """,
+            (
+                entry_id,
+                body.stance,
+                body.point.strip(),
+                (body.source_label or "").strip() or None,
+                (body.source_url or "").strip() or None,
+            ),
+        )
+        row_id = int(cursor.fetchone()["id"])
+        conn.commit()
+        return row_id
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _patch_market_manual_row(conn, row_id: int, body: MarketManualPatch) -> dict:
+    fields = body.model_fields_set
+    sets: list[str] = ["updated_at=now()"]
+    params: list[object] = []
+    changed: dict[str, object] = {}
+    if "raw_text" in fields:
+        raw_text = (body.raw_text or "").strip()
+        sets.append("raw_text=%s")
+        params.append(raw_text)
+        changed["raw_text"] = raw_text
+    if "source" in fields:
+        source = (body.source or "").strip() or None
+        sets.append("source=%s")
+        params.append(source)
+        changed["source"] = source
+    if "source_url" in fields:
+        source_url = (body.source_url or "").strip() or None
+        sets.append("source_url=%s")
+        params.append(source_url)
+        changed["source_url"] = source_url
+    if "bull_scenario" in fields:
+        bull_scenario = (body.bull_scenario or "").strip() or None
+        sets.append("bull_scenario=%s")
+        params.append(bull_scenario)
+        changed["bull_scenario"] = bull_scenario
+    if "bear_scenario" in fields:
+        bear_scenario = (body.bear_scenario or "").strip() or None
+        sets.append("bear_scenario=%s")
+        params.append(bear_scenario)
+        changed["bear_scenario"] = bear_scenario
+    params.append(row_id)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"UPDATE market_view_manual SET {', '.join(sets)} WHERE id=%s",
+            tuple(params),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "market manual not found")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    if "raw_text" in changed:
+        meta = _raw_text_meta(changed["raw_text"])
+        logger.info("market_manual raw_text updated id=%s len=%s sha=%s", row_id, meta["length"], meta["sha256_12"])
+    return changed
 
 
 def _fetch_driver_items(ticker: str) -> list[dict]:
@@ -746,6 +1119,241 @@ def auto_map_driver(ticker: str):
         conn.commit()
     _patch_data_json_drivers(ticker)
     return {"ok": True, "ticker": ticker, "count": len(mapped)}
+
+
+# ── 수동 AI 분해 엔드포인트 (Wave 4-D-3) ─────────────────────────
+
+@app.get("/api/manual-research/{ticker}")
+def get_manual_research(ticker: str):
+    return _fetch_manual_research_payload(ticker)
+
+
+@app.post("/api/manual-research", status_code=201)
+def add_manual_research(body: ManualResearchIn):
+    raw_text = body.raw_text.strip()
+    if not raw_text:
+        raise HTTPException(400, "raw_text required")
+    meta = _raw_text_meta(raw_text)
+    logger.info("manual_research submit ticker=%s len=%s sha=%s", body.ticker, meta["length"], meta["sha256_12"])
+    try:
+        parsed = _call_manual_research_decomposition(
+            ticker=body.ticker,
+            raw_text=raw_text,
+            source=(body.source or "").strip() or None,
+            source_url=(body.source_url or "").strip() or None,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("manual research decomposition failed ticker=%s: %s", body.ticker, str(exc)[:160])
+        raise HTTPException(502, "manual research decomposition failed")
+
+    with get_conn() as conn:
+        try:
+            entry_id = insert_manual_research_entry(
+                conn,
+                ManualResearchEntryRow(
+                    ticker=body.ticker,
+                    raw_text=raw_text,
+                    source=(body.source or "").strip() or None,
+                    source_url=(body.source_url or "").strip() or None,
+                    inferred_source=parsed.inferredSource,
+                ),
+            )
+            conn.commit()
+            _replace_manual_research_entry_ai(conn, entry_id, parsed)
+        except Exception:
+            conn.rollback()
+            raise
+
+    _regenerate_data_json()
+    payload = _fetch_manual_research_payload(body.ticker)
+    return {"ok": True, "entry_id": entry_id, **payload}
+
+
+@app.patch("/api/manual-research/{entry_id}", status_code=200)
+def patch_manual_research(entry_id: int, body: ManualResearchPatch):
+    with get_conn() as conn:
+        changed = _patch_manual_research_entry(conn, entry_id, body)
+        if changed["needs_redecomposition"] and changed["raw_text"] is not None:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ticker, raw_text, source, source_url FROM manual_research_entries WHERE id=%s", (entry_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "manual research entry not found")
+            try:
+                parsed = _call_manual_research_decomposition(
+                    ticker=row["ticker"],
+                    raw_text=row["raw_text"],
+                    source=row["source"],
+                    source_url=row["source_url"],
+                )
+                _replace_manual_research_entry_ai(conn, entry_id, parsed)
+            except Exception as exc:
+                logger.warning("manual research redecomposition failed entry_id=%s: %s", entry_id, str(exc)[:160])
+                raise HTTPException(502, "manual research redecomposition failed")
+            ticker = row["ticker"]
+        else:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ticker FROM manual_research_entries WHERE id=%s", (entry_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(404, "manual research entry not found")
+            ticker = row["ticker"]
+    _regenerate_data_json()
+    return {"ok": True, "entry_id": entry_id, "ticker": ticker, "changed": changed, **_fetch_manual_research_payload(ticker)}
+
+
+@app.delete("/api/manual-research/{entry_id}", status_code=200)
+def delete_manual_research(entry_id: int):
+    with get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM manual_research_entries WHERE id=%s RETURNING ticker", (entry_id,))
+        row = cursor.fetchone()
+        conn.commit()
+    if not row:
+        raise HTTPException(404, "manual research entry not found")
+    _regenerate_data_json()
+    return {"ok": True, "entry_id": entry_id, "ticker": row["ticker"], **_fetch_manual_research_payload(row["ticker"])}
+
+
+@app.patch("/api/manual-research/{entry_id}/horizons/{horizon}", status_code=200)
+def patch_manual_research_horizon(entry_id: int, horizon: str, body: ManualResearchHorizonPatch):
+    with get_conn() as conn:
+        changed = _patch_manual_research_horizon(conn, entry_id, horizon, body)
+        cursor = conn.cursor()
+        cursor.execute("SELECT ticker FROM manual_research_entries WHERE id=%s", (entry_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "manual research entry not found")
+        ticker = row["ticker"]
+    _regenerate_data_json()
+    return {"ok": True, "entry_id": entry_id, "horizon": horizon, "changed": changed, **_fetch_manual_research_payload(ticker)}
+
+
+@app.post("/api/manual-research/{entry_id}/points", status_code=201)
+def add_manual_research_point(entry_id: int, body: ManualResearchPointIn):
+    with get_conn() as conn:
+        point_id = _insert_manual_research_point(conn, entry_id, body)
+        cursor = conn.cursor()
+        cursor.execute("SELECT ticker FROM manual_research_entries WHERE id=%s", (entry_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "manual research entry not found")
+        ticker = row["ticker"]
+    _regenerate_data_json()
+    return {"ok": True, "entry_id": entry_id, "point_id": point_id, **_fetch_manual_research_payload(ticker)}
+
+
+@app.patch("/api/manual-research/points/{point_id}", status_code=200)
+def patch_manual_research_point(point_id: int, body: ManualResearchPointPatch):
+    with get_conn() as conn:
+        changed = _patch_manual_research_point(conn, point_id, body)
+        cursor = conn.cursor()
+        cursor.execute("SELECT ticker FROM manual_research_entries WHERE id=%s", (changed["entry_id"],))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "manual research entry not found")
+        ticker = row["ticker"]
+    _regenerate_data_json()
+    return {"ok": True, "point_id": point_id, "changed": changed, **_fetch_manual_research_payload(ticker)}
+
+
+@app.delete("/api/manual-research/points/{point_id}", status_code=200)
+def delete_manual_research_point(point_id: int):
+    with get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM manual_research_points
+            WHERE id=%s
+            RETURNING entry_id
+            """,
+            (point_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.rollback()
+            raise HTTPException(404, "manual research point not found")
+        cursor.execute("SELECT ticker FROM manual_research_entries WHERE id=%s", (row["entry_id"],))
+        entry = cursor.fetchone()
+        conn.commit()
+    _regenerate_data_json()
+    return {"ok": True, "point_id": point_id, **_fetch_manual_research_payload(entry["ticker"])}
+
+
+@app.patch("/api/manual-research/{entry_id}/consensus", status_code=200)
+def patch_manual_research_consensus(entry_id: int, body: ManualResearchConsensusPatch):
+    with get_conn() as conn:
+        changed = _upsert_manual_research_consensus(conn, entry_id, body)
+        cursor = conn.cursor()
+        cursor.execute("SELECT ticker FROM manual_research_entries WHERE id=%s", (entry_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "manual research entry not found")
+        ticker = row["ticker"]
+    _regenerate_data_json()
+    return {"ok": True, "entry_id": entry_id, "changed": changed, **_fetch_manual_research_payload(ticker)}
+
+
+@app.get("/api/market-manual")
+def get_market_manual():
+    return _fetch_market_manual_payload()
+
+
+@app.post("/api/market-manual", status_code=201)
+def add_market_manual(body: MarketManualIn):
+    raw_text = body.raw_text.strip()
+    if not raw_text:
+        raise HTTPException(400, "raw_text required")
+    meta = _raw_text_meta(raw_text)
+    logger.info("market_manual submit asof=%s len=%s sha=%s", body.asof, meta["length"], meta["sha256_12"])
+    try:
+        parsed = _call_market_manual_decomposition(
+            raw_text=raw_text,
+            source=(body.source or "").strip() or None,
+            source_url=(body.source_url or "").strip() or None,
+            asof=body.asof,
+        )
+    except Exception as exc:
+        logger.warning("market manual decomposition failed asof=%s: %s", body.asof, str(exc)[:160])
+        raise HTTPException(502, "market manual decomposition failed")
+    with get_conn() as conn:
+        row_id = insert_market_view_manual(
+            conn,
+            MarketViewManualRow(
+                asof=date.fromisoformat(body.asof),
+                raw_text=raw_text,
+                bull_scenario=parsed.bullScenario,
+                bear_scenario=parsed.bearScenario,
+                source=(body.source or "").strip() or None,
+                source_url=(body.source_url or "").strip() or None,
+            ),
+        )
+        conn.commit()
+    _regenerate_data_json()
+    return {"ok": True, "id": row_id, **_fetch_market_manual_payload()}
+
+
+@app.patch("/api/market-manual/{row_id}", status_code=200)
+def patch_market_manual(row_id: int, body: MarketManualPatch):
+    with get_conn() as conn:
+        changed = _patch_market_manual_row(conn, row_id, body)
+    _regenerate_data_json()
+    return {"ok": True, "id": row_id, "changed": changed, **_fetch_market_manual_payload()}
+
+
+@app.delete("/api/market-manual/{row_id}", status_code=200)
+def delete_market_manual(row_id: int):
+    with get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM market_view_manual WHERE id=%s", (row_id,))
+        if cursor.rowcount == 0:
+            conn.rollback()
+            raise HTTPException(404, "market manual not found")
+        conn.commit()
+    _regenerate_data_json()
+    return {"ok": True, "id": row_id, **_fetch_market_manual_payload()}
 
 
 # ── 포트폴리오 전략 조언 엔드포인트 (CoT) ──────────────────────────
