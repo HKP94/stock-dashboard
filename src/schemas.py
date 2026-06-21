@@ -106,6 +106,59 @@ class AnalystViewRow(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class ManualResearchEntryRow(BaseModel):
+    ticker: str
+    raw_text: str = Field(min_length=1)
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    inferred_source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ManualResearchHorizonRow(BaseModel):
+    entry_id: int
+    horizon: Literal["short", "mid", "long"]
+    attractiveness_label: Literal["매력적", "다소 매력적", "중립", "다소 비매력적", "비매력적"]
+    rationale: str = Field(min_length=1)
+    is_user_confirmed: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ManualResearchPointRow(BaseModel):
+    entry_id: int
+    stance: Literal["bull", "bear"]
+    point: str = Field(min_length=1)
+    source_label: Optional[str] = None
+    source_url: Optional[str] = None
+    is_user_confirmed: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ManualResearchConsensusRow(BaseModel):
+    entry_id: int
+    target_price: Optional[float] = None
+    rating_label: Optional[str] = None
+    rating_score: Optional[float] = None
+    is_user_confirmed: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class MarketViewManualRow(BaseModel):
+    asof: date
+    scope: Literal["market"] = "market"
+    raw_text: str = Field(min_length=1)
+    bull_scenario: Optional[str] = None
+    bear_scenario: Optional[str] = None
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class NewsRawRow(BaseModel):
     ticker: str
     source: str
@@ -374,6 +427,47 @@ class AnalystArgumentItem(BaseModel):
 class AnalystViewsOutput(BaseModel):
     bull: list[AnalystArgumentItem] = Field(default_factory=list)
     bear: list[AnalystArgumentItem] = Field(default_factory=list)
+
+
+class ManualResearchArgumentItem(BaseModel):
+    point: str = Field(min_length=1)
+    sourceLabel: Optional[str] = None
+    sourceUrl: Optional[str] = None
+
+
+class ManualResearchHorizonOutput(BaseModel):
+    horizon: Literal["short", "mid", "long"]
+    attractivenessLabel: Literal["매력적", "다소 매력적", "중립", "다소 비매력적", "비매력적"]
+    rationale: str = Field(min_length=1)
+
+
+class ManualResearchConsensusOutput(BaseModel):
+    targetPrice: Optional[float] = None
+    ratingLabel: Optional[str] = None
+    ratingScore: Optional[float] = None
+
+
+class ManualResearchOutput(BaseModel):
+    inferredSource: Optional[str] = None
+    consensus: Optional[ManualResearchConsensusOutput] = None
+    bull_points: list[ManualResearchArgumentItem] = Field(default_factory=list, alias="bullPoints")
+    bear_points: list[ManualResearchArgumentItem] = Field(default_factory=list, alias="bearPoints")
+    horizons: list[ManualResearchHorizonOutput] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("horizons")
+    @classmethod
+    def _validate_three_unique_horizons(cls, value: list[ManualResearchHorizonOutput]) -> list[ManualResearchHorizonOutput]:
+        order = [item.horizon for item in value]
+        if order != ["short", "mid", "long"]:
+            raise ValueError("horizons must include short, mid, long in order")
+        return value
+
+
+class MarketManualOutput(BaseModel):
+    bullScenario: str = Field(min_length=1)
+    bearScenario: str = Field(min_length=1)
 
 
 # ──────────────────────────────────────────────────────────────

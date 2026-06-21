@@ -42,11 +42,13 @@ from src.schemas import (
     AnalystViewRow,
     AnalystViewsOutput,
     MarketDailyRow,
+    MarketManualOutput,
     MarketNewsDigestOutput,
     MarketNewsSummaryRow,
     MarketSummaryOutput,
     MacroSummaryOutput,
     MacroSummaryRow,
+    ManualResearchOutput,
     NewsAnalysisRow,
     NewsSummaryOutput,
     TickerContextRow,
@@ -58,6 +60,7 @@ logger = logging.getLogger(__name__)
 GEMINI_BULK_MODEL_DEFAULT: str = "gemini-2.5-flash-lite"
 # 시황 종합(1회/일)·상위 티어. 2.5-flash 계열로 통일(실호출 검증 2026-06-17). 무효 모델명이면 전량 실패.
 GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-2.5-flash"
+GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT: str = os.environ.get("GEMINI_MANUAL_RESEARCH_MODEL", "gemini-2.5-pro")
 MAX_NEWS_PER_TICKER: int = 15
 BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
@@ -121,6 +124,10 @@ def _get_bulk_model() -> str:
 
 def _get_synth_model() -> str:
     return os.environ.get("GEMINI_SYNTH_MODEL", GEMINI_SYNTH_MODEL_DEFAULT)
+
+
+def _get_manual_research_model() -> str:
+    return os.environ.get("GEMINI_MANUAL_RESEARCH_MODEL", GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT)
 
 
 def _get_gemini_client():
@@ -241,6 +248,34 @@ def _parse_analyst_views_output(text: str) -> AnalystViewsOutput:
             })
         data[stance] = cleaned
     return AnalystViewsOutput.model_validate(data)
+
+
+def _parse_manual_research_output(text: str) -> ManualResearchOutput:
+    data = json.loads(text)
+    for key in ("bullPoints", "bearPoints"):
+        items = data.get(key) or []
+        if not isinstance(items, list):
+            data[key] = []
+            continue
+        cleaned = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            point = str(item.get("point") or "").strip()
+            if not point:
+                continue
+            cleaned.append({
+                "point": point,
+                "sourceLabel": str(item.get("sourceLabel") or "").strip() or None,
+                "sourceUrl": str(item.get("sourceUrl") or "").strip() or None,
+            })
+        data[key] = cleaned
+    return ManualResearchOutput.model_validate(data)
+
+
+def _parse_market_manual_output(text: str) -> MarketManualOutput:
+    data = json.loads(text)
+    return MarketManualOutput.model_validate(data)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -400,6 +435,65 @@ def _build_analyst_views_prompt(
         '"bear":[{"point":"논거 1개","source":"매체명","source_url":"https://..."}]}\n\n'
         f"[기사]\n{news_text}\n\n"
         f"[보조 컨텍스트]\n{context_text}"
+    )
+
+
+def _build_manual_research_prompt(
+    ticker: str,
+    company_name: str,
+    raw_text: str,
+    source: str | None = None,
+    source_url: str | None = None,
+) -> str:
+    source_line = f"- 사용자 메모 출처: {source}" if source else "- 사용자 메모 출처: 미입력"
+    url_line = f"- 사용자 URL: {source_url}" if source_url else "- 사용자 URL: 미입력"
+    return (
+        f"너는 외부 리서치 자료를 구조화하는 시니어 애널리스트 어시스턴트다. "
+        f"[{company_name}({ticker})] 관련 자유 텍스트를 읽고, 텍스트에 실제로 등장한 근거만 추출하라.\n\n"
+        "핵심 규칙:\n"
+        "- 원문에 없는 목표가·투자의견·논거를 만들지 마라.\n"
+        "- 강세와 약세가 함께 있으면 bull/bear로 분리하라.\n"
+        "- 단기(0~3개월), 중기(3~12개월), 장기(1년+)를 모두 채우되 숫자 점수는 금지하고 label+rationale만 출력하라.\n"
+        "- 매수/매도 지시 문장 금지. 관찰형 설명만 허용.\n"
+        "- sourceUrl이 원문에 없으면 null 허용.\n\n"
+        "label은 정확히 다음 중 하나만 사용: 매력적, 다소 매력적, 중립, 다소 비매력적, 비매력적\n\n"
+        "출력은 순수 JSON만 허용:\n"
+        "{"
+        "\"inferredSource\": \"추정 출처명 또는 null\","
+        "\"consensus\": {\"targetPrice\": 0, \"ratingLabel\": \"매수|중립|매도\", \"ratingScore\": 1|0|-1} 또는 null,"
+        "\"bullPoints\": [{\"point\": \"논거\", \"sourceLabel\": \"출처명\", \"sourceUrl\": \"https://... 또는 null\"}],"
+        "\"bearPoints\": [{\"point\": \"논거\", \"sourceLabel\": \"출처명\", \"sourceUrl\": \"https://... 또는 null\"}],"
+        "\"horizons\": ["
+        "{\"horizon\": \"short\", \"attractivenessLabel\": \"다소 매력적\", \"rationale\": \"근거\"},"
+        "{\"horizon\": \"mid\", \"attractivenessLabel\": \"중립\", \"rationale\": \"근거\"},"
+        "{\"horizon\": \"long\", \"attractivenessLabel\": \"비매력적\", \"rationale\": \"근거\"}"
+        "]"
+        "}\n\n"
+        f"{source_line}\n{url_line}\n\n"
+        f"[원문]\n{raw_text}"
+    )
+
+
+def _build_market_manual_prompt(
+    raw_text: str,
+    source: str | None = None,
+    source_url: str | None = None,
+    asof: str | None = None,
+) -> str:
+    source_line = f"- 사용자 메모 출처: {source}" if source else "- 사용자 메모 출처: 미입력"
+    url_line = f"- 사용자 URL: {source_url}" if source_url else "- 사용자 URL: 미입력"
+    asof_line = f"- 기준일: {asof}" if asof else "- 기준일: 미입력"
+    return (
+        "너는 시장 코멘트를 양면 시나리오로 정리하는 매크로 전략 보조자다.\n"
+        "아래 자유 텍스트를 읽고 강세 시나리오와 약세 시나리오를 각각 한 단락으로 정리하라.\n\n"
+        "규칙:\n"
+        "- 원문에 없는 낙관/비관 논거 창작 금지.\n"
+        "- 매매 지시 금지.\n"
+        "- 강세/약세를 모두 채우되, 원문 근거가 약하면 그렇게 명시하라.\n\n"
+        "출력은 순수 JSON만 허용:\n"
+        "{\"bullScenario\": \"...\", \"bearScenario\": \"...\"}\n\n"
+        f"{source_line}\n{url_line}\n{asof_line}\n\n"
+        f"[원문]\n{raw_text}"
     )
 
 

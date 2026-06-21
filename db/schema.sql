@@ -123,6 +123,73 @@ CREATE TABLE IF NOT EXISTS analyst_views (
 CREATE INDEX IF NOT EXISTS idx_analyst_views_lookup
     ON analyst_views (ticker, stance, asof DESC, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS manual_research_entries (
+    id              BIGSERIAL   PRIMARY KEY,
+    ticker          TEXT        NOT NULL,
+    raw_text        TEXT        NOT NULL,
+    source          TEXT,
+    source_url      TEXT,
+    inferred_source TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_manual_research_entries_ticker
+    ON manual_research_entries (ticker, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS manual_research_horizons (
+    id                    BIGSERIAL   PRIMARY KEY,
+    entry_id              BIGINT      NOT NULL REFERENCES manual_research_entries(id) ON DELETE CASCADE,
+    horizon               TEXT        NOT NULL CHECK (horizon IN ('short', 'mid', 'long')),
+    attractiveness_label  TEXT        NOT NULL CHECK (attractiveness_label IN ('매력적', '다소 매력적', '중립', '다소 비매력적', '비매력적')),
+    rationale             TEXT        NOT NULL,
+    is_user_confirmed     BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (entry_id, horizon)
+);
+
+CREATE TABLE IF NOT EXISTS manual_research_points (
+    id                BIGSERIAL   PRIMARY KEY,
+    entry_id          BIGINT      NOT NULL REFERENCES manual_research_entries(id) ON DELETE CASCADE,
+    stance            TEXT        NOT NULL CHECK (stance IN ('bull', 'bear')),
+    point             TEXT        NOT NULL,
+    source_label      TEXT,
+    source_url        TEXT,
+    is_user_confirmed BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_manual_research_points_entry
+    ON manual_research_points (entry_id, stance, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS manual_research_consensus (
+    entry_id            BIGINT      PRIMARY KEY REFERENCES manual_research_entries(id) ON DELETE CASCADE,
+    target_price        NUMERIC,
+    rating_label        TEXT,
+    rating_score        NUMERIC,
+    is_user_confirmed   BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS market_view_manual (
+    id            BIGSERIAL   PRIMARY KEY,
+    asof          DATE        NOT NULL,
+    scope         TEXT        NOT NULL DEFAULT 'market' CHECK (scope IN ('market')),
+    raw_text      TEXT        NOT NULL,
+    bull_scenario TEXT,
+    bear_scenario TEXT,
+    source        TEXT,
+    source_url    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_view_manual_asof
+    ON market_view_manual (asof DESC, created_at DESC, id DESC);
+
 -- =============================================================
 -- 뉴스 원천 (url_hash 로 dedupe)
 -- =============================================================
