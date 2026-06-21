@@ -20,6 +20,7 @@ local_api.py — ATLAS 로컬 쓰기 API (FastAPI, 127.0.0.1:8765 전용)
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -134,6 +135,47 @@ class DriverPatch(BaseModel):
     def require_change(self) -> "DriverPatch":
         if not ({"weight", "rationale"} & self.model_fields_set):
             raise ValueError("weight or rationale is required")
+        return self
+
+
+class ManualResearchIn(BaseModel):
+    ticker: str
+    raw_text: str = Field(..., min_length=1)
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+class ManualResearchPatch(BaseModel):
+    raw_text: Optional[str] = None
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    inferred_source: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "ManualResearchPatch":
+        if not ({"raw_text", "source", "source_url", "inferred_source"} & self.model_fields_set):
+            raise ValueError("raw_text, source, source_url, or inferred_source is required")
+        return self
+
+
+class MarketManualIn(BaseModel):
+    asof: str
+    raw_text: str = Field(..., min_length=1)
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+class MarketManualPatch(BaseModel):
+    raw_text: Optional[str] = None
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    bull_scenario: Optional[str] = None
+    bear_scenario: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "MarketManualPatch":
+        if not ({"raw_text", "source", "source_url", "bull_scenario", "bear_scenario"} & self.model_fields_set):
+            raise ValueError("raw_text, source, source_url, bull_scenario, or bear_scenario is required")
         return self
 
 
@@ -284,6 +326,60 @@ def _patch_data_json_research(ticker: str) -> None:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
     except Exception as exc:
         logger.warning("data.json research 갱신 실패: %s", exc)
+
+
+def _raw_text_meta(text: str) -> dict[str, object]:
+    normalized = text.strip()
+    return {
+        "length": len(normalized),
+        "sha256_12": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12],
+    }
+
+
+def _patch_manual_research_entry(conn, entry_id: int, body: ManualResearchPatch) -> dict:
+    fields = body.model_fields_set
+    raw_text = body.raw_text.strip() if body.raw_text is not None else None
+    source = (body.source or "").strip() or None if "source" in fields else None
+    source_url = (body.source_url or "").strip() or None if "source_url" in fields else None
+    inferred_source = (body.inferred_source or "").strip() or None if "inferred_source" in fields else None
+    needs_redecomposition = "raw_text" in fields
+    cursor = conn.cursor()
+    try:
+        sets: list[str] = []
+        params: list[object] = []
+        if "raw_text" in fields:
+            sets.append("raw_text=%s")
+            params.append(raw_text)
+        if "source" in fields:
+            sets.append("source=%s")
+            params.append(source)
+        if "source_url" in fields:
+            sets.append("source_url=%s")
+            params.append(source_url)
+        if "inferred_source" in fields:
+            sets.append("inferred_source=%s")
+            params.append(inferred_source)
+        params.append(entry_id)
+        cursor.execute(
+            f"UPDATE manual_research_entries SET {', '.join(sets)}, updated_at=now() WHERE id=%s",
+            tuple(params),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "manual research entry not found")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    if needs_redecomposition and raw_text is not None:
+        meta = _raw_text_meta(raw_text)
+        logger.info("manual_research raw_text updated entry_id=%s len=%s sha=%s", entry_id, meta["length"], meta["sha256_12"])
+    return {
+        "raw_text": raw_text if "raw_text" in fields else None,
+        "source": source,
+        "source_url": source_url,
+        "inferred_source": inferred_source,
+        "needs_redecomposition": needs_redecomposition,
+    }
 
 
 def _fetch_driver_items(ticker: str) -> list[dict]:
