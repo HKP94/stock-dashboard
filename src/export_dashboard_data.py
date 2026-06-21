@@ -872,6 +872,173 @@ def _group_analyst_consensus_history_rows(rows: list[dict]) -> dict[str, list[di
     return grouped
 
 
+def _build_ai_decomposition_summary(entry: dict | None) -> dict | None:
+    if not entry:
+        return None
+    labels = {
+        item["horizon"]: item["attractivenessLabel"]
+        for item in entry.get("horizons", [])
+        if item.get("horizon") and item.get("attractivenessLabel")
+    }
+    return {
+        "entryId": entry["id"],
+        "labels": labels,
+        "bullCount": len(entry.get("bull", [])),
+        "bearCount": len(entry.get("bear", [])),
+    }
+
+
+def _group_manual_research_rows(
+    entry_rows: list[dict],
+    horizon_rows: list[dict],
+    point_rows: list[dict],
+    consensus_rows: list[dict],
+) -> dict[str, list[dict]]:
+    horizons_by_entry: dict[int, list[dict]] = {}
+    for row in horizon_rows:
+        horizons_by_entry.setdefault(int(row["entry_id"]), []).append({
+            "id": row["id"],
+            "horizon": row["horizon"],
+            "attractivenessLabel": row["attractiveness_label"],
+            "rationale": row["rationale"],
+            "isUserConfirmed": bool(row["is_user_confirmed"]),
+            "createdAt": str(row["created_at"]),
+            "updatedAt": str(row["updated_at"]),
+        })
+    for items in horizons_by_entry.values():
+        order = {"short": 0, "mid": 1, "long": 2}
+        items.sort(key=lambda item: order.get(item["horizon"], 99))
+
+    points_by_entry: dict[int, dict[str, list[dict]]] = {}
+    for row in point_rows:
+        entry_id = int(row["entry_id"])
+        stance = row["stance"]
+        points_by_entry.setdefault(entry_id, {"bull": [], "bear": []})
+        points_by_entry[entry_id][stance].append({
+            "id": row["id"],
+            "point": row["point"],
+            "sourceLabel": row["source_label"],
+            "sourceUrl": row["source_url"],
+            "isUserConfirmed": bool(row["is_user_confirmed"]),
+            "createdAt": str(row["created_at"]),
+            "updatedAt": str(row["updated_at"]),
+        })
+
+    consensus_by_entry = {
+        int(row["entry_id"]): {
+            "targetPrice": round(_f(row["target_price"])) if _f(row["target_price"]) is not None else None,
+            "ratingLabel": row["rating_label"],
+            "ratingScore": _f(row["rating_score"]),
+            "isUserConfirmed": bool(row["is_user_confirmed"]),
+            "createdAt": str(row["created_at"]),
+            "updatedAt": str(row["updated_at"]),
+        }
+        for row in consensus_rows
+    }
+
+    grouped: dict[str, list[dict]] = {}
+    for row in entry_rows:
+        ticker = row["ticker"]
+        entry_id = int(row["id"])
+        grouped.setdefault(ticker, []).append({
+            "id": entry_id,
+            "ticker": ticker,
+            "rawText": row["raw_text"],
+            "source": row["source"],
+            "sourceUrl": row["source_url"],
+            "inferredSource": row["inferred_source"],
+            "createdAt": str(row["created_at"]),
+            "updatedAt": str(row["updated_at"]),
+            "horizons": horizons_by_entry.get(entry_id, []),
+            "bull": points_by_entry.get(entry_id, {}).get("bull", []),
+            "bear": points_by_entry.get(entry_id, {}).get("bear", []),
+            "consensus": consensus_by_entry.get(entry_id),
+        })
+    return grouped
+
+
+def _load_manual_research_history(conn, tickers: list[str], *, limit_per_ticker: int = 5) -> dict[str, list[dict]]:
+    if not tickers:
+        return {}
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, ticker, raw_text, source, source_url, inferred_source, created_at, updated_at
+        FROM (
+            SELECT id, ticker, raw_text, source, source_url, inferred_source, created_at, updated_at,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY ticker
+                     ORDER BY created_at DESC, id DESC
+                   ) AS rn
+            FROM manual_research_entries
+            WHERE ticker = ANY(%s)
+        ) t
+        WHERE rn <= %s
+        ORDER BY ticker, created_at DESC, id DESC
+        """,
+        (tickers, limit_per_ticker),
+    )
+    entry_rows = [dict(row) for row in cur.fetchall()]
+    if not entry_rows:
+        return {}
+    entry_ids = [int(row["id"]) for row in entry_rows]
+    cur.execute(
+        """
+        SELECT id, entry_id, horizon, attractiveness_label, rationale, is_user_confirmed, created_at, updated_at
+        FROM manual_research_horizons
+        WHERE entry_id = ANY(%s)
+        ORDER BY entry_id, created_at DESC, id DESC
+        """,
+        (entry_ids,),
+    )
+    horizon_rows = [dict(row) for row in cur.fetchall()]
+    cur.execute(
+        """
+        SELECT id, entry_id, stance, point, source_label, source_url, is_user_confirmed, created_at, updated_at
+        FROM manual_research_points
+        WHERE entry_id = ANY(%s)
+        ORDER BY entry_id, stance, created_at DESC, id DESC
+        """,
+        (entry_ids,),
+    )
+    point_rows = [dict(row) for row in cur.fetchall()]
+    cur.execute(
+        """
+        SELECT entry_id, target_price, rating_label, rating_score, is_user_confirmed, created_at, updated_at
+        FROM manual_research_consensus
+        WHERE entry_id = ANY(%s)
+        """,
+        (entry_ids,),
+    )
+    consensus_rows = [dict(row) for row in cur.fetchall()]
+    return _group_manual_research_rows(entry_rows, horizon_rows, point_rows, consensus_rows)
+
+
+def _load_market_manual_views(conn, *, limit: int = 5) -> list[dict]:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, asof, scope, raw_text, bull_scenario, bear_scenario, source, source_url, created_at, updated_at
+        FROM market_view_manual
+        ORDER BY asof DESC, created_at DESC, id DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    return [{
+        "id": int(row["id"]),
+        "asof": str(row["asof"]),
+        "scope": row["scope"],
+        "rawText": row["raw_text"],
+        "bullScenario": row["bull_scenario"],
+        "bearScenario": row["bear_scenario"],
+        "source": row["source"],
+        "sourceUrl": row["source_url"],
+        "createdAt": str(row["created_at"]),
+        "updatedAt": str(row["updated_at"]),
+    } for row in cur.fetchall()]
+
+
 def _load_analyst_consensus_history(conn, tickers: list[str], *, limit_per_ticker: int = 12) -> dict[str, list[dict]]:
     if not tickers:
         return {}
@@ -1399,6 +1566,8 @@ def build_data() -> dict:
         research_items_map = _load_research_items(conn)
         analyst_views_map = _load_analyst_views(conn, tickers)
         analyst_consensus_history_map = _load_analyst_consensus_history(conn, tickers)
+        manual_research_history_map = _load_manual_research_history(conn, tickers)
+        market_manual_views = _load_market_manual_views(conn)
 
         # PR-4(이번): stock_notes
         notes_map = _load_stock_notes(conn)
@@ -1575,6 +1744,9 @@ def build_data() -> dict:
                 } if any(v is not None for v in (tp, rating_label, rating_score, eps_fwd, n_analysts, analyst_source)) else None,
                 "consensusHistory": analyst_consensus_history_map.get(tk, []),
                 "analystViews": analyst_views_map.get(tk, {"bull": [], "bear": []}),
+                "manualResearchLatest": (manual_research_history_map.get(tk) or [None])[0],
+                "manualResearchHistory": manual_research_history_map.get(tk, []),
+                "aiDecompositionSummary": _build_ai_decomposition_summary((manual_research_history_map.get(tk) or [None])[0]),
                 "sent":   n_sent,
                 "sscore": round(n_score * 100) if n_score else 50,
                 "sum":    sum_bullets,
@@ -1652,6 +1824,8 @@ def build_data() -> dict:
         now = datetime.now()
         refresh_context = _infer_refresh_context(now, price_asof)
         market["refreshContext"] = refresh_context
+        market["manualViewLatest"] = market_manual_views[0] if market_manual_views else None
+        market["manualViewHistory"] = market_manual_views
         data = {
             "today":      now.strftime("%Y년 %-m월 %-d일 (%a)").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"),
             "updated":    now.strftime("%H:%M") + " KST",
