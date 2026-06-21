@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import time
 from datetime import date, datetime
 from typing import Optional
@@ -67,6 +68,7 @@ BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
 GEMINI_HTTP_TIMEOUT_MS: int = int(os.environ.get("GEMINI_HTTP_TIMEOUT_MS", "45000"))
 GEMINI_BATCH_BUDGET_SECONDS: float = float(os.environ.get("GEMINI_BATCH_BUDGET_SECONDS", "1800"))
+ACTION_ADVICE_LLM_TIMEOUT_SECONDS: int = int(os.environ.get("ACTION_ADVICE_LLM_TIMEOUT_SECONDS", "20"))
 
 # PR-1(진단): 네트워크/일시오류(429·503·타임아웃) 지수 백오프 재시도. 파싱/스키마 실패와 구분.
 TRANSIENT_RETRIES: int = 3        # _call_gemini 일시오류 재시도 횟수 (CLAUDE.md §3)
@@ -279,6 +281,11 @@ def _parse_market_manual_output(text: str) -> MarketManualOutput:
     return MarketManualOutput.model_validate(data)
 
 
+def _parse_stock_action_advice_output(text: str) -> StockActionAdviceNarrativeOutput:
+    data = json.loads(text)
+    return StockActionAdviceNarrativeOutput.model_validate(data)
+
+
 # ──────────────────────────────────────────────────────────────
 # Gemini 호출 + 검증 + 재시도
 # ──────────────────────────────────────────────────────────────
@@ -326,6 +333,31 @@ def _call_gemini_for_market(
             else:
                 logger.error("시황 종합 2회 실패 — 스킵: %s", exc)
     return None
+
+
+def summarize_stock_action_advice(context: dict) -> StockActionAdviceNarrativeOutput | None:
+    previous = None
+    try:
+        def _handle_timeout(_signum, _frame):
+            raise TimeoutError("action advice llm hard timeout")
+
+        previous = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.alarm(ACTION_ADVICE_LLM_TIMEOUT_SECONDS)
+        client = _get_gemini_client()
+        text = _call_gemini_with_backoff(client, _get_manual_research_model(), _build_stock_action_advice_prompt(context))
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+        return _parse_stock_action_advice_output(text)
+    except Exception as exc:
+        try:
+            signal.alarm(0)
+            if previous is not None:
+                signal.signal(signal.SIGALRM, previous)
+        except Exception:
+            pass
+        logger.warning("%s action advice narrative fallback: %s", context.get("ticker", "unknown"), str(exc)[:120])
+        return None
 
 
 def _call_gemini_for_analyst_views(

@@ -20,6 +20,7 @@ run_pipeline.py — ATLAS 일일 파이프라인 실행기
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, datetime
 from typing import Optional
 
@@ -36,6 +37,7 @@ from src.db import (
     insert_market_news,
     log_run_finish,
     log_run_start,
+    upsert_stock_action_advice,
     upsert_analyst,
     upsert_fundamentals,
     upsert_indicators_daily,
@@ -46,10 +48,14 @@ from src.db import (
     upsert_valuation,
 )
 from src.enrich_gemini import (
+    GEMINI_BATCH_BUDGET_SECONDS,
+    _get_manual_research_model,
+    _within_budget,
     enrich_market_summary,
     enrich_news_batch,
     extract_analyst_views_batch,
     reenrich_stale_fallbacks,
+    summarize_stock_action_advice,
     summarize_macro_environment,
     summarize_market_news_digest,
 )
@@ -61,6 +67,8 @@ from src.ingest_market_news import run_market_news_ingest
 from src.ingest_news import run_news_ingest
 from src.ingest_us import run_us_ingest
 from src.schemas import StockDailyRecord
+from src.schemas import StockActionAdviceRow
+from src.stock_action_advice import build_action_frame
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +105,107 @@ def _load_price_df(ticker: str, conn: psycopg.Connection) -> pd.DataFrame:
 
 def _err(step: str, exc: Exception) -> dict:
     return {"step": step, "error": str(exc), "ts": datetime.utcnow().isoformat()}
+
+
+def _prioritize_action_advice_targets(*, holdings: list[str], event_tickers: list[str], remaining: list[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for bucket in (holdings, event_tickers, remaining):
+        for ticker in bucket:
+            if ticker not in seen:
+                seen.add(ticker)
+                ordered.append(ticker)
+    return ordered
+
+
+def _select_action_advice_targets(conn: psycopg.Connection) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT ticker FROM portfolio_holdings WHERE qty > 0 ORDER BY ticker")
+        holdings = [row["ticker"] for row in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT DISTINCT ticker
+            FROM news_raw
+            WHERE published_at >= now() - interval '2 day'
+            ORDER BY ticker
+            """
+        )
+        news_event_tickers = [row["ticker"] for row in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT ticker
+            FROM watchlist
+            WHERE active = TRUE
+            ORDER BY ticker
+            """
+        )
+        all_active = [row["ticker"] for row in cur.fetchall()]
+    remaining = [ticker for ticker in all_active if ticker not in holdings and ticker not in news_event_tickers]
+    return _prioritize_action_advice_targets(
+        holdings=holdings,
+        event_tickers=[ticker for ticker in news_event_tickers if ticker not in holdings],
+        remaining=remaining,
+    )
+
+
+def _step_action_advice(conn: psycopg.Connection, errors: list) -> None:
+    logger.info("Step 10b: 종목 액션 제언")
+    from src.export_dashboard_data import build_data
+
+    started_at = time.monotonic()
+    try:
+        targets = _select_action_advice_targets(conn)
+        if not targets:
+            logger.info("Step 10b 스킵: 대상 종목 없음")
+            return
+        data = build_data()
+        stocks_by_ticker = {stock["t"]: stock for stock in data.get("stocks", [])}
+        regime = data.get("market", {}).get("overall", "neutral")
+        portfolio_snapshot = data.get("portfolio", {}) or {}
+        today = date.today()
+        for ticker in targets:
+            if not _within_budget(started_at, GEMINI_BATCH_BUDGET_SECONDS):
+                errors.append({
+                    "step": "action_advice_budget",
+                    "error": "budget exceeded; rolled over remaining tickers",
+                    "ts": datetime.now().isoformat(),
+                })
+                logger.warning("Step 10b 예산 초과: 남은 종목 다음 실행으로 이월")
+                break
+            stock = stocks_by_ticker.get(ticker)
+            if not stock:
+                continue
+            try:
+                frame = build_action_frame(stock, portfolio_snapshot, regime)
+                narrative = summarize_stock_action_advice(frame)
+                row = StockActionAdviceRow(
+                    ticker=ticker,
+                    asof=today,
+                    direction=frame["direction"],
+                    current_weight=frame["current_weight"],
+                    target_weight_low=frame["target_weight_low"],
+                    target_weight_high=frame["target_weight_high"],
+                    weight_action=frame["weight_action"],
+                    entry_zone=frame["entry_zone"],
+                    exit_zone=frame["exit_zone"],
+                    confidence=frame["confidence"],
+                    rationale=(narrative.rationale if narrative else f"{frame['direction']} 제안 — 현재 비중 {frame['current_weight']}%, 목표 {frame['target_weight_low']}~{frame['target_weight_high']}%"),
+                    supporting_factors=(narrative.supportingFactors if narrative and narrative.supportingFactors else frame["supporting_factors"]),
+                    opposing_factors=(narrative.opposingFactors if narrative and narrative.opposingFactors else frame["opposing_factors"]),
+                    divergence_note=(narrative.divergenceNote if narrative and narrative.divergenceNote is not None else frame["divergence_note"]),
+                    model=(_get_manual_research_model() if narrative else "deterministic-fallback"),
+                )
+                upsert_stock_action_advice(conn, row)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                errors.append(_err(f"action_advice:{ticker}", exc))
+                logger.warning("%s: 액션 제언 실패 — %s", ticker, exc)
+        logger.info("Step 10b 완료: 액션 제언 대상 %d종목 처리", len(targets))
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Step 10b 실패: %s", exc, exc_info=True)
+        errors.append(_err("action_advice", exc))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -434,6 +543,7 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
             _step_enrich_gemini(conn, errors)
             _step_compute_portfolio(conn, errors)
             _step_backtest(conn, errors)
+            _step_action_advice(conn, errors)
             records = _step_assemble(conn, errors)
 
         except Exception as exc:

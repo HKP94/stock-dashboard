@@ -46,3 +46,22 @@ def test_build_action_frame_exposes_supporting_sources_without_llm():
     assert advice["direction"] in {"매수", "비중확대", "유지"}
     assert advice["target_weight_high"] <= 10.0
     assert any(item["source"] == "퀀트신호" for item in advice["supporting_factors"])
+
+
+def test_overweight_holding_prefers_reduce_direction_when_above_target_band():
+    stock = {
+        "t": "AAPL",
+        "signal": {"label": "매수", "reason": "백분위 상위 20%", "confidence": 82},
+        "consensus": {"targetPrice": 240, "ratingLabel": "매수"},
+        "price": 200,
+        "analystViews": {"bull": [{"point": "수요 견조"}], "bear": []},
+        "manualResearchLatest": None,
+        "drivers": [],
+        "holding": {"eval_amount": 400000},
+        "sma20": 198,
+        "sma50": 190,
+        "sma200": 170,
+    }
+    advice = build_action_frame(stock, {"asset_total": 1_000_000}, "bull")
+    assert advice["weight_action"] == "줄임"
+    assert advice["direction"] == "비중축소"

@@ -148,6 +148,8 @@ def build_action_frame(stock: dict, portfolio_snapshot: dict, regime: str) -> di
     direction = "유지"
     if not stock.get("holding"):
         direction = "매수" if signal_label == "매수" else "유지"
+    elif weight_action == "줄임":
+        direction = "매도" if high <= 1.0 else "비중축소"
     elif signal_label == "매수":
         direction = "비중확대" if weight_action == "늘림" else "유지"
     elif signal_label == "축소":
