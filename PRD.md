@@ -306,6 +306,22 @@ CREATE TABLE backtest_results (
   cum_return NUMERIC, cagr NUMERIC, mdd NUMERIC, sharpe NUMERIC,
   regime_returns JSONB, payload JSONB, computed_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- 종목 액션 제언 (Wave 5-A, 일 단위 시계열)
+CREATE TABLE stock_action_advice (
+  ticker TEXT NOT NULL, asof DATE NOT NULL,
+  direction TEXT NOT NULL, current_weight NUMERIC,
+  target_weight_low NUMERIC, target_weight_high NUMERIC,
+  weight_action TEXT NOT NULL,
+  entry_zone TEXT, exit_zone TEXT,
+  confidence TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  supporting_factors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  opposing_factors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  divergence_note TEXT, model TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (ticker, asof)
+);
 ```
 
 ### 5.2 종목 일일 레코드 (Hermes·시트 소비용 뷰)
@@ -321,6 +337,7 @@ CREATE TABLE backtest_results (
   "quant": {"composite": 71, "momentum": 78, "value": 55, "quality": 64, "growth": 70, "sentiment": 66,
             "flags": ["RSI 모멘텀 양호", "밸류에이션 부담 없음"],
             "signal": {"label": "매수", "percentile": 82, "reason": "퀀트 종합 백분위 82위(상위 18%), 강점 팩터는 모멘텀 78점", "confidence": 70}},
+  "actionAdviceLatest": {"direction": "유지", "currentWeight": 4.2, "targetWeightLow": 3.0, "targetWeightHigh": 6.0, "confidence": "중"},
   "is_holding": true
 }
 ```
@@ -379,6 +396,7 @@ LLM은 **반드시 아래 JSON만** 반환한다. 상세 프롬프트는 `prompt
 - **KR**: 가격/거래량은 **pykrx**(KRX), 재무·공시는 **DART OpenAPI**(무료). **밸류에이션(PER/PBR)·컨센서스(목표가·투자의견)·ROE·부채비율은 네이버금융 종목메인 + FnGuide Company Guide 무료 스크래핑**(계좌 불필요, `ingest_kr.fetch_kr_valuation_analyst`). **KIS Developers는 옵션**(환경변수 `KIS_APPKEY/KIS_APPSECRET` 있을 때만 활성, `ingest_kis.py` — ROE/부채/컨센서스 '있으면 우선' 보강). → **yfinance KR 사용 금지**(절대규칙).
 - **애널리스트 컨센서스/논거 (Wave 4-D-1)**: 기존 `analyst` 경로를 정규 컨센서스 저장소로 재사용하고 `rating_label/rating_score/eps_fwd/source`를 함께 저장한다(중복 테이블 금지). 정성 논거는 `analyst_views`에 `stance='bull'|'bear'`로 분리 저장하며, Gemini는 `news_raw`·`news_analysis`·`ticker_context`를 읽어 **실제 기사에 인용된 애널리스트/증권사 코멘트만** 추출하고 `source_url`을 반드시 보존한다.
 - **수동 AI 분해 (Wave 4-D-3)**: 사용자가 붙여넣은 자유 텍스트는 `manual_research_entries`에 원문(raw_text)·출처를 누적 저장하고, Gemini는 이를 `manual_research_horizons`(short/mid/long의 `attractiveness_label + rationale`), `manual_research_points`(bull/bear 논거), `manual_research_consensus`(목표가/의견)로 구조화한다. raw_text는 UI 기본 숨김·DB 원문 보존이 원칙이며 로그에는 전체 본문을 남기지 않는다. 사용자가 분해 결과를 직접 수정한 자식 행은 `is_user_confirmed=true`로 보호하고, raw_text 재분해 시에는 `is_user_confirmed=false` 행만 삭제 후 재삽입한다. 화면의 `aiDecompositionSummary`는 최신 entry id·단/중/장 라벨·bull/bear 개수만 가진 얇은 파생값으로만 사용하며, 단·중·장 평가를 단일 점수로 합치지 않는다.
+- **종목 액션 제언 (Wave 5-A)**: `stock_action_advice`는 **하루 1종목 1건**(`UNIQUE (ticker, asof)`)의 판단 이력을 저장한다. 현재 비중·목표 비중 레인지·진입/이탈 구간은 **코드가 결정론적으로 산출**하고, LLM은 rationale/divergence 설명만 생성한다. 상위 모델 호출 대상은 ① 보유 7종목 매일 ② 신호 변화/뉴스 이벤트가 있는 관심종목 ③ 남은 예산 시 순환 종목 순으로 제한하며, 예산 초과·이월은 `runs.errors`에 기록한다. 화면은 최신 1건 + 과거 이력 토글만 보여주고 자동 주문 경로는 두지 않는다.
 **산출 항목**(기존 `main.py` 컬럼 계승 + 정비): 현재가·등락률, SMA20/50/200·RSI14·이격도·추세기울기·정배열, 최근 1~3년·1~3분기 매출/영업이익률, PER(T/F)·PBR·EV/EBITDA·ROE·ROA·부채비율·매출성장률, 컨센서스(의견·목표가·상승여력), 뉴스 감성·요약.
 **증분 처리**: `news_raw`에 새 기사(URL 해시 신규)가 있는 종목만 Gemini 재요약 → 토큰 절약.
 
@@ -729,6 +747,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [x] **Wave 4-D-1 애널리스트 컨센서스·논거 백엔드** (2026-06-20): 기존 `analyst` 저장 경로를 확장해 `rating_label/rating_score/eps_fwd/source`를 정규화 저장하고, `analyst_views`에 출처 URL이 있는 bull/bear 논거를 분리 저장한다. 06시 전체 파이프라인 Step 7에 논거 추출을 편입하고 export는 종목별 최신 `consensus`와 `analystViews(bull/bear)`를 함께 내보낸다.
 - [x] **Wave 4-D-2 애널리스트 뷰 탭 재편** (2026-06-21): 리서치 탭을 "애널리스트 뷰"로 재정의해 종목 검색/시장·섹터 필터, 최신 컨센서스 요약(목표가·괴리율·의견·EPS), bull/bear 논거의 균형 배치, 목표가 시계열 미니차트, `ticker_context` 누적 인사이트 재사용을 한 화면에 통합한다. export는 종목별 최신 `consensus`와 함께 `consensusHistory`를 추가하되 조회는 모두 종목별 최신/최근 순으로 수행한다(글로벌 max(asof) 금지).
 - [x] **Wave 4-D-3 자유 텍스트 수동 입력 → AI 분해** (2026-06-21): 종목 단위 수동 입력은 `manual_research_entries` 부모 + `manual_research_horizons/points/consensus` 자식 구조로 누적 저장하고, 시장 단위 수동 입력은 `market_view_manual(scope='market')`에 저장한다. raw_text는 DB에 원문 보존·UI 기본 숨김·로그 길이/해시만 기록을 원칙으로 하며, raw_text 재분해는 `is_user_confirmed=false` 행만 교체하고 사용자 확정 자식은 보호한다. export는 `manualResearchLatest/manualResearchHistory/aiDecompositionSummary`와 `market.manualViewLatest/manualViewHistory`를 추가하고, 리서치/종목상세/시장전망 탭은 "내 판단·AI 분해·자동 수집" 3출처를 나란히 보여 주되 합산 점수는 만들지 않는다.
+- [x] **Wave 5-A 종목 액션 제언** (2026-06-21): `stock_action_advice` 일 단위 시계열과 결정론 액션 엔진을 추가해 방향·현재 비중·목표 비중 레인지·진입/이탈 구간·지지/반대 재료·divergence를 저장한다. 상위 모델은 숫자를 바꾸지 않는 서술만 맡고, 06시 파이프라인은 보유종목 우선/이벤트 종목 차순/예산 초과 이월 규칙으로 종합을 수행한다. export는 `actionAdviceLatest/actionAdviceHistory`, 종목상세는 "액션 제언" 카드와 과거 이력 토글을 제공한다.
 - [x] **Wave 4-B 매크로 분석** (2026-06-19): `macro_indicators`/`macro_summary`를 추가해 미국(FRED) 기준금리·10년물·CPI·실업률, 한국(ECOS) 기준금리·CPI, 글로벌(yfinance) VIX·DXY·USDKRW·WTI를 정기 수집·요약한다. FRED/ECOS 키는 요청에만 사용하고 DB·로그·저장 URL에 남기지 않도록 회귀 테스트와 에러 마스킹을 추가했다. 시장전망 탭은 "거시 환경" 카드에서 최신 값·전일/전월 대비·미니 추세와 우호/부담 양면 해석을 함께 보여준다.
 - [x] **Wave 4-A 긴급 버그·정리** (2026-06-19): 관심종목 관리 섹터 입력이 매 글자마다 행 리마운트로 포커스/스크롤을 잃던 문제를 top-level 행 컴포넌트 + local draft 저장 구조로 안정화했다. KR 일봉 조회 종료일을 KST 장마감 기준으로 명시하고, 18시 경량 갱신은 실제 적재된 마지막 거래일을 로그로 남기도록 해 `priceAsofByMarket["KR"]`와의 정합을 강화했다. 뉴스 요약·시장 시황·포트폴리오 조언은 렌더 단계에서 raw `*`/`**`를 정리하고, Gemini/조언 프롬프트에도 과도한 강조 자제 지침을 추가했다.
 - [x] **Wave 3 백필 재계산 핫픽스** (2026-06-19): `backfill.py`의 5년 백필 경로가 W3-A 변경 중 `recompute_indicators_to_db` import 누락으로 partial run을 내던 문제를 수정했다. `python -m src.backfill` / `--5y` 단독 실행이 다시 가격 백필 → 영향 종목 지표 재계산 → active 유니버스 퀀트 재계산까지 한 번에 마치며, `recompute.py`는 수동 수복 도구로만 남긴다. 회귀 테스트로 NameError 재발을 차단했다.
@@ -761,6 +780,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v4.9 (2026-06-21) Wave 5-A: `stock_action_advice` 일 단위 이력, 결정론 비중/구간 엔진, 상위모델 서술 가드, 보유 우선 예산 기반 06시 파이프라인, export `actionAdviceLatest/actionAdviceHistory`, 종목상세 액션 제언 카드를 추가 — Codex.*
 - *v4.4 (2026-06-19) Wave 4-C: `ticker_drivers`/`driver_prices` 스키마, Gemini 기반 드라이버 자동 추정과 사용자 우선 CRUD, 공용 거시 재사용·전용 프록시 적재, 종목상세 "핵심 동인" 카드, `ingest_macro`의 `.env` 자동 로드를 추가 — Codex.*
 - *v4.5 (2026-06-20) Wave 4-C follow-up: 활성 유니버스 전체 자동 매핑, 5년 driver proxy 백필 기준, 원자재/공급망 연관 추론 강화, LCD proxy-none 처리 원칙을 문서화 — Codex.*
 - *v4.6 (2026-06-20) CI hang guard: Gemini HTTP timeout·배치 시간 예산·workflow timeout-minutes·yfinance hard timeout을 추가해 무인 파이프라인의 장시간 매달림을 차단 — Codex.*
