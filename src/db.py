@@ -31,9 +31,14 @@ from src.schemas import (
     FundamentalsRow,
     IndexDailyRow,
     IndicatorDailyRow,
+    ManualResearchConsensusRow,
+    ManualResearchEntryRow,
+    ManualResearchHorizonRow,
+    ManualResearchPointRow,
     MarketDailyRow,
     MarketNewsRow,
     MarketNewsSummaryRow,
+    MarketViewManualRow,
     MacroIndicatorRow,
     MacroSummaryRow,
     NewsAnalysisRow,
@@ -321,6 +326,91 @@ def upsert_analyst_views(conn: psycopg.Connection, rows: list[AnalystViewRow]) -
             [(r.ticker, r.asof, r.stance, r.point, r.source, r.source_url) for r in rows],
         )
     logger.debug("upsert_analyst_views: %d rows", len(rows))
+
+
+def insert_manual_research_entry(conn: psycopg.Connection, row: ManualResearchEntryRow) -> int:
+    sql = """
+        INSERT INTO manual_research_entries
+            (ticker, raw_text, source, source_url, inferred_source, updated_at)
+        VALUES (%s, %s, %s, %s, %s, now())
+        RETURNING id
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (row.ticker, row.raw_text, row.source, row.source_url, row.inferred_source))
+        created = cur.fetchone()
+    assert created is not None
+    entry_id = int(created["id"])
+    logger.debug("insert_manual_research_entry: ticker=%s entry_id=%d", row.ticker, entry_id)
+    return entry_id
+
+
+def replace_manual_research_ai_rows(
+    conn: psycopg.Connection,
+    entry_id: int,
+    *,
+    horizons: list[ManualResearchHorizonRow],
+    points: list[ManualResearchPointRow],
+    consensus: ManualResearchConsensusRow | None = None,
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM manual_research_horizons WHERE entry_id=%s AND is_user_confirmed=FALSE", (entry_id,))
+        cur.execute("DELETE FROM manual_research_points WHERE entry_id=%s AND is_user_confirmed=FALSE", (entry_id,))
+        cur.execute("DELETE FROM manual_research_consensus WHERE entry_id=%s AND is_user_confirmed=FALSE", (entry_id,))
+        if horizons:
+            cur.executemany(
+                """
+                INSERT INTO manual_research_horizons
+                    (entry_id, horizon, attractiveness_label, rationale, is_user_confirmed, updated_at)
+                VALUES (%s, %s, %s, %s, %s, now())
+                ON CONFLICT (entry_id, horizon) DO UPDATE SET
+                    attractiveness_label = EXCLUDED.attractiveness_label,
+                    rationale = EXCLUDED.rationale,
+                    updated_at = now()
+                WHERE manual_research_horizons.is_user_confirmed = FALSE
+                """,
+                [(r.entry_id, r.horizon, r.attractiveness_label, r.rationale, r.is_user_confirmed) for r in horizons],
+            )
+        if points:
+            cur.executemany(
+                """
+                INSERT INTO manual_research_points
+                    (entry_id, stance, point, source_label, source_url, is_user_confirmed, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, now())
+                """,
+                [(r.entry_id, r.stance, r.point, r.source_label, r.source_url, r.is_user_confirmed) for r in points],
+            )
+        if consensus:
+            cur.execute(
+                """
+                INSERT INTO manual_research_consensus
+                    (entry_id, target_price, rating_label, rating_score, is_user_confirmed, updated_at)
+                VALUES (%s, %s, %s, %s, %s, now())
+                ON CONFLICT (entry_id) DO UPDATE SET
+                    target_price = EXCLUDED.target_price,
+                    rating_label = EXCLUDED.rating_label,
+                    rating_score = EXCLUDED.rating_score,
+                    updated_at = now()
+                WHERE manual_research_consensus.is_user_confirmed = FALSE
+                """,
+                (consensus.entry_id, consensus.target_price, consensus.rating_label, consensus.rating_score, consensus.is_user_confirmed),
+            )
+    logger.debug("replace_manual_research_ai_rows: entry_id=%d horizons=%d points=%d consensus=%s", entry_id, len(horizons), len(points), consensus is not None)
+
+
+def insert_market_view_manual(conn: psycopg.Connection, row: MarketViewManualRow) -> int:
+    sql = """
+        INSERT INTO market_view_manual
+            (asof, scope, raw_text, bull_scenario, bear_scenario, source, source_url, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+        RETURNING id
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (row.asof, row.scope, row.raw_text, row.bull_scenario, row.bear_scenario, row.source, row.source_url))
+        created = cur.fetchone()
+    assert created is not None
+    row_id = int(created["id"])
+    logger.debug("insert_market_view_manual: id=%d asof=%s", row_id, row.asof)
+    return row_id
 
 
 def insert_news_raw(conn: psycopg.Connection, rows: list[NewsRawRow]) -> int:

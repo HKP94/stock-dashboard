@@ -106,6 +106,59 @@ class AnalystViewRow(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class ManualResearchEntryRow(BaseModel):
+    ticker: str
+    raw_text: str = Field(min_length=1)
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    inferred_source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ManualResearchHorizonRow(BaseModel):
+    entry_id: int
+    horizon: Literal["short", "mid", "long"]
+    attractiveness_label: Literal["매력적", "다소 매력적", "중립", "다소 비매력적", "비매력적"]
+    rationale: str = Field(min_length=1)
+    is_user_confirmed: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ManualResearchPointRow(BaseModel):
+    entry_id: int
+    stance: Literal["bull", "bear"]
+    point: str = Field(min_length=1)
+    source_label: Optional[str] = None
+    source_url: Optional[str] = None
+    is_user_confirmed: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ManualResearchConsensusRow(BaseModel):
+    entry_id: int
+    target_price: Optional[float] = None
+    rating_label: Optional[str] = None
+    rating_score: Optional[float] = None
+    is_user_confirmed: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class MarketViewManualRow(BaseModel):
+    asof: date
+    scope: Literal["market"] = "market"
+    raw_text: str = Field(min_length=1)
+    bull_scenario: Optional[str] = None
+    bear_scenario: Optional[str] = None
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class NewsRawRow(BaseModel):
     ticker: str
     source: str
