@@ -159,6 +159,25 @@ class MarketViewManualRow(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class StockActionAdviceRow(BaseModel):
+    ticker: str
+    asof: date
+    direction: Literal["매수", "비중확대", "유지", "비중축소", "매도"]
+    current_weight: Optional[float] = None
+    target_weight_low: Optional[float] = None
+    target_weight_high: Optional[float] = None
+    weight_action: Literal["늘림", "유지", "줄임"]
+    entry_zone: Optional[str] = None
+    exit_zone: Optional[str] = None
+    confidence: Literal["상", "중", "하"]
+    rationale: str = Field(min_length=1)
+    supporting_factors: list[dict[str, Any]] = Field(default_factory=list)
+    opposing_factors: list[dict[str, Any]] = Field(default_factory=list)
+    divergence_note: Optional[str] = None
+    model: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
 class NewsRawRow(BaseModel):
     ticker: str
     source: str

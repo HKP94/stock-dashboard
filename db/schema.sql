@@ -358,6 +358,29 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshot (
     payload     JSONB NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS stock_action_advice (
+    ticker             TEXT        NOT NULL,
+    asof               DATE        NOT NULL,
+    direction          TEXT        NOT NULL CHECK (direction IN ('매수', '비중확대', '유지', '비중축소', '매도')),
+    current_weight     NUMERIC,
+    target_weight_low  NUMERIC,
+    target_weight_high NUMERIC,
+    weight_action      TEXT        NOT NULL CHECK (weight_action IN ('늘림', '유지', '줄임')),
+    entry_zone         TEXT,
+    exit_zone          TEXT,
+    confidence         TEXT        NOT NULL CHECK (confidence IN ('상', '중', '하')),
+    rationale          TEXT        NOT NULL,
+    supporting_factors JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    opposing_factors   JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    divergence_note    TEXT,
+    model              TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (ticker, asof)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_action_advice_lookup
+    ON stock_action_advice (ticker, asof DESC, created_at DESC);
+
 -- =============================================================
 -- 시장 지표 (F3 — 지수/VIX/환율/금리 + Gemini 시황)
 -- =============================================================
