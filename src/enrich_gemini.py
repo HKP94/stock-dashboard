@@ -42,11 +42,13 @@ from src.schemas import (
     AnalystViewRow,
     AnalystViewsOutput,
     MarketDailyRow,
+    MarketManualOutput,
     MarketNewsDigestOutput,
     MarketNewsSummaryRow,
     MarketSummaryOutput,
     MacroSummaryOutput,
     MacroSummaryRow,
+    ManualResearchOutput,
     NewsAnalysisRow,
     NewsSummaryOutput,
     TickerContextRow,
@@ -58,6 +60,7 @@ logger = logging.getLogger(__name__)
 GEMINI_BULK_MODEL_DEFAULT: str = "gemini-2.5-flash-lite"
 # 시황 종합(1회/일)·상위 티어. 2.5-flash 계열로 통일(실호출 검증 2026-06-17). 무효 모델명이면 전량 실패.
 GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-2.5-flash"
+GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT: str = os.environ.get("GEMINI_MANUAL_RESEARCH_MODEL", "gemini-2.5-pro")
 MAX_NEWS_PER_TICKER: int = 15
 BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
@@ -121,6 +124,10 @@ def _get_bulk_model() -> str:
 
 def _get_synth_model() -> str:
     return os.environ.get("GEMINI_SYNTH_MODEL", GEMINI_SYNTH_MODEL_DEFAULT)
+
+
+def _get_manual_research_model() -> str:
+    return os.environ.get("GEMINI_MANUAL_RESEARCH_MODEL", GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT)
 
 
 def _get_gemini_client():
@@ -241,6 +248,34 @@ def _parse_analyst_views_output(text: str) -> AnalystViewsOutput:
             })
         data[stance] = cleaned
     return AnalystViewsOutput.model_validate(data)
+
+
+def _parse_manual_research_output(text: str) -> ManualResearchOutput:
+    data = json.loads(text)
+    for key in ("bullPoints", "bearPoints"):
+        items = data.get(key) or []
+        if not isinstance(items, list):
+            data[key] = []
+            continue
+        cleaned = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            point = str(item.get("point") or "").strip()
+            if not point:
+                continue
+            cleaned.append({
+                "point": point,
+                "sourceLabel": str(item.get("sourceLabel") or "").strip() or None,
+                "sourceUrl": str(item.get("sourceUrl") or "").strip() or None,
+            })
+        data[key] = cleaned
+    return ManualResearchOutput.model_validate(data)
+
+
+def _parse_market_manual_output(text: str) -> MarketManualOutput:
+    data = json.loads(text)
+    return MarketManualOutput.model_validate(data)
 
 
 # ──────────────────────────────────────────────────────────────

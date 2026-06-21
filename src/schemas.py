@@ -429,6 +429,47 @@ class AnalystViewsOutput(BaseModel):
     bear: list[AnalystArgumentItem] = Field(default_factory=list)
 
 
+class ManualResearchArgumentItem(BaseModel):
+    point: str = Field(min_length=1)
+    sourceLabel: Optional[str] = None
+    sourceUrl: Optional[str] = None
+
+
+class ManualResearchHorizonOutput(BaseModel):
+    horizon: Literal["short", "mid", "long"]
+    attractivenessLabel: Literal["매력적", "다소 매력적", "중립", "다소 비매력적", "비매력적"]
+    rationale: str = Field(min_length=1)
+
+
+class ManualResearchConsensusOutput(BaseModel):
+    targetPrice: Optional[float] = None
+    ratingLabel: Optional[str] = None
+    ratingScore: Optional[float] = None
+
+
+class ManualResearchOutput(BaseModel):
+    inferredSource: Optional[str] = None
+    consensus: Optional[ManualResearchConsensusOutput] = None
+    bull_points: list[ManualResearchArgumentItem] = Field(default_factory=list, alias="bullPoints")
+    bear_points: list[ManualResearchArgumentItem] = Field(default_factory=list, alias="bearPoints")
+    horizons: list[ManualResearchHorizonOutput] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("horizons")
+    @classmethod
+    def _validate_three_unique_horizons(cls, value: list[ManualResearchHorizonOutput]) -> list[ManualResearchHorizonOutput]:
+        order = [item.horizon for item in value]
+        if order != ["short", "mid", "long"]:
+            raise ValueError("horizons must include short, mid, long in order")
+        return value
+
+
+class MarketManualOutput(BaseModel):
+    bullScenario: str = Field(min_length=1)
+    bearScenario: str = Field(min_length=1)
+
+
 # ──────────────────────────────────────────────────────────────
 # §5.3-B LLM 출력 — 일일 시황 종합 (Gemini, 1회/일)
 # ──────────────────────────────────────────────────────────────
