@@ -24,6 +24,7 @@ from src.db import get_conn, insert_market_news, insert_news_raw, log_run_finish
 from src.enrich_gemini import enrich_market_summary, enrich_news_batch, summarize_market_news_digest
 from src.ingest_market_news import run_market_news_ingest
 from src.ingest_news import run_news_ingest
+from src import pipeline_analysis, pipeline_ingest, pipeline_synthesis
 
 logger = logging.getLogger(__name__)
 
@@ -88,83 +89,30 @@ def _refresh_prices_light(conn) -> dict:
 
 
 def run_news_refresh() -> dict:
-    errors: list[dict] = []
-    status = "success"
-    new_news = enriched = 0
+    """
+    18:00 KST 경량 갱신 호환 래퍼 (설계 §9-6) — 새 세 실행기를 refresh 순서로 호출한 뒤
+    data.json을 재생성한다(현재 18시 export 동작 유지).
 
-    price_info = {}
-    with get_conn() as conn:
-        run_id = log_run_start(conn, "news_refresh")
-        logger.info("=== news_refresh 시작 run_id=%d ===", run_id)
+      pipeline_ingest.run('refresh')   : 경량 가격 + 종목/시장 뉴스
+      pipeline_analysis.run('refresh') : 지표 + 퀀트 (분석→종합 순서 보존)
+      pipeline_synthesis.run('refresh'): 뉴스 요약 + 시황 + 시장 뉴스 요약
+      → export (best-effort)
 
-        # 0) PR-1: 경량 가격 갱신 (18:00 KST에도 가격이 빠르게 들어오도록)
-        try:
-            price_info = _refresh_prices_light(conn)
-            errors.extend(price_info.get("errors", []))
-        except Exception as exc:
-            conn.rollback()
-            logger.error("경량 가격 갱신 실패: %s", exc, exc_info=True)
-            errors.append({"step": "price_refresh", "error": str(exc), "ts": datetime.utcnow().isoformat()})
+    # ponytail: _refresh_prices_light는 실행기로 이전됐고 여기선 더 이상 호출하지 않는다.
+    #           중복본은 설계 §9 8단계(dead code 제거)까지 유지한다.
+    자동 주문 없음.
+    """
+    ing = pipeline_ingest.run("refresh")
+    ana = pipeline_analysis.run("refresh")
+    syn = pipeline_synthesis.run("refresh")
 
-        # 1) 뉴스 수집
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT ticker, name FROM watchlist WHERE active=TRUE")
-                names = {r["ticker"]: r["name"] for r in cur.fetchall()}
-            tickers = list(names.keys())
-            result = run_news_ingest(tickers, company_names=names)
-            for rows in result.get("news", {}).values():
-                if rows:
-                    new_news += insert_news_raw(conn, rows)
-            conn.commit()
-            errors.extend(result.get("errors", []))
-            logger.info("뉴스 수집: 신규 %d건", new_news)
-        except Exception as exc:
-            conn.rollback()
-            logger.error("뉴스 수집 실패: %s", exc, exc_info=True)
-            errors.append({"step": "ingest_news", "error": str(exc), "ts": datetime.utcnow().isoformat()})
+    errors = list(ing.get("errors", [])) + list(ana.get("errors", [])) + list(syn.get("errors", []))
+    new_news = ing.get("counts", {}).get("news_raw", 0)
+    enriched = syn.get("counts", {}).get("news_analysis", 0)
+    prices = ing.get("counts", {}).get("prices_daily", 0)
+    logger.info("=== news_refresh(호환 래퍼) 완료 신규=%d 요약=%d ===", new_news, enriched)
 
-        try:
-            market_result = run_market_news_ingest()
-            inserted_market = insert_market_news(conn, market_result.get("rows", []))
-            conn.commit()
-            errors.extend(market_result.get("errors", []))
-            logger.info("시장 뉴스 수집: 신규 %d건", inserted_market)
-        except Exception as exc:
-            conn.rollback()
-            logger.error("시장 뉴스 수집 실패: %s", exc, exc_info=True)
-            errors.append({"step": "ingest_market_news", "error": str(exc), "ts": datetime.utcnow().isoformat()})
-
-        # 2) Gemini 요약 + 시황
-        try:
-            enriched, errs = enrich_news_batch(conn)
-            conn.commit()
-            errors.extend(errs)
-        except Exception as exc:
-            conn.rollback()
-            logger.error("뉴스 요약 실패: %s", exc, exc_info=True)
-            errors.append({"step": "enrich_news", "error": str(exc), "ts": datetime.utcnow().isoformat()})
-        try:
-            enrich_market_summary(conn)
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            logger.warning("시황 종합 실패(비치명적): %s", exc)
-            errors.append({"step": "enrich_market", "error": str(exc), "ts": datetime.utcnow().isoformat()})
-        try:
-            summarize_market_news_digest(conn)
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            logger.warning("시장 뉴스 요약 실패(비치명적): %s", exc)
-            errors.append({"step": "market_news_digest", "error": str(exc), "ts": datetime.utcnow().isoformat()})
-
-        if errors and status != "failed":
-            status = "partial"
-        log_run_finish(conn, run_id, status=status, errors=errors)
-        logger.info("=== news_refresh 완료 status=%s 신규=%d 요약=%d ===", status, new_news, enriched)
-
-    # 3) export (best-effort — DB 외부 산출물)
+    # export (best-effort — DB 외부 산출물, 현재 18시 동작 유지)
     try:
         from src.export_dashboard_data import build_data
         import json
@@ -178,8 +126,7 @@ def run_news_refresh() -> dict:
     except Exception as exc:
         logger.warning("export 스킵(비치명적): %s", exc)
 
-    return {"new_news": new_news, "enriched": enriched,
-            "prices": price_info.get("price_rows", 0), "errors": errors}
+    return {"new_news": new_news, "enriched": enriched, "prices": prices, "errors": errors}
 
 
 if __name__ == "__main__":

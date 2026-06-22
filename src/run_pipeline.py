@@ -66,6 +66,7 @@ from src.ingest_market import run_market_ingest
 from src.ingest_market_news import run_market_news_ingest
 from src.ingest_news import run_news_ingest
 from src.ingest_us import run_us_ingest
+from src import pipeline_analysis, pipeline_ingest, pipeline_synthesis
 from src.schemas import StockDailyRecord
 from src.schemas import StockActionAdviceRow
 from src.stock_action_advice import build_action_frame
@@ -508,55 +509,30 @@ def _step_assemble(conn: psycopg.Connection, errors: list) -> list[StockDailyRec
 
 def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
     """
-    전체 파이프라인 실행.
-    한 단계 실패해도 다음 단계 계속.
-    runs 테이블에 실행 이력 기록.
+    일일 파이프라인 호환 래퍼 (설계 §9-6) — 새 세 실행기를 daily 순서로 호출한 뒤
+    assemble_daily()로 06시 반환 계약(list[StockDailyRecord])을 만든다.
 
+      pipeline_ingest.run('daily') → pipeline_analysis.run('daily')
+      → pipeline_synthesis.run('daily') → assemble
+
+    분석→종합 순서를 유지해 "퀀트가 이전 실행의 최신 news_analysis sentiment를 쓰는" 동작을 보존한다.
+    각 실행기는 자기 conn·runs 행을 가진다(설계 §5). 액션 제언의 build_data 역의존은 5단계 보류로 유지.
+
+    # ponytail: 개별 _step_* 함수와 _err/유니버스 헬퍼는 실행기로 이전됐고, 여기선 더 이상 호출하지
+    #           않는다. 중복본은 설계 §9 8단계(dead code 제거)까지 유지한다.
     자동 주문 없음.
     """
     asof = asof or date.today()
-    errors: list[dict] = []
-    records: list[StockDailyRecord] = []
-    status = "success"
+    logger.info("=== run_pipeline(호환 래퍼) 시작 asof=%s ===", asof)
+
+    pipeline_ingest.run("daily", asof)
+    pipeline_analysis.run("daily", asof)
+    pipeline_synthesis.run("daily", asof)
 
     with get_conn() as conn:
-        run_id = log_run_start(conn, "run_pipeline")
-        logger.info("=== 파이프라인 시작 asof=%s run_id=%d ===", asof, run_id)
+        records = _step_assemble(conn, [])
 
-        try:
-            # 유니버스 로드
-            watchlist = _get_active_tickers(conn)
-            kr_tickers = [w["ticker"] for w in watchlist if w["market"] == "KR"]
-            us_tickers = [w["ticker"] for w in watchlist if w["market"] == "US"]
-            all_tickers = [w["ticker"] for w in watchlist]
-            logger.info("유니버스: KR=%d US=%d 합계=%d", len(kr_tickers), len(us_tickers), len(all_tickers))
-
-            _step_market(conn, errors)
-            _step_macro(conn, errors)
-            _step_driver_prices(conn, errors)
-            _step_ingest_kr(conn, kr_tickers, errors)
-            _step_ingest_us(conn, us_tickers, errors)
-            _step_ingest_news(conn, all_tickers, errors)
-            _step_ingest_market_news(conn, errors)
-            _step_compute_indicators(conn, all_tickers, errors)
-            _step_compute_quant(conn, all_tickers, errors)
-            _step_enrich_gemini(conn, errors)
-            _step_compute_portfolio(conn, errors)
-            _step_backtest(conn, errors)
-            _step_action_advice(conn, errors)
-            records = _step_assemble(conn, errors)
-
-        except Exception as exc:
-            logger.error("파이프라인 치명적 오류: %s", exc, exc_info=True)
-            errors.append(_err("pipeline_fatal", exc))
-            status = "failed"
-
-        if errors and status != "failed":
-            status = "partial"
-
-        log_run_finish(conn, run_id, status=status, errors=errors)
-        logger.info("=== 파이프라인 완료 status=%s errors=%d ===", status, len(errors))
-
+    logger.info("=== run_pipeline 완료: %d 레코드 ===", len(records))
     return records
 
 

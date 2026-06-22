@@ -12,6 +12,10 @@ from decimal import Decimal
 from unittest.mock import MagicMock, mock_open, patch
 
 
+# 개념적 단계 목록(문서용). 6단계(호환 래퍼 전환) 이후 이 단계들은 세 실행기
+# (pipeline_ingest/analysis/synthesis)에 분산 실행되며, 각 실행기의 내부 순서는
+# test_pipeline_{ingest,analysis,synthesis}_behavior.py 가 고정한다.
+# run_pipeline/news_refresh 자체는 실행기 위임 순서만 잠근다(아래 두 테스트).
 DAILY_STAGE_ORDER = [
     "market",
     "macro",
@@ -74,57 +78,43 @@ def _normalize_snapshot(value, *, exclude_fields: set[str]):
 
 
 def test_run_pipeline_daily_stage_order_locked(monkeypatch):
+    """6단계(호환 래퍼) 이후: run_pipeline은 세 실행기를 daily 순서로 위임하고 assemble로 마무리한다.
+    분석→종합 순서 보존(퀀트가 이전 news_analysis sentiment 사용)."""
     import src.run_pipeline as RP
 
     order: list[str] = []
-    conn = _ctx_conn()
 
-    monkeypatch.setattr(RP, "get_conn", lambda: conn)
-    monkeypatch.setattr(RP, "log_run_start", lambda _conn, kind: 101)
-    monkeypatch.setattr(RP, "log_run_finish", lambda _conn, run_id, status, errors: None)
-    monkeypatch.setattr(
-        RP,
-        "_get_active_tickers",
-        lambda _conn: [{"ticker": "005930.KS", "market": "KR"}, {"ticker": "AAPL", "market": "US"}],
-    )
-
-    for name in DAILY_STAGE_ORDER[:-1]:
-        monkeypatch.setattr(RP, f"_step_{name}", lambda _conn, _arg=None, _errors=None, _name=name: order.append(_name))
+    monkeypatch.setattr(RP.pipeline_ingest, "run", lambda profile, asof=None: order.append(f"ingest:{profile}") or {"status": "success", "errors": [], "counts": {}})
+    monkeypatch.setattr(RP.pipeline_analysis, "run", lambda profile, asof=None: order.append(f"analysis:{profile}") or {"status": "success", "errors": [], "counts": {}})
+    monkeypatch.setattr(RP.pipeline_synthesis, "run", lambda profile, asof=None: order.append(f"synthesis:{profile}") or {"status": "success", "errors": [], "counts": {}})
+    monkeypatch.setattr(RP, "get_conn", lambda: _ctx_conn())
     monkeypatch.setattr(RP, "_step_assemble", lambda _conn, _errors: order.append("assemble") or ["record"])
 
     records = RP.run_pipeline(date(2026, 6, 21))
 
     assert records == ["record"]
-    assert order == DAILY_STAGE_ORDER
+    assert order == ["ingest:daily", "analysis:daily", "synthesis:daily", "assemble"]
 
 
 def test_news_refresh_stage_order_locked(monkeypatch):
+    """6단계(호환 래퍼) 이후: news_refresh는 세 실행기를 refresh 순서로 위임하고 export로 마무리한다."""
     import src.news_refresh as NR
 
     order: list[str] = []
-    conn = _ctx_conn([{"ticker": "005930.KS", "name": "삼성전자"}])
 
-    monkeypatch.setattr(NR, "get_conn", lambda: conn)
-    monkeypatch.setattr(NR, "log_run_start", lambda _conn, kind: 202)
-    monkeypatch.setattr(NR, "log_run_finish", lambda _conn, run_id, status, errors: order.append(f"log:{status}"))
-    monkeypatch.setattr(NR, "_refresh_prices_light", lambda _conn: order.append("price_refresh") or {"price_rows": 2, "errors": []})
-    monkeypatch.setattr(NR, "run_news_ingest", lambda tickers, company_names: order.append("ingest_news") or {"news": {"005930.KS": [{"id": 1}]}, "errors": []})
-    monkeypatch.setattr(NR, "insert_news_raw", lambda _conn, rows: len(rows))
-    monkeypatch.setattr(NR, "run_market_news_ingest", lambda: order.append("ingest_market_news") or {"rows": [{"id": 1}], "errors": []})
-    monkeypatch.setattr(NR, "insert_market_news", lambda _conn, rows: len(rows))
-    monkeypatch.setattr(NR, "enrich_news_batch", lambda _conn: (order.append("enrich_news") or 1, []))
-    monkeypatch.setattr(NR, "enrich_market_summary", lambda _conn: order.append("enrich_market") or True)
-    monkeypatch.setattr(NR, "summarize_market_news_digest", lambda _conn: order.append("market_news_digest") or True)
+    monkeypatch.setattr(NR.pipeline_ingest, "run", lambda profile, asof=None: order.append(f"ingest:{profile}") or {"status": "success", "errors": [], "counts": {"news_raw": 1, "prices_daily": 2}})
+    monkeypatch.setattr(NR.pipeline_analysis, "run", lambda profile, asof=None: order.append(f"analysis:{profile}") or {"status": "success", "errors": [], "counts": {}})
+    monkeypatch.setattr(NR.pipeline_synthesis, "run", lambda profile, asof=None: order.append(f"synthesis:{profile}") or {"status": "success", "errors": [], "counts": {"news_analysis": 1}})
 
     with patch("src.export_dashboard_data.build_data", side_effect=lambda: order.append("export") or {"stocks": []}), \
          patch("builtins.open", mock_open()), \
          patch("json.dump", side_effect=lambda data, fh, **kwargs: None):
         result = NR.run_news_refresh()
 
+    assert order == ["ingest:refresh", "analysis:refresh", "synthesis:refresh", "export"]
     assert result["prices"] == 2
     assert result["new_news"] == 1
-    assert order[:-2] == REFRESH_STAGE_ORDER
-    assert order[-2:] == ["log:success", "export"]
+    assert result["enriched"] == 1
 
 
 def test_step_market_commits_success_and_rolls_back_on_error(monkeypatch):
