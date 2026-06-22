@@ -39,7 +39,9 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── enrich_gemini.py    # Gemini 호출 래퍼 (스키마 검증 포함)
 │   ├── ingest_drivers.py   # 종목 핵심 동인 자동 추정 + 프록시 가격 수집 (Wave 4-C)
 │   ├── assemble.py         # 종목 일일 레코드(PRD §5.2) 조립 뷰
-│   ├── run_pipeline.py     # 일일 파이프라인 실행기(수집→연산→LLM→조립)
+│   ├── run_pipeline.py     # 일일 파이프라인 실행기(수집→연산→LLM→조립). 분리 리팩터링 중 호환 경로로 유지
+│   ├── pipeline_common.py  # 파이프라인 분리 공유 헬퍼(유니버스 조회·KR/US 분리·오류 dict·상태 확정, 설계 §5)
+│   ├── pipeline_ingest.py  # 수집 실행기(--profile daily|refresh). 수집 단계만, 지표·LLM·export 금지(설계 §4.1)
 │   ├── send_telegram.py    # 아침 브리핑 텔레그램 발송
 │   ├── backfill.py         # 누락/부족 종목 자동탐지 + 2년/5년 가격 백필 + 지표·퀀트 재계산
 │   ├── news_refresh.py     # 18:00 KST 잡: 경량 가격갱신(prices+indicators+quant) + 뉴스+요약+export
