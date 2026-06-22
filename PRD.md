@@ -771,7 +771,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 ### 파이프라인 분리 리팩터링 (행위 보존, 설계: `docs/superpowers/specs/2026-06-21-pipeline-separation-design.md`)
 - [x] **1단계 행위 고정** (2026-06-21): `run_pipeline`/`news_refresh`의 단계 순서·commit/rollback·DB/export 골든을 `tests/test_pipeline_behavior_baseline.py`로 고정(프로덕션 코드 무변경).
 - [x] **2단계 수집 실행기** (2026-06-22): `src/pipeline_common.py`(유니버스 조회·KR/US 분리·오류 dict·상태 확정) + `src/pipeline_ingest.py`(`python -m src.pipeline_ingest --profile daily|refresh`, `runs.kind='pipeline_ingest'`). 기존 수집 단계 구현을 호출만 이전, 지표·점수·LLM·export 미수행. legacy vs new 수집 DB 스냅샷 동일성 테스트(`tests/test_pipeline_ingest_behavior.py`). 기존 CI(run_pipeline/news_refresh)는 그대로.
-- [ ] **3단계 분석 실행기**: `pipeline_analysis.py`(지표→퀀트→포트폴리오→백테스트, refresh=지표·퀀트).
+- [x] **3단계 분석 실행기** (2026-06-22): `src/pipeline_analysis.py`(`--profile daily|refresh`, `runs.kind='pipeline_analysis'`). daily=지표→퀀트→포트폴리오→백테스트, refresh=지표→퀀트만(포폴·백테스트 제외). daily 지표는 per-ticker `compute_indicators` 루프, refresh 지표는 `recompute_indicators_to_db`(현재 06시/18시 차이 그대로 보존). 퀀트는 이전 저장된 최신 `news_analysis` sentiment 입력 유지(설계 §3), §F7·DB NUMERIC float 경계 유지. 외부 수집·LLM·export 미수행. legacy vs new 분석 DB 스냅샷 동일성 테스트(`tests/test_pipeline_analysis_behavior.py`). 기존 CI 미변경.
 - [ ] **4단계 종합 실행기**: `pipeline_synthesis.py`(Step 7 + 액션 제언, LLM mock 검증).
 - [ ] **5~8단계**: 액션 제언 역의존 제거 → 호환 래퍼 전환 → CI 진입점 전환 → dead code 제거.
 
@@ -788,6 +788,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v5.1 (2026-06-22) 파이프라인 분리 3단계: 분석 실행기 `src/pipeline_analysis.py`(`--profile daily|refresh`, `runs.kind='pipeline_analysis'`)를 추가. daily=지표→퀀트→포트폴리오→백테스트, refresh=지표→퀀트만. daily 지표는 per-ticker `compute_indicators` 루프, refresh 지표는 `recompute_indicators_to_db`(현재 06/18시 차이 보존). 퀀트는 이전 저장된 최신 `news_analysis` sentiment를 입력으로 쓰는 동작 유지(같은 실행 LLM 요약 미사용, 설계 §3). 외부 수집·LLM·export 미수행, §F7·NUMERIC float 경계 유지. legacy(run_pipeline/news_refresh) vs new 분석 DB 스냅샷 동일성 + refresh 포폴/백테스트 미실행을 `tests/test_pipeline_analysis_behavior.py`(9테스트)로 고정. 기존 CI 미변경 — 행위 보존 추가 단계 — Claude Code.*
 - *v5.0 (2026-06-22) 파이프라인 분리 2단계: 최소 공유 헬퍼 `src/pipeline_common.py`(활성 유니버스 조회·KR/US 분리·오류 dict·success|partial|failed 상태 확정)와 수집 실행기 `src/pipeline_ingest.py`(`--profile daily|refresh`, `runs.kind='pipeline_ingest'`, 잘못된 프로필 종료코드 2)를 추가. 기존 수집 단계 구현을 호출만 이전(로직 무변경)하고 지표·점수·LLM·export는 수행하지 않는다. legacy(run_pipeline/news_refresh) vs new 수집 DB 스냅샷 동일성을 `tests/test_pipeline_ingest_behavior.py`(9테스트)로 고정. 기존 CI는 미변경 — 행위 보존 추가 단계 — Claude Code.*
 - *v4.9 (2026-06-21) Wave 5-A: `stock_action_advice` 일 단위 이력, 결정론 비중/구간 엔진, 상위모델 서술 가드, 보유 우선 예산 기반 06시 파이프라인, export `actionAdviceLatest/actionAdviceHistory`, 종목상세 액션 제언 카드를 추가 — Codex.*
 - *v4.10 (2026-06-21) UI hotfix: 애널리스트 뷰 종목 선택을 한글 이름/티커 기준 정렬로 고정하고, 시장/섹터 select 폭·정렬을 통일했다. 전략 비교 탭의 1년/3년/5년 active 버튼 대비를 `accBg`/`acc` 톤으로 수정해 가독성 문제를 제거 — Codex.*
