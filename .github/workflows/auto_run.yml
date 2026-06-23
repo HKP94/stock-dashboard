@@ -2,6 +2,14 @@ name: ATLAS 미국 종가 기준 전체 파이프라인 (06:00 KST)
 
 on:
   workflow_dispatch:   # 수동 실행 유지
+    inputs:
+      engine:
+        description: '실행 엔진 — legacy=기존 run_pipeline, split=새 3실행기(7-A 수동 테스트용). cron 스케줄은 항상 legacy.'
+        type: choice
+        options:
+          - legacy
+          - split
+        default: legacy
   schedule:
     # KST 06:00 = UTC 21:00 (전날)
     - cron: '0 21 * * *'
@@ -10,6 +18,21 @@ jobs:
   pipeline:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
+    # 7-A: split step들이 상속할 공용 env(legacy step은 자체 inline env를 그대로 유지).
+    #      DB_HOST/PORT/USER/NAME은 접속 정보, 비밀(PASSWORD/KEY)은 GitHub Secrets에서만.
+    env:
+      DB_HOST:            aws-1-ap-northeast-2.pooler.supabase.com
+      DB_PORT:            "6543"
+      DB_USER:            postgres.dpegnpmzgozvcvbqmnlt
+      DB_PASSWORD:        ${{ secrets.DB_PASSWORD }}
+      DB_NAME:            postgres
+      DART_API_KEY:       ${{ secrets.DART_API_KEY }}
+      GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_BULK_MODEL:  gemini-2.5-flash-lite
+      GEMINI_SYNTH_MODEL: gemini-2.5-flash
+      GEMINI_HTTP_TIMEOUT_MS: "45000"
+      GEMINI_BATCH_BUDGET_SECONDS: "1800"
 
     steps:
       - name: 코드 체크아웃
@@ -26,7 +49,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ── legacy 경로(기본·cron). engine!=split일 때만 실행 — cron은 inputs.engine이 비어 항상 여기로.
       - name: 파이프라인 실행 (수집 → 연산 → LLM → 조립)
+        if: ${{ github.event.inputs.engine != 'split' }}
         env:
           DB_HOST:            aws-1-ap-northeast-2.pooler.supabase.com
           DB_PORT:            "6543"
@@ -40,6 +65,20 @@ jobs:
           GEMINI_HTTP_TIMEOUT_MS: "45000"
           GEMINI_BATCH_BUDGET_SECONDS: "1800"
         run: python -m src.run_pipeline
+
+      # ── split 경로(7-A: workflow_dispatch engine=split 수동 테스트 전용). 설계 §7 06시 순서.
+      #    분석→종합 순서 유지. step 분리로 실패 파이프라인을 UI에서 즉시 식별.
+      - name: (split) 수집 daily
+        if: ${{ github.event.inputs.engine == 'split' }}
+        run: python -m src.pipeline_ingest --profile daily
+
+      - name: (split) 분석 daily
+        if: ${{ github.event.inputs.engine == 'split' }}
+        run: python -m src.pipeline_analysis --profile daily
+
+      - name: (split) 종합 daily
+        if: ${{ github.event.inputs.engine == 'split' }}
+        run: python -m src.pipeline_synthesis --profile daily
 
       # PR-1: 텔레그램 브리핑 보류(비활성). 살리려면 아래 step 주석 해제 +
       #       env에 TELEGRAM_ENABLED: "true" 추가 + repo secrets에 봇토큰/챗ID 등록.

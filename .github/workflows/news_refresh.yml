@@ -6,6 +6,14 @@ name: ATLAS 한국 종가 기준 경량 갱신 (18:00 KST)
 
 on:
   workflow_dispatch:   # 수동 실행
+    inputs:
+      engine:
+        description: '실행 엔진 — legacy=기존 news_refresh, split=새 3실행기+export(7-A 수동 테스트용). cron 스케줄은 항상 legacy.'
+        type: choice
+        options:
+          - legacy
+          - split
+        default: legacy
   schedule:
     # KST 18:00 = UTC 09:00
     - cron: '0 9 * * *'
@@ -14,6 +22,20 @@ jobs:
   news_refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
+    # 7-A: split step들이 상속할 공용 env(legacy step은 자체 inline env를 그대로 유지).
+    #      DB_HOST/PORT/USER/NAME은 접속 정보, 비밀(PASSWORD/KEY)은 GitHub Secrets에서만.
+    env:
+      DB_HOST:            aws-1-ap-northeast-2.pooler.supabase.com
+      DB_PORT:            "6543"
+      DB_USER:            postgres.dpegnpmzgozvcvbqmnlt
+      DB_PASSWORD:        ${{ secrets.DB_PASSWORD }}
+      DB_NAME:            postgres
+      GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_BULK_MODEL:  gemini-2.5-flash-lite
+      GEMINI_SYNTH_MODEL: gemini-2.5-flash
+      GEMINI_HTTP_TIMEOUT_MS: "45000"
+      GEMINI_BATCH_BUDGET_SECONDS: "1200"
 
     steps:
       - name: 코드 체크아웃
@@ -30,7 +52,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ── legacy 경로(기본·cron). engine!=split일 때만 실행 — cron은 inputs.engine이 비어 항상 여기로.
       - name: 뉴스 수집 + 요약 + export
+        if: ${{ github.event.inputs.engine != 'split' }}
         env:
           DB_HOST:            aws-1-ap-northeast-2.pooler.supabase.com
           DB_PORT:            "6543"
@@ -44,3 +68,21 @@ jobs:
           GEMINI_BATCH_BUDGET_SECONDS: "1200"
         run: |
           python -m src.news_refresh
+
+      # ── split 경로(7-A: workflow_dispatch engine=split 수동 테스트 전용). 설계 §7 18시 순서.
+      #    분석→종합 순서 유지 후 export. step 분리로 실패 파이프라인을 UI에서 즉시 식별.
+      - name: (split) 수집 refresh
+        if: ${{ github.event.inputs.engine == 'split' }}
+        run: python -m src.pipeline_ingest --profile refresh
+
+      - name: (split) 분석 refresh
+        if: ${{ github.event.inputs.engine == 'split' }}
+        run: python -m src.pipeline_analysis --profile refresh
+
+      - name: (split) 종합 refresh
+        if: ${{ github.event.inputs.engine == 'split' }}
+        run: python -m src.pipeline_synthesis --profile refresh
+
+      - name: (split) export data.json
+        if: ${{ github.event.inputs.engine == 'split' }}
+        run: python -m src.export_dashboard_data
