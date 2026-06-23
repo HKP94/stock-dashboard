@@ -37,6 +37,7 @@ from tenacity import (
 )
 
 from src.analyst_common import normalize_rating_label_score
+from src.external_timeout import run_with_timeout
 from src.schemas import AnalystRow, FundamentalsRow, PriceDailyRow, ValuationRow
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,9 @@ PRICE_LOOKBACK_DAYS: int = 730   # 2년치 (compute_indicators SMA200 용)
 FS_BGN_YEARS: int = 4            # DART 재무 조회 연수
 KR_DAILY_CLOSE_HOUR: int = 16    # KST 기준 일봉 종가 확정 후 조회 시각(완충 포함)
 KST = ZoneInfo("Asia/Seoul")
+# pykrx/KRX 호출 하드 타임아웃(초). KRX 서버 무응답 시 종목 단위로 끊고 다음 종목 진행.
+# (#37에서 Gemini·yfinance엔 timeout을 걸었으나 pykrx/KRX는 누락 — 06시 split이 90분 timeout으로 잘린 원인)
+KRX_HTTP_TIMEOUT_S: float = float(os.getenv("KRX_HTTP_TIMEOUT_S", "40"))
 
 # DART 손익계산서 계정과목 후보 (한국어)
 _REVENUE_LABELS: frozenset[str] = frozenset({
@@ -113,8 +117,19 @@ def _resolve_kr_price_target_date(now: Optional[datetime] = None) -> date:
     reraise=True,
 )
 def _pykrx_ohlcv(code: str, fromdate: str, todate: str) -> pd.DataFrame:
+    from contextlib import redirect_stdout
+
     from pykrx import stock as pykrx_stock  # 지연 임포트 (단위 테스트 격리)
-    return pykrx_stock.get_market_ohlcv_by_date(fromdate, todate, code)
+
+    def _call() -> pd.DataFrame:
+        # pykrx는 KRX 로그인 안내·"Loading..." 진행 스피너를 stdout print로 출력한다.
+        # KRX_ID/KRX_PW 없이도 익명 조회가 동작하므로(첫 종목 485 rows 성공) 경고는 무해 —
+        # 매 종목 반복되는 stdout 소음만 억제한다(우리 logging은 별도 핸들러라 영향 없음, 데이터 무관).
+        with open(os.devnull, "w") as devnull, redirect_stdout(devnull):
+            return pykrx_stock.get_market_ohlcv_by_date(fromdate, todate, code)
+
+    # KRX 서버 무응답 시 무한 대기 방지 — 하드 타임아웃 후 ExternalCallTimeout으로 종목 단위 격리.
+    return run_with_timeout(KRX_HTTP_TIMEOUT_S, _call)
 
 
 def fetch_kr_prices(
