@@ -126,6 +126,15 @@ class WatchlistPatch(BaseModel):
         return self
 
 
+class WatchlistCorrectIn(BaseModel):
+    """티커/국가 오타 정정 입력. 정정은 '잘못된 종목 비활성 + 올바른 종목 추가'로 처리한다
+    (티커는 사실상 모든 테이블의 키라 단순 UPDATE 시 데이터 정합성이 깨지므로 제거+추가)."""
+    ticker: str                       # 새(올바른) 티커
+    market: str                       # 'KR' | 'US'
+    name: Optional[str] = None        # 없으면 기존 종목명 승계
+    sector: Optional[str] = None      # 없으면 기존 섹터 승계
+
+
 class ResearchIn(BaseModel):
     ticker: str
     item_type: str                     # 'youtube'|'article'|'report'|'quant'|'memo'
@@ -1485,6 +1494,62 @@ def patch_watchlist(ticker: str, body: WatchlistPatch):
         changed = _patch_watchlist_row(conn, ticker, body)
     _regenerate_data_json()
     return {"ok": True, "ticker": ticker, **changed}
+
+
+@app.post("/api/watchlist/{old_ticker}/correct", status_code=200)
+def correct_watchlist(old_ticker: str, body: WatchlistCorrectIn, background: BackgroundTasks):
+    """티커/국가 오타 정정 = 잘못된 종목 비활성 + 올바른 종목 추가(한 트랜잭션).
+
+    티커는 prices_daily·quant_scores·news_raw·stock_action_advice 등 거의 모든 테이블의 사실상
+    키이므로 단순 UPDATE하면 잘못된 티커로 쌓인 데이터가 올바른 티커에 잘못 붙는다. 따라서
+    제거(=비활성, 데이터 보존)+신규 추가로 처리한다. 새 종목은 백그라운드로 백필 후 화면 반영.
+    기존(잘못된) 종목 데이터는 1차에서 물리 삭제하지 않고 watchlist 비활성만 한다(export는
+    active만 조회하므로 화면에서 자연히 사라짐). 보유(portfolio_holdings)는 이전하지 않는다.
+    """
+    new_ticker = body.ticker.strip()
+    if not new_ticker or any(ch.isspace() for ch in new_ticker):
+        raise HTTPException(400, "티커는 공백 없이 입력하세요")
+    market = body.market.upper()
+    if market not in ("US", "KR"):
+        raise HTTPException(400, "market must be US or KR")
+    if new_ticker == old_ticker:
+        raise HTTPException(400, "새 티커가 기존 티커와 동일합니다")
+
+    with get_conn() as conn:
+        c = conn.cursor()
+        c.execute("SELECT name, sector FROM watchlist WHERE ticker=%s", (old_ticker,))
+        old = c.fetchone()
+        if not old:
+            raise HTTPException(404, "기존 종목을 찾을 수 없습니다")
+        c.execute("SELECT active FROM watchlist WHERE ticker=%s", (new_ticker,))
+        existing = c.fetchone()
+        if existing and existing["active"]:
+            raise HTTPException(409, "이미 활성 관심종목에 있는 티커입니다")
+
+        name = (body.name or old["name"] or new_ticker).strip()
+        sector = ((body.sector if body.sector is not None else old["sector"]) or "").strip() or None
+        try:
+            # 1) 잘못된 티커 비활성(데이터 보존 — 물리 삭제 보류)
+            c.execute("UPDATE watchlist SET active=false WHERE ticker=%s", (old_ticker,))
+            # 2) 올바른 티커 추가(이미 있으면 되살림 + 메타 갱신)
+            if existing:
+                c.execute(
+                    "UPDATE watchlist SET active=true, name=%s, market=%s, sector=%s WHERE ticker=%s",
+                    (name, market, sector, new_ticker),
+                )
+            else:
+                c.execute(
+                    """INSERT INTO watchlist (ticker, name, market, sector, is_holding, active, added_at)
+                       VALUES (%s,%s,%s,%s,false,true,now())""",
+                    (new_ticker, name, market, sector),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    background.add_task(_backfill_and_export, new_ticker, market)
+    return {"ok": True, "old_ticker": old_ticker, "ticker": new_ticker, "market": market, "status": "collecting"}
 
 
 # ── 실행 ──────────────────────────────────────────────────────────
