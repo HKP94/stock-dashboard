@@ -4,12 +4,12 @@ on:
   workflow_dispatch:   # 수동 실행 유지
     inputs:
       engine:
-        description: '실행 엔진 — legacy=기존 run_pipeline, split=새 3실행기(7-A 수동 테스트용). cron 스케줄은 항상 legacy.'
+        description: '실행 엔진 — split=새 3실행기(기본·cron), legacy=기존 run_pipeline(롤백용 수동 전용).'
         type: choice
         options:
-          - legacy
           - split
-        default: legacy
+          - legacy
+        default: split
   schedule:
     # KST 06:00 = UTC 21:00 (전날)
     - cron: '0 21 * * *'
@@ -49,9 +49,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ── legacy 경로(기본·cron). engine!=split일 때만 실행 — cron은 inputs.engine이 비어 항상 여기로.
+      # ── legacy 경로(롤백 전용). engine=legacy로 수동 실행할 때만 — cron/기본(split)은 안 돈다.
       - name: 파이프라인 실행 (수집 → 연산 → LLM → 조립)
-        if: ${{ github.event.inputs.engine != 'split' }}
+        if: ${{ github.event.inputs.engine == 'legacy' }}
         env:
           DB_HOST:            aws-1-ap-northeast-2.pooler.supabase.com
           DB_PORT:            "6543"
@@ -66,18 +66,18 @@ jobs:
           GEMINI_BATCH_BUDGET_SECONDS: "1800"
         run: python -m src.run_pipeline
 
-      # ── split 경로(7-A: workflow_dispatch engine=split 수동 테스트 전용). 설계 §7 06시 순서.
-      #    분석→종합 순서 유지. step 분리로 실패 파이프라인을 UI에서 즉시 식별.
+      # ── split 경로(7-B: cron·기본 경로). engine!=legacy일 때 실행 — cron은 inputs.engine이 비어 여기로.
+      #    설계 §7 06시 순서. 분석→종합 순서 유지(퀀트가 이전 news_analysis 사용). step 분리로 실패 가시화.
       - name: (split) 수집 daily
-        if: ${{ github.event.inputs.engine == 'split' }}
+        if: ${{ github.event.inputs.engine != 'legacy' }}
         run: python -m src.pipeline_ingest --profile daily
 
       - name: (split) 분석 daily
-        if: ${{ github.event.inputs.engine == 'split' }}
+        if: ${{ github.event.inputs.engine != 'legacy' }}
         run: python -m src.pipeline_analysis --profile daily
 
       - name: (split) 종합 daily
-        if: ${{ github.event.inputs.engine == 'split' }}
+        if: ${{ github.event.inputs.engine != 'legacy' }}
         run: python -m src.pipeline_synthesis --profile daily
 
       # PR-1: 텔레그램 브리핑 보류(비활성). 살리려면 아래 step 주석 해제 +
