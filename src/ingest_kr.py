@@ -21,9 +21,12 @@ import logging
 import os
 import re
 import time
+from contextlib import redirect_stdout
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 from zoneinfo import ZoneInfo
+
+T = TypeVar("T")
 
 import numpy as np
 import pandas as pd
@@ -37,7 +40,7 @@ from tenacity import (
 )
 
 from src.analyst_common import normalize_rating_label_score
-from src.external_timeout import run_with_timeout
+from src.external_timeout import ExternalCallTimeout, run_with_timeout
 from src.schemas import AnalystRow, FundamentalsRow, PriceDailyRow, ValuationRow
 
 logger = logging.getLogger(__name__)
@@ -47,9 +50,29 @@ PRICE_LOOKBACK_DAYS: int = 730   # 2년치 (compute_indicators SMA200 용)
 FS_BGN_YEARS: int = 4            # DART 재무 조회 연수
 KR_DAILY_CLOSE_HOUR: int = 16    # KST 기준 일봉 종가 확정 후 조회 시각(완충 포함)
 KST = ZoneInfo("Asia/Seoul")
-# pykrx/KRX 호출 하드 타임아웃(초). KRX 서버 무응답 시 종목 단위로 끊고 다음 종목 진행.
-# (#37에서 Gemini·yfinance엔 timeout을 걸었으나 pykrx/KRX는 누락 — 06시 split이 90분 timeout으로 잘린 원인)
-KRX_HTTP_TIMEOUT_S: float = float(os.getenv("KRX_HTTP_TIMEOUT_S", "40"))
+# KR 외부 호출 하드 타임아웃(초). 무응답 시 종목/호출 단위로 끊고 다음으로 진행.
+# (#37은 Gemini·yfinance만, #49는 pykrx OHLCV만 막았으나 실제 06시 행 지점은 dart-fss
+#  회사목록 로드("Loading Stock Market Information")였다 — pykrx·DART 모든 진입점에 적용.)
+KRX_HTTP_TIMEOUT_S: float = float(os.getenv("KRX_HTTP_TIMEOUT_S", "40"))   # pykrx
+DART_HTTP_TIMEOUT_S: float = float(os.getenv("DART_HTTP_TIMEOUT_S", "40"))  # dart-fss
+
+
+def _bounded(label: str, fn: Callable[[], T], timeout: float) -> T:
+    """KR 외부(pykrx/dart-fss) 동기 호출을 하드 타임아웃으로 감싸는 공통 래퍼.
+
+    - timeout 초과 시 ExternalCallTimeout → 호출부에서 종목/호출 단위 격리.
+    - 라이브러리의 stdout 스피너·로그인 안내 소음을 억제(우리 logging은 별도 핸들러라 무관, 데이터 무영향).
+    KR 수집의 모든 pykrx·DART 진입점은 반드시 이 래퍼를 거친다(누락 방지).
+    """
+    def _call() -> T:
+        with open(os.devnull, "w") as devnull, redirect_stdout(devnull):
+            return fn()
+
+    try:
+        return run_with_timeout(timeout, _call)
+    except ExternalCallTimeout:
+        logger.warning("%s: 외부 호출 타임아웃 (%.0fs 초과) — 끊고 진행", label, timeout)
+        raise
 
 # DART 손익계산서 계정과목 후보 (한국어)
 _REVENUE_LABELS: frozenset[str] = frozenset({
@@ -117,19 +140,14 @@ def _resolve_kr_price_target_date(now: Optional[datetime] = None) -> date:
     reraise=True,
 )
 def _pykrx_ohlcv(code: str, fromdate: str, todate: str) -> pd.DataFrame:
-    from contextlib import redirect_stdout
-
     from pykrx import stock as pykrx_stock  # 지연 임포트 (단위 테스트 격리)
 
-    def _call() -> pd.DataFrame:
-        # pykrx는 KRX 로그인 안내·"Loading..." 진행 스피너를 stdout print로 출력한다.
-        # KRX_ID/KRX_PW 없이도 익명 조회가 동작하므로(첫 종목 485 rows 성공) 경고는 무해 —
-        # 매 종목 반복되는 stdout 소음만 억제한다(우리 logging은 별도 핸들러라 영향 없음, 데이터 무관).
-        with open(os.devnull, "w") as devnull, redirect_stdout(devnull):
-            return pykrx_stock.get_market_ohlcv_by_date(fromdate, todate, code)
-
-    # KRX 서버 무응답 시 무한 대기 방지 — 하드 타임아웃 후 ExternalCallTimeout으로 종목 단위 격리.
-    return run_with_timeout(KRX_HTTP_TIMEOUT_S, _call)
+    # pykrx는 KRX_ID/KRX_PW 없이도 익명 조회가 동작(경고는 무해). 무응답 시 하드 타임아웃으로 끊는다.
+    return _bounded(
+        f"pykrx.ohlcv:{code}",
+        lambda: pykrx_stock.get_market_ohlcv_by_date(fromdate, todate, code),
+        KRX_HTTP_TIMEOUT_S,
+    )
 
 
 def fetch_kr_prices(
@@ -334,12 +352,49 @@ def _parse_fs_rows(
 def _dart_extract_fs(corp, bgn_de: str, separate: bool, report_tp: str):
     # dart-fss 0.4.16: Corp.extract_fs(bgn_de, separate, report_tp, ...).
     # separate=False → 연결(CFS), True → 개별/별도(OFS). report_tp: 'annual'/'quarter'.
-    return corp.extract_fs(
-        bgn_de=bgn_de,
-        separate=separate,
-        report_tp=report_tp,
-        progressbar=False,
+    # DART 재무 추출 HTTP는 무응답 가능 → 하드 타임아웃으로 끊고 상위 try/except가 격리.
+    return _bounded(
+        f"dart.extract_fs:{getattr(corp, 'corp_code', '?')}:{report_tp}:{'OFS' if separate else 'CFS'}",
+        lambda: corp.extract_fs(
+            bgn_de=bgn_de,
+            separate=separate,
+            report_tp=report_tp,
+            progressbar=False,
+        ),
+        DART_HTTP_TIMEOUT_S,
     )
+
+
+# DART 회사 목록은 종목 무관 1회 로드("Loading Stock Market Information")다 — 이 로드가 무응답이면
+# (06시 행의 실제 지점) 종목마다 재시도하면 매번 재행한다. 성공/실패를 이번 실행 동안 캐시해 막는다.
+_corp_list_state: Optional[tuple[str, object]] = None
+
+
+def _reset_corp_list_cache() -> None:
+    """테스트/재실행용 — 모듈 캐시 초기화."""
+    global _corp_list_state
+    _corp_list_state = None
+
+
+def _get_corp_list_bounded(dart) -> object:
+    """`dart.get_corp_list()`(회사목록 로드)를 하드 타임아웃으로 감싼다.
+
+    dart-fss의 CorpList는 Singleton이지만 로드 도중 끊기면 미완료 상태로 남아 다음 호출이 다시
+    로드(재행)한다. 따라서 실패를 모듈 캐시에 남겨 이번 실행의 나머지 종목은 즉시 건너뛴다.
+    """
+    global _corp_list_state
+    if _corp_list_state is not None:
+        kind, value = _corp_list_state
+        if kind == "ok":
+            return value
+        raise ExternalCallTimeout("DART 회사 목록 로드가 이번 실행에서 실패 — 종목별 재시도 생략")
+    try:
+        corp_list = _bounded("dart.get_corp_list", dart.get_corp_list, DART_HTTP_TIMEOUT_S)
+    except Exception:
+        _corp_list_state = ("fail", None)
+        raise
+    _corp_list_state = ("ok", corp_list)
+    return corp_list
 
 
 def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
@@ -354,7 +409,7 @@ def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
     # dart-fss 버전에 따라 find_by_stock_code가 단일 Corp 또는 list[Corp]를 반환한다.
     # 단일 Corp를 corps[0]로 인덱싱하면 "'Corp' object is not subscriptable"로 죽으므로
     # 두 형태를 모두 처리한다.
-    corp_list = dart.get_corp_list()
+    corp_list = _get_corp_list_bounded(dart)
     found = corp_list.find_by_stock_code(code)
     if not found:
         logger.warning("%s: DART 기업 코드 없음 (code=%s)", ticker, code)
