@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+import threading
 from datetime import date
 from typing import Optional
 
@@ -276,6 +278,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0 if result["status"] in ("success", "partial") else 1
 
 
+def _residual_nondaemon_threads() -> list[str]:
+    """메인 스레드를 제외한, 아직 살아있는 비-데몬 스레드 이름 목록.
+
+    비-데몬 스레드가 남아 있으면 `sys.exit()`가 join 대기로 막혀 프로세스가 종료되지 못한다
+    (06시 split 90분 timeout 사고의 메커니즘). __main__에서 진단 로그 + 강제 종료에 사용.
+    """
+    main_thread = threading.main_thread()
+    return [
+        t.name
+        for t in threading.enumerate()
+        if t is not main_thread and t.is_alive() and not t.daemon
+    ]
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    sys.exit(main())
+    _code = main()
+    # P0 안전망: run()에서 DB commit/flush는 모두 끝난 상태. 외부 라이브러리가 비-데몬 스레드를
+    # 남겨 sys.exit()가 막히는 일을 막기 위해, 잔류 스레드를 진단 로그로 남기고 강제 종료한다.
+    _residual = _residual_nondaemon_threads()
+    if _residual:
+        logger.warning("잔류 비-데몬 스레드 %d개 — 강제 종료로 프로세스 행 방지: %s", len(_residual), _residual)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_code)
