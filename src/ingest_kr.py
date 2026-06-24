@@ -35,6 +35,7 @@ from bs4 import BeautifulSoup
 from tenacity import (
     before_sleep_log,
     retry,
+    retry_if_not_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
@@ -397,10 +398,33 @@ def _get_corp_list_bounded(dart) -> object:
     return corp_list
 
 
+_dart_spinner_disabled = False
+
+
+def _disable_dart_spinner() -> None:
+    """P0: dart-fss의 yaspin 스피너를 끈다.
+
+    스피너 스레드는 비-데몬이고 `_load()`에 try/finally가 없어, 우리 DART 타임아웃(SIGALRM)이
+    회사목록 다운로드 중 발화하면 `spinner.stop()`을 건너뛰어 스레드가 영구 회전한다.
+    비-데몬 스레드 1개면 `sys.exit()`가 join 대기로 막혀 90분 워크플로 timeout까지 매달린다.
+    스피너를 비활성화하면 스레드 자체가 생기지 않아 누수가 원천 차단된다.
+    """
+    global _dart_spinner_disabled
+    if _dart_spinner_disabled:
+        return
+    try:
+        from dart_fss.utils import enable_spinner
+        enable_spinner(False)
+        _dart_spinner_disabled = True
+    except Exception as exc:  # pragma: no cover - 방어적
+        logger.warning("dart-fss 스피너 비활성화 실패(비치명적): %s", exc)
+
+
 def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
     """dart-fss로 KR 종목 연간·분기 재무 수집."""
     import dart_fss as dart  # 지연 임포트
 
+    _disable_dart_spinner()  # P0: 비-데몬 스피너 스레드 누수 원천 차단(어떤 DART 호출보다 먼저)
     dart.set_api_key(api_key=_get_dart_api_key())
     code = _clean_ticker(ticker)
     bgn_de = (date.today() - timedelta(days=365 * FS_BGN_YEARS)).strftime("%Y%m%d")
@@ -472,6 +496,10 @@ _KR_WEB_HEADERS: dict[str, str] = {
     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
 }
 KR_WEB_SLEEP: float = 1.0   # 요청 사이 정중한 간격(레이트리밋 회피)
+# P1: connect/read 분리 타임아웃. CI에서 comp.fnguide.com이 connect 단계에서 막히면(이그레스 차단)
+# 종목당 15초×재시도3회≈51초를 낭비했다 → connect를 짧게(5초)로 끊고 connect 실패는 재시도하지 않는다.
+KR_WEB_CONNECT_TIMEOUT: float = float(os.getenv("KR_WEB_CONNECT_TIMEOUT", "5"))
+KR_WEB_READ_TIMEOUT: float = float(os.getenv("KR_WEB_READ_TIMEOUT", "15"))
 
 
 def _parse_kr_number(text: Optional[str]) -> Optional[float]:
@@ -494,11 +522,18 @@ def _parse_kr_number(text: Optional[str]) -> Optional[float]:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
+    # connect 실패(ConnectTimeout 등 ConnectionError 계열)는 재시도하지 않고 즉시 포기(빠른 스킵).
+    # read timeout·HTTP 오류 등은 일시적일 수 있어 기존대로 3회 재시도.
+    retry=retry_if_not_exception_type(requests.exceptions.ConnectionError),
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
 def _get_html(url: str) -> bytes:
-    resp = requests.get(url, headers=_KR_WEB_HEADERS, timeout=15)
+    resp = requests.get(
+        url,
+        headers=_KR_WEB_HEADERS,
+        timeout=(KR_WEB_CONNECT_TIMEOUT, KR_WEB_READ_TIMEOUT),
+    )
     resp.raise_for_status()
     return resp.content
 

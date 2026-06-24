@@ -461,36 +461,43 @@ def upsert_stock_action_advice(conn: psycopg.Connection, row: StockActionAdviceR
 
 
 def insert_news_raw(conn: psycopg.Connection, rows: list[NewsRawRow]) -> int:
-    """url_hash 충돌 시 무시(dedupe). 실제 삽입된 행 수 반환."""
+    """url_hash 충돌 시 무시(dedupe). 실제 삽입된 행 수 반환.
+
+    P2: 행마다 왕복하던 것을 `executemany` 배치로(원거리 Supabase Pooler 왕복 571회→배치).
+    psycopg3는 executemany를 파이프라인으로 보내고 rowcount에 누적 영향 행 수를 채운다.
+    ON CONFLICT DO NOTHING 의미는 동일(각 행 0/1행, 배치 내 중복도 동일 처리).
+    """
+    if not rows:
+        return 0
     sql = """
         INSERT INTO news_raw (ticker, source, published_at, title, body, url, url_hash)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (url_hash) DO NOTHING
     """
-    inserted = 0
+    params = [
+        (r.ticker, r.source, r.published_at, r.title, r.body, r.url, r.url_hash)
+        for r in rows
+    ]
     with conn.cursor() as cur:
-        for r in rows:
-            cur.execute(
-                sql,
-                (r.ticker, r.source, r.published_at, r.title, r.body, r.url, r.url_hash),
-            )
-            inserted += cur.rowcount
+        cur.executemany(sql, params)
+        inserted = max(cur.rowcount, 0)
     logger.debug("insert_news_raw: %d new / %d total", inserted, len(rows))
     return inserted
 
 
 def insert_market_news(conn: psycopg.Connection, rows: list[MarketNewsRow]) -> int:
     """url_hash 충돌 시 무시(dedupe). 실제 삽입된 행 수 반환."""
+    if not rows:
+        return 0
     sql = """
         INSERT INTO market_news (source, title, url, url_hash, published_at)
         VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (url_hash) DO NOTHING
     """
-    inserted = 0
-    with conn.cursor() as cur:
-        for r in rows:
-            cur.execute(sql, (r.source, r.title, r.url, r.url_hash, r.published_at))
-            inserted += cur.rowcount
+    params = [(r.source, r.title, r.url, r.url_hash, r.published_at) for r in rows]
+    with conn.cursor() as cur:  # P2: per-row 왕복 → executemany 배치(의미 동일)
+        cur.executemany(sql, params)
+        inserted = max(cur.rowcount, 0)
     logger.debug("insert_market_news: %d new / %d total", inserted, len(rows))
     return inserted
 
