@@ -375,8 +375,19 @@ CREATE TABLE IF NOT EXISTS stock_action_advice (
     divergence_note    TEXT,
     model              TEXT,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- 신규-D: 보유성격 + 집중 리스크 관찰 (비중 컬럼은 보존, 표시에서만 제외)
+    hold_character           TEXT CHECK (hold_character IN ('장기보유', '모멘텀', '단기', '정보부족')),
+    hold_character_secondary JSONB NOT NULL DEFAULT '[]'::jsonb,
+    hold_character_basis     JSONB NOT NULL DEFAULT '[]'::jsonb,
+    concentration_note       TEXT,
     UNIQUE (ticker, asof)
 );
+
+-- 신규-D 컬럼 추가(기존 DB 멱등 마이그레이션 — 기존 컬럼·데이터 보존)
+ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS hold_character TEXT;
+ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS hold_character_secondary JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS hold_character_basis JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS concentration_note TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_stock_action_advice_lookup
     ON stock_action_advice (ticker, asof DESC, created_at DESC);

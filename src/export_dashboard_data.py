@@ -913,6 +913,11 @@ def _group_action_advice_rows(rows: list[dict]) -> dict[str, list[dict]]:
             "divergenceNote": row["divergence_note"],
             "model": row["model"],
             "createdAt": str(row["created_at"]) if row.get("created_at") is not None else None,
+            # 신규-D: 보유성격 + 집중 리스크 관찰
+            "holdCharacter": row.get("hold_character"),
+            "holdCharacterSecondary": row.get("hold_character_secondary") or [],
+            "holdCharacterBasis": row.get("hold_character_basis") or [],
+            "concentrationNote": row.get("concentration_note"),
         })
     return grouped
 
@@ -1076,11 +1081,13 @@ def _load_action_advice_history(conn, tickers: list[str], *, limit_per_ticker: i
         """
         SELECT ticker, asof, direction, current_weight, target_weight_low, target_weight_high,
                weight_action, entry_zone, exit_zone, confidence, rationale,
-               supporting_factors, opposing_factors, divergence_note, model, created_at
+               supporting_factors, opposing_factors, divergence_note, model, created_at,
+               hold_character, hold_character_secondary, hold_character_basis, concentration_note
         FROM (
             SELECT ticker, asof, direction, current_weight, target_weight_low, target_weight_high,
                    weight_action, entry_zone, exit_zone, confidence, rationale,
                    supporting_factors, opposing_factors, divergence_note, model, created_at,
+                   hold_character, hold_character_secondary, hold_character_basis, concentration_note,
                    ROW_NUMBER() OVER (
                      PARTITION BY ticker
                      ORDER BY asof DESC, created_at DESC
