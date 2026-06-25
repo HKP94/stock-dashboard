@@ -1167,45 +1167,37 @@ function PerspectiveComparisonCard({ s, manualEntry }) {
   );
 }
 
+const HOLD_CHARACTER_TONE = { "장기보유": "acc", "모멘텀": "ok", "단기": "warn", "정보부족": "ink3" };
+
 function ActionAdviceCard({ advice, history = [] }) {
   const [showHistory, setShowHistory] = useState(false);
-  const tone = advice?.direction === "매수" || advice?.direction === "비중확대"
-    ? C.ok
-    : advice?.direction === "비중축소" || advice?.direction === "매도"
-      ? C.bad
-      : C.warn;
+  const character = advice?.holdCharacter || "정보부족";
+  const tone = C[HOLD_CHARACTER_TONE[character] || "ink3"];
 
   return (
     <Panel
-      title="액션 제언"
-      sub="근거 기반 제안 · 표시 전용"
+      title="종목 성격 · 액션"
+      sub="보유성격 + 관찰 · 표시 전용(비중 강요 아님)"
       right={<button onClick={() => setShowHistory((v) => !v)} style={{ ...btnGhost, fontSize: 11.5 }}>{showHistory ? "이력 접기 −" : "과거 제언 +"}</button>}
     >
       {!advice ? (
-        <div style={{ padding: "24px 18px", fontSize: 12.5, color: C.ink3 }}>최신 액션 제언이 없습니다.</div>
+        <div style={{ padding: "24px 18px", fontSize: 12.5, color: C.ink3 }}>최신 종목 성격 판단이 없습니다.</div>
       ) : (
         <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12.5, fontWeight: 800, color: tone, background: tone + "14", border: `1px solid ${tone}33`, borderRadius: 999, padding: "5px 10px" }}>{advice.direction}</span>
-            <span style={{ fontSize: 11.5, color: C.ink2 }}>신뢰도 {advice.confidence}</span>
+            <span style={{ fontSize: 9.5, fontWeight: 700, color: C.ink3, letterSpacing: ".04em" }}>보유성격</span>
+            <span style={{ fontSize: 12.5, fontWeight: 800, color: tone, background: tone + "14", border: `1px solid ${tone}33`, borderRadius: 999, padding: "5px 10px" }}>{character}</span>
+            {(advice.holdCharacterSecondary || []).map((t) => (
+              <span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.ink2, background: C.surface2, border: `1px solid ${C.line2}`, borderRadius: 999, padding: "3px 8px" }}>+{t}</span>
+            ))}
+            <span style={{ fontSize: 11.5, color: C.ink2, marginLeft: 4 }}>신뢰도 {advice.confidence}</span>
             <span className="mono" style={{ fontSize: 10.5, color: C.ink3 }}>{advice.asof}</span>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
-              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>현재 비중</MonoCaps>
-              <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800, color: C.ink }}>{advice.currentWeight != null ? `${advice.currentWeight}%` : "0%"}</div>
+          {(advice.holdCharacterBasis || []).length > 0 && (
+            <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
+              {advice.holdCharacterBasis.map((b) => `${b.source} ${b.value}`).join(" · ")}
             </div>
-            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
-              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>목표 비중</MonoCaps>
-              <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800, color: C.ink }}>
-                {advice.targetWeightLow != null && advice.targetWeightHigh != null ? `${advice.targetWeightLow}~${advice.targetWeightHigh}%` : "—"}
-              </div>
-            </div>
-            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
-              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>조정 방향</MonoCaps>
-              <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800, color: C.ink }}>{advice.weightAction || "—"}</div>
-            </div>
-          </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
               <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>진입 구간</MonoCaps>
@@ -1244,6 +1236,12 @@ function ActionAdviceCard({ advice, history = [] }) {
               </div>
             </div>
           </div>
+          {!!advice.concentrationNote && (
+            <div style={{ border: `1px solid ${C.line2}`, background: C.surface2, borderRadius: 8, padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>관찰 · 집중 리스크</MonoCaps>
+              <div style={{ marginTop: 6, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>{cleanDisplayText(advice.concentrationNote)}</div>
+            </div>
+          )}
         </div>
       )}
 

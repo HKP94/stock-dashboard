@@ -133,6 +133,7 @@ def test_synthesis_action_numbers_invariant_to_llm():
         supportingFactors=None,
         opposingFactors=None,
         divergenceNote=None,
+        concentrationNote=None,  # 신규-D: 실제 narrative 스키마와 동일하게 필드 포함
     )
     _, rows_none = _new_daily(narrative=None)
     _, rows_narr = _new_daily(narrative=narrative)
