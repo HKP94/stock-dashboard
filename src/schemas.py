@@ -176,6 +176,11 @@ class StockActionAdviceRow(BaseModel):
     divergence_note: Optional[str] = None
     model: Optional[str] = None
     created_at: Optional[datetime] = None
+    # 신규-D: 보유성격 + 집중 리스크 관찰 (기존 비중 컬럼은 보존, 표시에서만 제외)
+    hold_character: Optional[Literal["장기보유", "모멘텀", "단기", "정보부족"]] = None
+    hold_character_secondary: list[str] = Field(default_factory=list)
+    hold_character_basis: list[dict[str, Any]] = Field(default_factory=list)
+    concentration_note: Optional[str] = None
 
 
 class NewsRawRow(BaseModel):
@@ -494,6 +499,8 @@ class StockActionAdviceNarrativeOutput(BaseModel):
     divergenceNote: Optional[str] = None
     supportingFactors: list[dict[str, Any]] = Field(default_factory=list)
     opposingFactors: list[dict[str, Any]] = Field(default_factory=list)
+    # 신규-D: 집중 리스크 관찰 노트의 '어휘만' 다듬은 버전(선택). 구조 재생성 금지 — 가드 통과 시에만 채택.
+    concentrationNote: Optional[str] = None
 
 
 # ──────────────────────────────────────────────────────────────
