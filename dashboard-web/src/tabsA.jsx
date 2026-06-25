@@ -954,6 +954,13 @@ function AxesCard({ s }) {
               <span key={k} style={{ fontSize: 10.5, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "3px 6px" }}>{k} <b style={{ color: C.ink }}>{v}</b></span>
             ))}
           </div>
+          {/* 신규-A1: 시장 민감도(베타·상관) — 별도 보조 지표, composite와 합산하지 않음 */}
+          <div style={{ marginTop: 10, fontSize: 11, color: C.ink3, lineHeight: 1.5 }}>
+            시장 민감도{" "}
+            {s.beta != null
+              ? <span style={{ color: C.ink2 }}>베타 <b style={{ color: C.ink }}>{s.beta}</b>{s.marketCorr != null && <> · 상관 <b style={{ color: C.ink }}>{s.marketCorr}</b></>} <span style={{ color: C.ink3 }}>({s.betaBenchmark || "자국 지수"}, 1년)</span></span>
+              : <span style={{ color: C.ink3 }}>미산출(데이터 부족)</span>}
+          </div>
         </div>
 
         {/* 축 2: 컨센서스 */}

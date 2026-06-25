@@ -24,7 +24,7 @@ from src.schemas import IndexDailyRow
 
 logger = logging.getLogger(__name__)
 
-BENCHMARK_INDEXES: tuple[str, ...] = ("^KS11", "^GSPC", "^IXIC")
+BENCHMARK_INDEXES: tuple[str, ...] = ("^KS11", "^KQ11", "^GSPC", "^IXIC")
 DEFAULT_PERIOD = "5y"
 MAX_EXPECTED_BUSINESS_GAP = 5
 YFINANCE_TIMEOUT_SECONDS = 20.0
