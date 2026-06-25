@@ -69,7 +69,7 @@ from src.ingest_us import run_us_ingest
 from src import pipeline_analysis, pipeline_ingest, pipeline_synthesis
 from src.schemas import StockDailyRecord
 from src.schemas import StockActionAdviceRow
-from src.stock_action_advice import build_action_frame
+from src.stock_action_advice import build_action_frame, finalize_concentration_note
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,14 @@ def _step_action_advice(conn: psycopg.Connection, errors: list) -> None:
                     opposing_factors=(narrative.opposingFactors if narrative and narrative.opposingFactors else frame["opposing_factors"]),
                     divergence_note=(narrative.divergenceNote if narrative and narrative.divergenceNote is not None else frame["divergence_note"]),
                     model=(_get_manual_research_model() if narrative else "deterministic-fallback"),
+                    hold_character=frame["hold_character"],
+                    hold_character_secondary=frame["hold_character_secondary"],
+                    hold_character_basis=frame["hold_character_basis"],
+                    concentration_note=finalize_concentration_note(
+                        frame["concentration_note"],
+                        (narrative.concentrationNote if narrative else None),
+                        frame["current_weight"],
+                    ),
                 )
                 upsert_stock_action_advice(conn, row)
                 conn.commit()
