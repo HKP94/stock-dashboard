@@ -30,6 +30,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.display_signals import compute_display_signals
+from src.compute_quant import _market_benchmark  # 신규-A1: 종목 벤치마크 라벨용
+
+# 신규-A1: 베타 벤치마크 코드 → 표시 라벨
+_BETA_BENCHMARK_LABEL = {"^KS11": "코스피", "^KQ11": "코스닥", "^GSPC": "S&P500"}
 from src.ingest_drivers import DRIVER_CATALOG
 from src.strategies import RETROSPECTIVE_STRATEGIES, STRATEGY_BY_NAME, TRUE_STRATEGIES
 
@@ -1541,7 +1545,7 @@ def build_data() -> dict:
             ind_map[tk2]["chg_pct"] = _f(r["chg_pct"])
 
         cur.execute("""
-            SELECT DISTINCT ON (ticker) ticker, momentum, value, quality, growth, sentiment, composite, fscore, flags
+            SELECT DISTINCT ON (ticker) ticker, momentum, value, quality, growth, sentiment, composite, fscore, flags, beta, market_corr
             FROM quant_scores ORDER BY ticker, asof DESC
         """)
         quant_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
@@ -1780,6 +1784,10 @@ def build_data() -> dict:
                     "g": round(grow),
                     "s": round(sent_f),
                 },
+                # 신규-A1: 시장 민감도(퀀트 축 별도 팩터, composite 미합산). None=미산출.
+                "beta":       _f(q.get("beta")),
+                "marketCorr": _f(q.get("market_corr")),
+                "betaBenchmark": _BETA_BENCHMARK_LABEL.get(_market_benchmark(tk, mk)),
                 "rsi":    round(rsi, 1) if rsi is not None else None,
                 "align":  bool(align) if align is not None else False,
                 "flags":        raw_flags,         # 하위호환
