@@ -331,8 +331,14 @@ CREATE TABLE IF NOT EXISTS quant_scores (
     composite NUMERIC,
     fscore    SMALLINT,   -- Piotroski F-Score(0~9, 실질 0~7) — 스크리너 '안전마진' 입력
     flags     JSONB   NOT NULL DEFAULT '[]',
+    beta        NUMERIC,  -- 신규-A1: 자국 지수 대비 베타(별도 시장민감도 팩터, composite 미합산)
+    market_corr NUMERIC,  -- 신규-A1: 자국 지수 대비 상관계수
     PRIMARY KEY (ticker, asof)
 );
+
+-- 신규-A1 컬럼 추가(기존 DB 멱등 마이그레이션)
+ALTER TABLE quant_scores ADD COLUMN IF NOT EXISTS beta        NUMERIC;
+ALTER TABLE quant_scores ADD COLUMN IF NOT EXISTS market_corr NUMERIC;
 
 -- =============================================================
 -- 포트폴리오 (F1 — KIS 잔고 스냅샷)

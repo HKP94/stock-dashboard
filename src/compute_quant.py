@@ -14,6 +14,7 @@ compute_quant.py — 팩터 스코어링 엔진 (PRD §F4)
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -124,6 +125,84 @@ def _floatify(row: dict) -> dict:
             except (TypeError, ValueError):
                 out[col] = None
     return out
+
+
+# ──────────────────────────────────────────────────────────────
+# 신규-A1: 시장 베타·상관 (자국 지수 대비, index_daily 저장 데이터·결정론·§F7 진짜 계산)
+#   - 퀀트 축 안의 별도 시장 민감도 팩터(composite에 합산하지 않음).
+#   - 라이브 yfinance가 아니라 index_daily(저장)를 써 재현성·무네트워크.
+# ──────────────────────────────────────────────────────────────
+BETA_WINDOW_DAYS = int(os.getenv("BETA_WINDOW_DAYS", "252"))   # 약 1년 거래일
+BETA_MIN_OBS = int(os.getenv("BETA_MIN_OBS", "60"))           # 공통 거래일 최소 관측 수
+# 벤치마크: KR→코스피, US→S&P500. 코스닥 상장은 ^KQ11.
+# 코스닥 판별 자동화(pykrx 보드 엔드포인트)가 현재 불가 → 1차 ^KS11 기본 +
+# 확정 코스닥 종목 allowlist(env KOSDAQ_TICKERS로 보강). 보드 자동 분류는 후속 백로그.
+_KOSDAQ_DEFAULT: frozenset[str] = frozenset({"059090", "213420", "338220"})  # 미코·덕산네오룩스·뷰노
+
+
+def _kosdaq_codes() -> set[str]:
+    env = os.getenv("KOSDAQ_TICKERS", "")
+    extra = {c.strip().split(".")[0] for c in env.split(",") if c.strip()}
+    return set(_KOSDAQ_DEFAULT) | extra
+
+
+def _market_benchmark(ticker: str, market: str) -> str:
+    """종목의 벤치마크 지수 코드. US→^GSPC, KR→^KQ11(코스닥)·^KS11(코스피 기본)."""
+    if market == "US":
+        return "^GSPC"
+    code = ticker.split(".")[0]
+    return "^KQ11" if code in _kosdaq_codes() else "^KS11"
+
+
+def _fetch_index_closes(conn: psycopg.Connection, index_code: str, days: int) -> pd.DataFrame:
+    """index_daily에서 최근 days일치 종가(오름차순). 읽기 경계 float."""
+    sql = "SELECT asof, close FROM index_daily WHERE index_code=%s ORDER BY asof DESC LIMIT %s"
+    with conn.cursor() as cur:
+        cur.execute(sql, (index_code, days))
+        rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["close"])
+    df = pd.DataFrame([dict(r) for r in rows])
+    df["asof"] = pd.to_datetime(df["asof"])
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    return df.sort_values("asof").set_index("asof")[["close"]]
+
+
+def compute_beta_corr(
+    price_df: pd.DataFrame,
+    bench_df: pd.DataFrame,
+    *,
+    window: Optional[int] = None,
+    min_obs: Optional[int] = None,
+) -> tuple[Optional[float], Optional[float]]:
+    """종목 vs 벤치마크 일간 수익률로 베타·상관 산출(OLS cov/var). 결측·부족 시 (None, None).
+
+    beta = cov(x,y)/var(x), corr = cov/(std_x*std_y). x=지수 수익률, y=종목 수익률.
+    §F7: asof까지의 과거 수익률만 사용하는 진짜 통계(룩어헤드 없음, 회고 아님).
+    """
+    window = window or BETA_WINDOW_DAYS
+    min_obs = min_obs or BETA_MIN_OBS
+    if price_df is None or price_df.empty or bench_df is None or bench_df.empty:
+        return None, None
+    rs = pd.to_numeric(price_df["close"], errors="coerce").pct_change(fill_method=None).dropna()
+    rm = pd.to_numeric(bench_df["close"], errors="coerce").pct_change(fill_method=None).dropna()
+    common = rs.index.intersection(rm.index)
+    if len(common) < min_obs:
+        return None, None
+    common = common.sort_values()[-window:]
+    y = rs.loc[common].to_numpy(dtype=float)
+    x = rm.loc[common].to_numpy(dtype=float)
+    xm = x - x.mean()
+    ym = y - y.mean()
+    var_x = float((xm ** 2).mean())
+    if var_x == 0:
+        return None, None
+    cov = float((xm * ym).mean())
+    beta = cov / var_x
+    std_x = var_x ** 0.5
+    std_y = float((ym ** 2).mean()) ** 0.5
+    corr = cov / (std_x * std_y) if std_x > 0 and std_y > 0 else None
+    return round(beta, 3), (round(corr, 3) if corr is not None else None)
 
 
 def _fetch_ticker_market(ticker: str, conn: psycopg.Connection) -> str:
@@ -595,6 +674,17 @@ def compute_quant_universe(
     analyst_map: dict[str, tuple] = {}
     sent_map: dict[str, Optional[float]] = {}
     idio_vol_map: dict[str, Optional[float]] = {}
+    beta_map: dict[str, Optional[float]] = {}
+    corr_map: dict[str, Optional[float]] = {}
+
+    # 신규-A1: 벤치마크 지수 종가를 1회 로드·캐시(종목마다 재쿼리 금지). index_daily 저장 데이터.
+    bench_cache: dict[str, pd.DataFrame] = {}
+    for idx_code in ("^KS11", "^KQ11", "^GSPC"):
+        try:
+            bench_cache[idx_code] = _fetch_index_closes(conn, idx_code, BETA_WINDOW_DAYS + 40)
+        except Exception as exc:
+            logger.warning("벤치마크 %s 로드 실패(베타 None 처리): %s", idx_code, exc)
+            bench_cache[idx_code] = pd.DataFrame(columns=["close"])
 
     for ticker in tickers:
         markets[ticker] = _fetch_ticker_market(ticker, conn)
@@ -606,6 +696,9 @@ def compute_quant_universe(
         prices_60[ticker]  = _fetch_prices(ticker, 60, conn)
 
         idio_vol_map[ticker] = _compute_idio_vol(prices_60[ticker], market_df)
+        # 시장 베타·상관(자국 지수, index_daily). 결측·부족 시 None(0·추정 금지).
+        bench_df = bench_cache.get(_market_benchmark(ticker, markets[ticker]))
+        beta_map[ticker], corr_map[ticker] = compute_beta_corr(prices_252[ticker], bench_df)
 
         v_rows = _fetch_valuation_two(ticker, conn)
         val_map[ticker] = v_rows[0] if v_rows else None
@@ -684,6 +777,8 @@ def compute_quant_universe(
                 composite=round(composite, 2) if composite is not None else None,
                 fscore=fscore_map.get(ticker),  # PR-1: 스크리너 안전마진 입력으로 영속화
                 flags=flags_map[ticker],
+                beta=beta_map.get(ticker),          # 신규-A1: 시장 민감도(별도 팩터, composite 미합산)
+                market_corr=corr_map.get(ticker),
             )
         )
 

@@ -546,8 +546,8 @@ def upsert_news_analysis(conn: psycopg.Connection, rows: list[NewsAnalysisRow]) 
 def upsert_quant_scores(conn: psycopg.Connection, rows: list[QuantScoresRow]) -> None:
     sql = """
         INSERT INTO quant_scores
-            (ticker, asof, momentum, value, quality, growth, sentiment, composite, fscore, flags)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            (ticker, asof, momentum, value, quality, growth, sentiment, composite, fscore, flags, beta, market_corr)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
         ON CONFLICT (ticker, asof) DO UPDATE SET
             momentum  = EXCLUDED.momentum,
             value     = EXCLUDED.value,
@@ -556,7 +556,9 @@ def upsert_quant_scores(conn: psycopg.Connection, rows: list[QuantScoresRow]) ->
             sentiment = EXCLUDED.sentiment,
             composite = EXCLUDED.composite,
             fscore    = EXCLUDED.fscore,
-            flags     = EXCLUDED.flags
+            flags     = EXCLUDED.flags,
+            beta        = EXCLUDED.beta,
+            market_corr = EXCLUDED.market_corr
     """
     with conn.cursor() as cur:
         cur.executemany(
@@ -565,6 +567,7 @@ def upsert_quant_scores(conn: psycopg.Connection, rows: list[QuantScoresRow]) ->
                 (
                     r.ticker, r.asof, r.momentum, r.value, r.quality,
                     r.growth, r.sentiment, r.composite, r.fscore, _to_json(r.flags),
+                    r.beta, r.market_corr,
                 )
                 for r in rows
             ],

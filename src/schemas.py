@@ -296,6 +296,9 @@ class QuantScoresRow(BaseModel):
     composite: Optional[float] = None
     fscore: Optional[int] = None  # Piotroski F-Score(0~9, 실질 0~7) — 스크리너 안전마진 입력
     flags: list[str] = Field(default_factory=list)
+    # 신규-A1: 시장 민감도(자국 지수 대비). 퀀트 축 별도 팩터 — composite에 합산하지 않음.
+    beta: Optional[float] = None
+    market_corr: Optional[float] = None
 
 
 class PortfolioRow(BaseModel):
