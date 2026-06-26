@@ -961,6 +961,10 @@ function AxesCard({ s }) {
               ? <span style={{ color: C.ink2 }}>베타 <b style={{ color: C.ink }}>{s.beta}</b>{s.marketCorr != null && <> · 상관 <b style={{ color: C.ink }}>{s.marketCorr}</b></>} <span style={{ color: C.ink3 }}>({s.betaBenchmark || "자국 지수"}, 1년)</span></span>
               : <span style={{ color: C.ink3 }}>미산출(데이터 부족)</span>}
           </div>
+          {/* Wave 5-B: 시장 점수 → 베타 경로 관찰(사실+영향, 매매 단정 아님). composite 미반영 */}
+          {!!s.marketBetaNote && (
+            <div style={{ marginTop: 6, fontSize: 10.5, color: C.ink3, lineHeight: 1.5, fontStyle: "italic" }}>{s.marketBetaNote}</div>
+          )}
         </div>
 
         {/* 축 2: 컨센서스 */}
