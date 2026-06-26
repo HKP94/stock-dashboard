@@ -92,10 +92,12 @@ def test_find_missing_business_days_flags_large_gap_but_not_holiday_weekend():
 
 
 def test_detect_gap_tickers_flags_five_year_readiness():
+    # last_date는 '오래됨' 미플래그를 위해 실행일 기준 최신으로(하드코딩 날짜는 시간이 지나면 stale로 오판).
+    fresh = date.today()
     conn = _Conn(
         fetch_rows=[
-            {"ticker": "AAA", "market": "US", "name": "Alpha", "rows": 480, "last_date": date(2026, 6, 18)},
-            {"ticker": "BBB", "market": "KR", "name": "Beta", "rows": 1300, "last_date": date(2026, 6, 18)},
+            {"ticker": "AAA", "market": "US", "name": "Alpha", "rows": 480, "last_date": fresh},
+            {"ticker": "BBB", "market": "KR", "name": "Beta", "rows": 1300, "last_date": fresh},
         ]
     )
 

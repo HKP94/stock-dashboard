@@ -183,6 +183,18 @@ class StockActionAdviceRow(BaseModel):
     concentration_note: Optional[str] = None
 
 
+class MarketScoreRow(BaseModel):
+    """Wave 5-B: 시장 매력도 점수(시장 단위, asof 이력). 결정론 산출, LLM은 해설만."""
+    asof: date
+    region: Literal["KR", "US"]
+    score: float                       # 0~100 (divergence 시 50쪽으로 수축)
+    direction: Literal["강세", "중립", "약세"]
+    confidence: Literal["상", "중", "하"]
+    components: dict[str, Any] = Field(default_factory=dict)
+    divergence_note: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
 class NewsRawRow(BaseModel):
     ticker: str
     source: str

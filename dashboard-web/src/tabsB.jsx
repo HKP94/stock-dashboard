@@ -211,8 +211,36 @@ function MarketColumn({ title, m, regimes }) {
   // PR-2: 시장 매력도(진입 환경) — 레짐·시장폭·변동성 종합. 단일 점수 아님, 환경 평가.
   const att = m.attractiveness;
   const envCol = att ? (att.env === "우호" ? C.ok : att.env === "비우호" ? C.bad : C.ink2) : C.ink3;
+  // Wave 5-B: 시장 매력도 점수·방향·신뢰도(결정론). 단일 점수 강요 아님 — 근거·신뢰도 동반.
+  const ms = m.marketScore;
+  const dirCol = ms ? (ms.direction === "강세" ? C.ok : ms.direction === "약세" ? C.bad : C.ink2) : C.ink3;
   return <Panel title={title} right={<RegimeBadge regime={m.regime} regimes={regimes} />}>
     <div style={{ padding: "16px 18px" }}>
+      {ms && (
+        <div style={{ border: `1px solid ${dirCol}33`, background: dirCol + "0E", borderRadius: 9, padding: "12px 14px", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+            <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>시장 매력도</MonoCaps>
+            <Num size={26} weight={800} color={dirCol}>{ms.score}</Num>
+            <span style={{ fontSize: 11, color: C.ink3 }}>/100</span>
+            <span style={{ fontSize: 13, fontWeight: 800, color: dirCol, background: dirCol + "14", border: `1px solid ${dirCol}33`, borderRadius: 999, padding: "3px 10px" }}>{ms.direction}</span>
+            <span style={{ fontSize: 11, color: C.ink2 }}>신뢰도 {ms.confidence}</span>
+          </div>
+          {ms.components?.subscores && (
+            <div style={{ display: "flex", gap: 5, marginTop: 9, flexWrap: "wrap" }}>
+              {Object.entries({ trend: "추세", vol: "변동성", macro: "매크로", breadth: "시장폭" }).map(([k, lbl]) =>
+                ms.components.subscores[k] != null && (
+                  <span key={k} style={{ fontSize: 10, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "2px 6px" }}>
+                    {lbl} <b style={{ color: ms.components.subscores[k] > 0 ? C.ok : ms.components.subscores[k] < 0 ? C.bad : C.ink2 }}>{ms.components.subscores[k] > 0 ? "+" : ""}{ms.components.subscores[k]}</b>
+                  </span>
+                ))}
+            </div>
+          )}
+          {ms.divergenceNote && (
+            <div style={{ fontSize: 11, color: C.warn, marginTop: 8, lineHeight: 1.5 }}>⚠ {ms.divergenceNote}</div>
+          )}
+          <div style={{ fontSize: 10.5, color: C.ink3, marginTop: 7 }}>환경·방향 평가일 뿐 매매 신호가 아닙니다.</div>
+        </div>
+      )}
       {att && (
         <div style={{ border: `1px solid ${envCol}33`, background: envCol + "0E", borderRadius: 9, padding: "12px 14px", marginBottom: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

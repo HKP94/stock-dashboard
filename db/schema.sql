@@ -546,3 +546,21 @@ ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS regime_returns JSONB NOT N
 CREATE UNIQUE INDEX IF NOT EXISTS uq_backtest_results_strategy_track_horizon
     ON backtest_results (strategy, track, horizon)
     WHERE strategy IS NOT NULL AND track IS NOT NULL AND horizon IS NOT NULL;
+
+-- =============================================================
+-- 시장 매력도 점수 (Wave 5-B) — 시장 단위 asof 이력, 분석 소유
+-- =============================================================
+CREATE TABLE IF NOT EXISTS market_score (
+    asof            DATE        NOT NULL,
+    region          TEXT        NOT NULL CHECK (region IN ('KR', 'US')),
+    score           NUMERIC     NOT NULL,   -- 0~100 (divergence 시 50쪽 수축)
+    direction       TEXT        NOT NULL CHECK (direction IN ('강세', '중립', '약세')),
+    confidence      TEXT        NOT NULL CHECK (confidence IN ('상', '중', '하')),
+    components      JSONB       NOT NULL DEFAULT '{}'::jsonb,  -- 서브스코어·근거 분해
+    divergence_note TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (asof, region)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_score_lookup
+    ON market_score (region, asof DESC);

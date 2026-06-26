@@ -38,6 +38,7 @@ from src.schemas import (
     MarketDailyRow,
     MarketNewsRow,
     MarketNewsSummaryRow,
+    MarketScoreRow,
     MarketViewManualRow,
     MacroIndicatorRow,
     MacroSummaryRow,
@@ -573,6 +574,31 @@ def upsert_quant_scores(conn: psycopg.Connection, rows: list[QuantScoresRow]) ->
             ],
         )
     logger.debug("upsert_quant_scores: %d rows", len(rows))
+
+
+def upsert_market_score(conn: psycopg.Connection, rows: list[MarketScoreRow]) -> None:
+    """Wave 5-B 시장 매력도 점수 upsert(asof,region). 같은 날 재실행은 최신으로 갱신."""
+    sql = """
+        INSERT INTO market_score
+            (asof, region, score, direction, confidence, components, divergence_note)
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+        ON CONFLICT (asof, region) DO UPDATE SET
+            score           = EXCLUDED.score,
+            direction       = EXCLUDED.direction,
+            confidence      = EXCLUDED.confidence,
+            components      = EXCLUDED.components,
+            divergence_note = EXCLUDED.divergence_note
+    """
+    with conn.cursor() as cur:
+        cur.executemany(
+            sql,
+            [
+                (r.asof, r.region, r.score, r.direction, r.confidence,
+                 _to_json(r.components), r.divergence_note)
+                for r in rows
+            ],
+        )
+    logger.debug("upsert_market_score: %d rows", len(rows))
 
 
 def upsert_portfolio(conn: psycopg.Connection, rows: list[PortfolioRow]) -> None:
