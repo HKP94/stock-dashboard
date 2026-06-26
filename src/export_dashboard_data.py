@@ -1447,6 +1447,47 @@ def _build_daily_brief(stocks: list[dict], market: dict) -> dict:
     }
 
 
+def _market_beta_note(score: Optional[float], direction: Optional[str], beta: Optional[float]) -> Optional[str]:
+    """Wave 5-B: 시장 점수 → 종목 베타 경로 '관찰'(사실+영향, 매매 단정 금지). composite 미변경."""
+    s = _f(score)
+    b = _f(beta)
+    if s is None or b is None or not direction:
+        return None
+    if direction == "약세" and b >= 1.2:
+        return f"시장 {round(s)}점(약세) · 베타 {b} — 시장 약세 국면에서 낙폭이 시장보다 클 수 있습니다(관찰)."
+    if direction == "강세" and b >= 1.2:
+        return f"시장 {round(s)}점(강세) · 베타 {b} — 시장 강세 국면에서 탄력이 시장보다 클 수 있습니다."
+    if b <= 0.7:
+        return f"시장 {round(s)}점({direction}) · 베타 {b} — 시장 변동에 상대적으로 둔감한 편입니다."
+    return None
+
+
+def _attach_market_score(conn, market: dict, stocks: list[dict]) -> None:
+    """Wave 5-B: market_score(지역별 최신)를 market.kr/us에 부착 + 종목 베타 경로 관찰 합성."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT ON (region) region, asof, score, direction, confidence, components, divergence_note
+        FROM market_score ORDER BY region, asof DESC
+        """
+    )
+    by_region: dict[str, dict] = {}
+    for r in cur.fetchall():
+        by_region[r["region"]] = {
+            "asof": str(r["asof"]), "score": _f(r["score"]), "direction": r["direction"],
+            "confidence": r["confidence"], "divergenceNote": r["divergence_note"],
+            "components": r["components"] or {},
+        }
+    for mk_key in ("KR", "US"):
+        ms = by_region.get(mk_key)
+        if ms and mk_key.lower() in market and isinstance(market[mk_key.lower()], dict):
+            market[mk_key.lower()]["marketScore"] = ms
+    for s in stocks:
+        ms = by_region.get(s.get("mk"))
+        if ms:
+            s["marketBetaNote"] = _market_beta_note(ms.get("score"), ms.get("direction"), s.get("beta"))
+
+
 def _attach_market_attractiveness(market: dict, stocks: list[dict]) -> None:
     """PR-2: KR/US 진입 환경(우호/중립/비우호) + 근거. 레짐·시장폭(정배열율)·변동성 종합.
     단일 점수 강요 금지 — 환경 평가 + 근거 서술."""
@@ -1894,6 +1935,8 @@ def build_data() -> dict:
         daily_brief = _build_daily_brief(stocks, market)
         # PR-2: 시장 매력도(진입 환경) — kr/us에 부착
         _attach_market_attractiveness(market, stocks)
+        # Wave 5-B: 시장 매력도 점수·방향 + 종목 베타 경로 관찰
+        _attach_market_score(conn, market, stocks)
         strategy_guidance = _build_strategy_guidance(backtest_data, market)
 
         now = datetime.now()

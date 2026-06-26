@@ -50,8 +50,8 @@ logger = logging.getLogger(__name__)
 RUN_KIND = "pipeline_analysis"
 
 # 단계 순서를 짧은 튜플 상수로 노출 (설계 §5)
-DAILY_STEPS = ("compute_indicators", "compute_quant", "compute_portfolio", "backtest")
-REFRESH_STEPS = ("compute_indicators", "compute_quant")
+DAILY_STEPS = ("compute_indicators", "compute_quant", "market_score", "compute_portfolio", "backtest")
+REFRESH_STEPS = ("compute_indicators", "compute_quant", "market_score")
 
 
 def _load_price_df(ticker: str, conn: psycopg.Connection) -> pd.DataFrame:
@@ -127,6 +127,22 @@ def _step_quant(conn: psycopg.Connection, all_tickers: list[str], errors: list, 
         errors.append(make_error("compute_quant", exc))
 
 
+def _step_market_score(conn: psycopg.Connection, errors: list, counts: dict) -> None:
+    """Wave 5-B: 시장 매력도 점수(KR/US) 결정론 산출·저장. 실패해도 파이프라인 계속."""
+    logger.info("분석: 시장 매력도 점수")
+    try:
+        from src.compute_market_score import compute_market_scores
+        rows = compute_market_scores(conn)
+        if rows:
+            db.upsert_market_score(conn, rows)
+            conn.commit()
+            counts["market_score"] = len(rows)
+    except Exception as exc:
+        conn.rollback()
+        logger.warning("시장 매력도 점수 실패(비치명적): %s", exc)
+        errors.append(make_error("market_score", exc))
+
+
 def _step_portfolio(conn: psycopg.Connection, errors: list, counts: dict) -> None:
     """보유종목 평가 (run_pipeline._step_compute_portfolio). 실패해도 파이프라인 계속."""
     logger.info("분석: 보유종목 평가")
@@ -181,11 +197,13 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
             if profile == PROFILE_DAILY:
                 _step_indicators_daily(conn, all_tickers, errors, counts)
                 _step_quant(conn, all_tickers, errors, counts)
+                _step_market_score(conn, errors, counts)
                 _step_portfolio(conn, errors, counts)
                 _step_backtest(conn, errors, counts)
             else:  # PROFILE_REFRESH — 포트폴리오·백테스트 제외
                 _step_indicators_refresh(conn, all_tickers, errors, counts)
                 _step_quant(conn, all_tickers, errors, counts)
+                _step_market_score(conn, errors, counts)
 
             status = finalize_status(errors)
         except Exception as exc:

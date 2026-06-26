@@ -611,6 +611,7 @@ def _build_region_market_prompt(
         "- summary_md 3~5줄에 반드시 ① 오늘 시장 국면 해석 ② 주목할 리스크 또는 기회 ③ 관심종목군(섹터)에 주는 시사점을 담아라.\n\n"
         "규칙:\n"
         "- 데이터에 없는 종목 신호를 만들지 말고 관찰·해석만 서술하라.\n"
+        "- MarketScore(점수·방향·신뢰도)는 코드가 계산한 값이다. 점수를 새로 만들거나 바꾸지 말고, 그 방향이 왜 그런지 지표로 설명만 하라. 매매 단정(사라/팔아라) 금지.\n"
         "- 과도한 강조 표시(*, **)는 쓰지 마라. 꼭 필요한 강조가 아니면 평문으로 써라.\n"
         f"- 반드시 {region} 시장 고유의 근거(지수 등락·환율/금리·뉴스)를 인용하라.\n\n"
         "아래 JSON 스키마로만, 순수 JSON으로 답하라:\n"
@@ -1406,6 +1407,20 @@ def enrich_market_summary(
         logger.warning("market_daily %s 없음 — 시황 종합 스킵", asof)
         return False
 
+    # Wave 5-B: 시장 매력도 점수(결정론)를 해설 입력으로 주입. LLM은 점수·방향을 만들지 않고 설명만 한다.
+    def _market_score_for(region: str) -> Optional[dict]:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT score, direction, confidence, divergence_note FROM market_score "
+                "WHERE region=%s ORDER BY asof DESC LIMIT 1",
+                (region,),
+            )
+            r = cur.fetchone()
+        if not r:
+            return None
+        return {"score": float(r["score"]), "direction": r["direction"],
+                "confidence": r["confidence"], "divergence_note": r["divergence_note"]}
+
     changes = (market_row.get("payload") or {}).get("changes", {}) if isinstance(market_row.get("payload"), dict) else {}
 
     client = _get_gemini_client()
@@ -1419,6 +1434,7 @@ def enrich_market_summary(
         "KOSPI": market_row.get("kospi"), "KOSPI_chg%": changes.get("kospi"),
         "KOSDAQ": market_row.get("kosdaq"), "KOSDAQ_chg%": changes.get("kosdaq"),
         "USDKRW": market_row.get("usdkrw"), "USDKRW_chg%": changes.get("usdkrw"),
+        "MarketScore": _market_score_for("KR"),  # 코드가 만든 점수·방향(해설만, 생성 금지)
     }
     kr_news = _get_market_news(conn, MARKET_KR_TICKER)
 
@@ -1429,6 +1445,7 @@ def enrich_market_summary(
         "NASDAQ": market_row.get("nasdaq"), "NASDAQ_chg%": changes.get("nasdaq"),
         "VIX": market_row.get("vix"), "VIX_chg%": changes.get("vix"),
         "UST10Y": market_row.get("ust10y"),
+        "MarketScore": _market_score_for("US"),  # 코드가 만든 점수·방향(해설만, 생성 금지)
     }
     us_news = _get_market_news(conn, MARKET_US_TICKER)
 
