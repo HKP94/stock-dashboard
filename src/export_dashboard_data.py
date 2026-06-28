@@ -1854,7 +1854,10 @@ def build_data() -> dict:
                 "safetyParts":  safety_parts,            # {v,q,s} 구성요소
                 "safetyReason": safety_reason,           # 왜 장기보유 후보인가 1줄
                 "tp":     round(tp) if tp else None,
-                "up":     round(upside, 1) if upside else None,
+                # analyst.upside는 분수(0.378)로 저장 — 표시·임계(컨센서스 축 20/5%, 상승여력 %)는
+                # 전부 퍼센트 기준이므로 ×100로 변환(이전 round(upside,1)은 0.378→0.4로 분수를 그대로
+                # 흘려 컨센서스 축이 구조적으로 항상 '낮음'이 되던 버그 — 신규-A2 등급이 매수를 못 내던 원인).
+                "up":     round(upside * 100, 1) if upside else None,
                 "rating": rating,
                 "consensus": {
                     "targetPrice": round(tp) if tp else None,
