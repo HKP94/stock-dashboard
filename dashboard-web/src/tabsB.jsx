@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   C, compColor, flagTone,
   MonoCaps, Num, SentBadge, HoldDot,
-  GaugeBar, RegimeBadge, SignalCard, WeightBars, btnGhost,
+  GaugeBar, RegimeBadge, SignalCard, GradeBadge, WeightBars, btnGhost,
 } from './ui.jsx';
 import { InsightHistoryCard, Panel } from './tabsA.jsx';
 import {
@@ -88,10 +88,16 @@ function MacroCard({ item }) {
 }
 
 // ============================ SCREENER ============================
+// 신규-A2: 등급 발굴 정렬용 — 매수>관망>축소, 동급은 신뢰도 상>중>하 우선.
+const _GRADE_RANK = { "매수": 3, "관망": 2, "축소": 1 };
+const _CONF_RANK = { "상": 3, "중": 2, "하": 1 };
+const gradeScore = (s) => (_GRADE_RANK[s.grade] || 0) * 10 + (_CONF_RANK[s.gradeConfidence] || 0);
+
 export function Screener({ D, nav }) {
   const [showAll, setShowAll] = useState(false);
   const [sortKey, setSortKey] = useState("comp");
   const [sortDir, setSortDir] = useState("desc");
+  const [gradeFilter, setGradeFilter] = useState("all");  // 신규-A2: 등급 발굴 필터
 
   const overall = D.market.overall;
   const regimeBasis = D.market.kr?.regimeBasis || D.market.us?.regimeBasis || "";
@@ -104,11 +110,14 @@ export function Screener({ D, nav }) {
     .sort((a, b) => (b.safety ?? 0) - (a.safety ?? 0))
     .slice(0, 9);
 
-  const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : s.f[k];
-  const unified = [...D.stocks].sort((a, b) => {
-    const d = sortVal(b, sortKey) - sortVal(a, sortKey);
-    return sortDir === "desc" ? d : -d;
-  });
+  const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : k === "grade" ? gradeScore(s) : s.f[k];
+  const unified = [...D.stocks]
+    .filter((s) => gradeFilter === "all" || s.grade === gradeFilter)
+    .sort((a, b) => {
+      const d = sortVal(b, sortKey) - sortVal(a, sortKey);
+      return sortDir === "desc" ? d : -d;
+    });
+  const buyCount = D.stocks.filter((s) => s.grade === "매수").length;
   const setSort = (k) => { if (sortKey === k) setSortDir(sortDir === "desc" ? "asc" : "desc"); else { setSortKey(k); setSortDir("desc"); } };
 
   const Th = ({ k, label }) => <th onClick={k ? () => setSort(k) : undefined} style={{ padding: "9px 10px", textAlign: k ? "right" : "left", cursor: k ? "pointer" : "default", userSelect: "none" }}>
@@ -182,15 +191,25 @@ export function Screener({ D, nav }) {
       </Panel>
     </div>
 
-    <Panel title="전체 종목 · 통합 정렬" sub={`${D.stocks.length}종목 · 컬럼 클릭 시 정렬`}
-      right={<button onClick={() => setShowAll(!showAll)} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 5 }}>{showAll ? "접기 −" : "펼치기 +"}</button>}>
+    <Panel title="전체 종목 · 통합 정렬" sub={`${D.stocks.length}종목 · 등급순/컬럼 클릭 정렬 · 매수 ${buyCount}종목`}
+      right={
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {[["all", "전체"], ["매수", "매수만"], ["관망", "관망"], ["축소", "축소"]].map(([v, label]) => (
+            <button key={v} onClick={() => { setGradeFilter(v); setShowAll(true); }}
+              style={{ border: `1px solid ${gradeFilter === v ? C.acc : C.line2}`, background: gradeFilter === v ? C.accTint : C.surface, color: gradeFilter === v ? C.acc : C.ink2, borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{label}</button>
+          ))}
+          <button onClick={() => setShowAll(!showAll)} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 5 }}>{showAll ? "접기 −" : "펼치기 +"}</button>
+        </div>}>
       {showAll && <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-          <Th label="종목" /><Th k="comp" label="종합" /><Th label="신호" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
+          <Th label="종목" /><Th k="grade" label="등급" /><Th k="comp" label="종합" /><Th label="신호" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
         </tr></thead>
         <tbody>
-          {unified.map((s) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
+          {unified.length === 0 ? (
+            <tr><td colSpan={11} style={{ padding: "22px 12px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>해당 등급 종목이 없습니다.</td></tr>
+          ) : unified.map((s) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
             <td style={{ padding: "9px 10px" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 12.5, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{s.t}·{s.mk}</span></div></td>
+            <td style={{ padding: "7px 10px", textAlign: "center" }}>{s.grade ? <GradeBadge grade={s.grade} confidence={s.gradeConfidence} compact /> : <span style={{ fontSize: 10.5, color: C.ink3 }}>—</span>}</td>
             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={13} weight={700} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num></td>
             <td style={{ padding: "7px 10px" }}><SignalCard signal={s.signal} compact /></td>
             {["m", "v", "q", "g", "s"].map((k) => <td key={k} style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={sortKey === k ? gradeCol(s.f[k]) : C.ink2}>{s.f[k]}</Num></td>)}
