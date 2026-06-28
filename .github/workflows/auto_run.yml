@@ -16,6 +16,7 @@ on:
 
 jobs:
   pipeline:
+    if: github.event_name != 'push'   # push phantom run → skip(회색). schedule·dispatch는 push 아님 → 그대로 실행.
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
