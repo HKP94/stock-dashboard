@@ -902,8 +902,10 @@ function AxesCard({ s }) {
   const [history, setHistory] = useState(s.noteHistory || []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => { setNote(s.note || { horizon: null, attractiveness: null, thesis: "" }); setHistory(s.noteHistory || []); setSaved(false); }, [s.t, s.note, s.noteHistory]);
+  useEffect(() => { setNote(s.note || { horizon: null, attractiveness: null, thesis: "" }); setHistory(s.noteHistory || []); setSaved(false); setConfirmDel(false); }, [s.t, s.note, s.noteHistory]);
   useEffect(() => {
     fetch(`${API}/api/notes/${s.t}`).then((r) => r.json()).then((d) => {
       if (d) { setNote({ horizon: d.horizon, attractiveness: d.attractiveness, thesis: "" }); setHistory(d.history || []); }
@@ -925,6 +927,18 @@ function AxesCard({ s }) {
     setSaving(false);
   };
 
+  const deleteNote = async () => {
+    setDeleting(true);
+    try {
+      const res = await fetch(`${API}/api/notes/${s.t}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setNote({ horizon: null, attractiveness: null, thesis: "" });
+      setHistory([]);
+      setConfirmDel(false);
+    } catch (_) {}
+    setDeleting(false);
+  };
+
   const hasCons = s.tp != null || s.up != null || s.rating;
   const ug = _upsideGrade(s.up);
   const qLevel = _level("quant", s.comp);
@@ -944,9 +958,35 @@ function AxesCard({ s }) {
   );
   const colStyle = { flex: 1, minWidth: 0, padding: "16px 16px", borderRight: `1px solid ${C.line}` };
 
+  const hasNote = history.length > 0 || note.attractiveness != null;
+
   return (
     <Panel title="매력도 — 3축 비교" sub="합산하지 않음 · 축 간 괴리를 그대로 표시 (확인편향 방지)"
-      right={<div style={{ display: "flex", gap: 8, alignItems: "center" }}>{saved && <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>✓ 저장됨</MonoCaps>}{saving && <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>저장 중…</MonoCaps>}</div>}>
+      right={
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {saved && <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>✓ 저장됨</MonoCaps>}
+          {saving && <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>저장 중…</MonoCaps>}
+          {hasNote && !confirmDel && (
+            <button onClick={() => setConfirmDel(true)}
+              style={{ border: `1px solid ${C.line2}`, borderRadius: 6, padding: "3px 9px", fontSize: 11, color: C.ink3, background: "none", cursor: "pointer" }}>
+              내 판단 삭제
+            </button>
+          )}
+          {confirmDel && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: C.bad }}>이력 포함 삭제?</span>
+              <button onClick={deleteNote} disabled={deleting}
+                style={{ border: "none", borderRadius: 6, padding: "3px 9px", fontSize: 11, color: "#fff", background: C.bad, cursor: "pointer", opacity: deleting ? 0.5 : 1 }}>
+                {deleting ? "삭제 중…" : "삭제"}
+              </button>
+              <button onClick={() => setConfirmDel(false)}
+                style={{ border: `1px solid ${C.line2}`, borderRadius: 6, padding: "3px 9px", fontSize: 11, color: C.ink2, background: "none", cursor: "pointer" }}>
+                취소
+              </button>
+            </div>
+          )}
+        </div>
+      }>
       <div style={{ display: "flex", flexWrap: "wrap" }}>
         {/* 축 1: 퀀트 */}
         <div style={colStyle}>

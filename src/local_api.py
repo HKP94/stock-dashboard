@@ -327,8 +327,8 @@ def _patch_data_json_portfolio() -> None:
         logger.warning("data.json 부분 갱신 실패: %s", exc)
 
 
-def _patch_data_json_note(ticker: str, note_data: dict) -> None:
-    """data.json의 해당 종목 notes 필드만 갱신."""
+def _patch_data_json_note(ticker: str, note_data: dict | None) -> None:
+    """data.json의 해당 종목 note/noteHistory 필드 갱신. note_data=None이면 삭제 상태로 클리어."""
     if not _DATA_JSON.exists():
         return
     try:
@@ -337,7 +337,7 @@ def _patch_data_json_note(ticker: str, note_data: dict) -> None:
         for s in data.get("stocks", []):
             if s["t"] == ticker:
                 s["note"] = note_data
-                s["noteHistory"] = _fetch_note_history(ticker)
+                s["noteHistory"] = [] if note_data is None else _fetch_note_history(ticker)
                 break
         with open(_DATA_JSON, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
@@ -350,7 +350,7 @@ def _fetch_note_history(ticker: str) -> list[dict]:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, horizon, attractiveness, thesis, created_at "
-            "FROM stock_note_history WHERE ticker=%s ORDER BY created_at DESC, id DESC",
+            "FROM stock_note_history WHERE ticker=%s AND active=TRUE ORDER BY created_at DESC, id DESC",
             (ticker,),
         )
         return [
@@ -1021,6 +1021,26 @@ def upsert_note(ticker: str, body: NoteIn):
 
     note_data = {"horizon": body.horizon, "attractiveness": body.attractiveness, "thesis": body.thesis}
     _patch_data_json_note(ticker, note_data)
+    return {"ok": True, "ticker": ticker}
+
+
+@app.delete("/api/notes/{ticker}", status_code=200)
+def delete_note(ticker: str):
+    """내 판단 삭제.
+    - stock_notes: 행 물리 삭제 (최신 상태 테이블 — 없음이 삭제 상태)
+    - stock_note_history: active=FALSE 로 비활성화 (이력 보존 원칙)
+    - data.json: note=null, noteHistory=[] 로 클리어
+    """
+    with get_conn() as conn:
+        c = conn.cursor()
+        try:
+            c.execute("DELETE FROM stock_notes WHERE ticker=%s", (ticker,))
+            c.execute("UPDATE stock_note_history SET active=FALSE WHERE ticker=%s", (ticker,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    _patch_data_json_note(ticker, None)
     return {"ok": True, "ticker": ticker}
 
 
