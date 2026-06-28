@@ -147,6 +147,64 @@ def _safety_reason(per, pbr, roe, debt_ratio, fscore) -> str:
     return " · ".join(bits) + " 기반 안전마진 우위"
 
 
+# E-1: 트레이딩 관점 신호 임계값 (결정론, LLM 미사용)
+_TRADING_RSI_LOW  = 35
+_TRADING_RSI_HIGH = 65
+_TRADING_BB_LOW   = 0.2
+_TRADING_BB_HIGH  = 0.8
+
+
+def _compute_trading_signal(
+    rsi14: float | None,
+    bb_pct: float | None,
+    macd_hist: float | None,
+    vol_ratio20: float | None,
+) -> dict:
+    """MACD/볼린저/RSI 3요소로 단기 트레이딩 신호 결정론 계산.
+    반환: {label, score, basis, volNote}
+    label: '단기매수우호'/'중립'/'단기회피'
+    """
+    score = 0
+    basis: list[dict] = []
+
+    if macd_hist is not None:
+        if macd_hist > 0:
+            score += 1
+            basis.append({"source": "MACD", "value": "양(0선 위)"})
+        elif macd_hist < 0:
+            score -= 1
+            basis.append({"source": "MACD", "value": "음(0선 아래)"})
+
+    if bb_pct is not None:
+        if bb_pct < _TRADING_BB_LOW:
+            score += 1
+            basis.append({"source": "BB%B", "value": f"{bb_pct:.2f}(하단 접근)"})
+        elif bb_pct > _TRADING_BB_HIGH:
+            score -= 1
+            basis.append({"source": "BB%B", "value": f"{bb_pct:.2f}(상단 접근)"})
+
+    if rsi14 is not None:
+        if rsi14 < _TRADING_RSI_LOW:
+            score += 1
+            basis.append({"source": "RSI", "value": f"{rsi14:.0f}(과매도)"})
+        elif rsi14 > _TRADING_RSI_HIGH:
+            score -= 1
+            basis.append({"source": "RSI", "value": f"{rsi14:.0f}(과매수)"})
+
+    vol_note = None
+    if vol_ratio20 is not None and vol_ratio20 >= 2.0:
+        vol_note = f"거래량 평균 대비 {vol_ratio20:.1f}배 급증"
+
+    if score >= 2:
+        label = "단기매수우호"
+    elif score <= -2:
+        label = "단기회피"
+    else:
+        label = "중립"
+
+    return {"label": label, "score": score, "basis": basis, "volNote": vol_note}
+
+
 def _rule_based_insight(close, chg, rsi, comp, sent, has_data) -> str:
     """실제 뉴스 요약이 없을 때 보여줄 '규칙기반 한 줄 인사이트'(수치+해석).
     '분석 실패' 원문 대신 결정론적 한 줄을 항상 채운다."""
@@ -1570,7 +1628,10 @@ def build_data() -> dict:
         # PR-1: asof 불일치(신규 종목이 다른 날짜에만 데이터 보유)에 견고하도록
         # indicators/quant/price를 '종목별 최신'으로 조회한다(특정 날짜 고정 X).
         cur.execute("""
-            SELECT DISTINCT ON (ticker) ticker, date, rsi14, disparity20, is_aligned
+            SELECT DISTINCT ON (ticker)
+                ticker, date, rsi14, disparity20, is_aligned,
+                macd_line, macd_signal, macd_hist, bb_upper, bb_lower, bb_pct,
+                stoch_k, stoch_d, vol_ratio20, atr14
             FROM indicators_daily ORDER BY ticker, date DESC
         """)
         ind_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
@@ -1918,6 +1979,25 @@ def build_data() -> dict:
                 # Wave 2-C: 최근 30일 누적 인사이트
                 "insightHistory": ticker_context_map.get(tk, []),
                 "drivers": driver_cards_map.get(tk, []),
+                # E-1: 트레이딩 관점 (투자 등급과 별도 레이어 — 덮어쓰지 않음)
+                "tradingSignal": _compute_trading_signal(
+                    rsi14=_f(ind.get("rsi14")),
+                    bb_pct=_f(ind.get("bb_pct")),
+                    macd_hist=_f(ind.get("macd_hist")),
+                    vol_ratio20=_f(ind.get("vol_ratio20")),
+                ),
+                "tradingIndicators": {
+                    "macdLine":   _f(ind.get("macd_line")),
+                    "macdSignal": _f(ind.get("macd_signal")),
+                    "macdHist":   _f(ind.get("macd_hist")),
+                    "bbUpper":    _f(ind.get("bb_upper")),
+                    "bbLower":    _f(ind.get("bb_lower")),
+                    "bbPct":      _f(ind.get("bb_pct")),
+                    "stochK":     _f(ind.get("stoch_k")),
+                    "stochD":     _f(ind.get("stoch_d")),
+                    "volRatio20": _f(ind.get("vol_ratio20")),
+                    "atr14":      _f(ind.get("atr14")),
+                },
             })
 
         _attach_display_signals(stocks)

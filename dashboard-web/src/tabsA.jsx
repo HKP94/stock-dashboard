@@ -1298,6 +1298,87 @@ function ActionAdviceCard({ advice, history = [] }) {
   );
 }
 
+// E-1: 트레이딩 관점 카드 (투자 등급과 별도 레이어 — 덮어쓰지 않음)
+function TradingSignalCard({ s }) {
+  const ts = s?.tradingSignal;
+  const ti = s?.tradingIndicators;
+  if (!ts || (!ts.label && !ti)) return null;
+
+  const label = ts?.label || "중립";
+  const basis = ts?.basis || [];
+  const volNote = ts?.volNote;
+
+  const labelColor = label === "단기매수우호" ? C.ok : label === "단기회피" ? C.bad : C.ink2;
+  const labelBg    = label === "단기매수우호" ? C.okBg : label === "단기회피" ? C.badBg : C.surface2;
+
+  const rows = [
+    ti?.macdHist != null && { name: "MACD 히스토그램", val: ti.macdHist.toFixed(3), note: ti.macdHist > 0 ? "양(0선 위)" : "음(0선 아래)" },
+    ti?.bbPct    != null && { name: "볼린저 %B",        val: ti.bbPct.toFixed(2),    note: ti.bbPct < 0.2 ? "하단 접근" : ti.bbPct > 0.8 ? "상단 접근" : "중단" },
+    ti?.stochK   != null && { name: "스토캐스틱 %K",   val: ti.stochK.toFixed(1),   note: ti.stochK < 20 ? "과매도" : ti.stochK > 80 ? "과매수" : "" },
+    ti?.volRatio20 != null && { name: "거래량 비율",    val: ti.volRatio20.toFixed(2) + "x", note: ti.volRatio20 >= 2 ? "급증" : "" },
+    ti?.atr14    != null && { name: "ATR(14)",          val: ti.atr14.toFixed(2),    note: "일변동폭 기준" },
+  ].filter(Boolean);
+
+  return (
+    <Panel
+      title="트레이딩 관점"
+      sub="단기 기술적 신호 · 투자 등급과 독립 레이어"
+    >
+      {/* 신호 레이블 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <div style={{
+          padding: "6px 14px", borderRadius: 8, fontSize: 14, fontWeight: 700,
+          background: labelBg, color: labelColor, border: `1px solid ${labelColor}44`,
+        }}>
+          {label}
+        </div>
+        {basis.length > 0 && (
+          <div style={{ fontSize: 11.5, color: C.ink2 }}>
+            {basis.map((b, i) => (
+              <span key={i}>{i > 0 && " · "}<b>{b.source}</b> {b.value}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 투자 등급 divergence 힌트 */}
+      {s?.actionAdviceLatest?.grade && label !== "중립" && (
+        (() => {
+          const grade = s.actionAdviceLatest.grade;
+          const conflict = (grade === "매수" && label === "단기회피") || (grade === "축소" && label === "단기매수우호");
+          if (!conflict) return null;
+          return (
+            <div style={{ fontSize: 11.5, color: C.ink2, background: C.surface2, borderRadius: 6, padding: "8px 12px", marginBottom: 12 }}>
+              투자 등급 <b>{grade}</b> ↔ 트레이딩 <b>{label}</b> 충돌 — 단기 타이밍과 펀더멘털 방향이 다릅니다. 양쪽 근거를 직접 확인하세요.
+            </div>
+          );
+        })()
+      )}
+
+      {volNote && (
+        <div style={{ fontSize: 11.5, color: C.acc, marginBottom: 10 }}>{volNote}</div>
+      )}
+
+      {/* 지표 테이블 */}
+      {rows.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+          {rows.map((r) => (
+            <div key={r.name} style={{ background: C.surface2, borderRadius: 6, padding: "8px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }}>{r.name}</MonoCaps>
+              <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4 }}>{r.val}</div>
+              {r.note && <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 2 }}>{r.note}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 10.5, color: C.ink3, marginTop: 12 }}>
+        §F7 참고: 기술적 지표는 과거 가격 기반이며 자기실현·과최적화 위험이 있습니다. 단정 금지 — 투자 판단은 3축 등급과 함께 종합적으로 판단하세요.
+      </div>
+    </Panel>
+  );
+}
+
 export function InsightHistoryCard({ items }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const types = useMemo(() => {
@@ -1726,6 +1807,9 @@ export function StockDetail({ D, ticker, nav }) {
       <PerspectiveComparisonCard s={s} manualEntry={manualEntry} />
 
       <ActionAdviceCard advice={s.actionAdviceLatest} history={s.actionAdviceHistory || []} />
+
+      {/* E-1: 트레이딩 관점 (투자 등급과 별도 레이어) */}
+      <TradingSignalCard s={s} />
 
       {/* PR-2: 재무 추이 (매출·영업이익·순이익·OCF·FCF + 추세 + 컨센서스) */}
       <FinancialsCard s={s} />

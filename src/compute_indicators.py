@@ -35,6 +35,16 @@ RSI_PERIOD: int = 14
 SLOPE_WINDOW: int = 10
 MIN_BARS: int = SMA_LONG + SLOPE_WINDOW
 
+# E-1: 트레이딩 지표 상수
+MACD_FAST: int = 12
+MACD_SLOW: int = 26
+MACD_SIGNAL: int = 9
+BB_PERIOD: int = 20
+BB_STD: float = 2.0
+STOCH_K: int = 14
+STOCH_D: int = 3
+ATR_PERIOD: int = 14
+
 
 def _safe_float(val) -> Optional[float]:
     if val is None:
@@ -81,6 +91,7 @@ def compute_indicators(ticker: str, price_df: pd.DataFrame) -> list[IndicatorDai
     if "volume" in df.columns:
         df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
     close: pd.Series = df["close"]
+    has_volume = "volume" in df.columns and df["volume"].notna().any()
 
     # ── SMA ──────────────────────────────────────────────────
     df["sma20"] = ta.sma(close, length=SMA_SHORT)
@@ -110,6 +121,60 @@ def compute_indicators(ticker: str, price_df: pd.DataFrame) -> list[IndicatorDai
         & (df["slope200"] > 0)
     )
 
+    # ── E-1: 트레이딩 지표 ────────────────────────────────────
+    # MACD(12,26,9)
+    _macd = ta.macd(close, fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL)
+    if _macd is not None and not _macd.empty:
+        df["macd_line"]   = _macd.iloc[:, 0]
+        df["macd_hist"]   = _macd.iloc[:, 1]
+        df["macd_signal"] = _macd.iloc[:, 2]
+    else:
+        df["macd_line"] = df["macd_hist"] = df["macd_signal"] = np.nan
+
+    # 볼린저밴드(20,2)
+    _bb = ta.bbands(close, length=BB_PERIOD, std=BB_STD)
+    if _bb is not None and not _bb.empty:
+        # pandas_ta bbands: BBL, BBM, BBU, BBB, BBP
+        bb_col = {c.split("_")[0]: c for c in _bb.columns}
+        df["bb_lower"] = _bb[bb_col.get("BBL", _bb.columns[0])]
+        df["bb_upper"] = _bb[bb_col.get("BBU", _bb.columns[2])]
+        df["bb_pct"]   = _bb[bb_col.get("BBP", _bb.columns[4])] / 100.0  # 0~1로 정규화
+    else:
+        df["bb_lower"] = df["bb_upper"] = df["bb_pct"] = np.nan
+
+    # 스토캐스틱(14,3) — high/low 필요, 없으면 close 대체
+    if "high" in df.columns and "low" in df.columns:
+        _stoch = ta.stoch(
+            df["high"].astype(float), df["low"].astype(float), close,
+            k=STOCH_K, d=STOCH_D,
+        )
+    else:
+        # ponytail: close-only stochastic approximation (no high/low data)
+        _stoch = ta.stoch(close, close, close, k=STOCH_K, d=STOCH_D)
+    if _stoch is not None and not _stoch.empty:
+        df["stoch_k"] = _stoch.iloc[:, 0]
+        df["stoch_d"] = _stoch.iloc[:, 1]
+    else:
+        df["stoch_k"] = df["stoch_d"] = np.nan
+
+    # ATR(14) — high/low 없으면 None
+    if "high" in df.columns and "low" in df.columns:
+        _atr = ta.atr(df["high"].astype(float), df["low"].astype(float), close, length=ATR_PERIOD)
+        df["atr14"] = _atr if _atr is not None else np.nan
+    else:
+        df["atr14"] = np.nan
+
+    # 거래량 대비 20일 평균 비율
+    if has_volume:
+        vol_sma20 = df["volume"].rolling(20).mean()
+        df["vol_ratio20"] = np.where(
+            vol_sma20.notna() & (vol_sma20 > 0),
+            df["volume"] / vol_sma20,
+            np.nan,
+        )
+    else:
+        df["vol_ratio20"] = np.nan
+
     rows: list[IndicatorDailyRow] = []
     for idx, row in df.iterrows():
         if pd.isna(row["sma200"]):  # SMA200 미완성 구간 스킵
@@ -131,6 +196,16 @@ def compute_indicators(ticker: str, price_df: pd.DataFrame) -> list[IndicatorDai
             slope50=_safe_float(row["slope50"]),
             slope200=_safe_float(row["slope200"]),
             is_aligned=is_aligned,
+            macd_line=_safe_float(row["macd_line"]),
+            macd_signal=_safe_float(row["macd_signal"]),
+            macd_hist=_safe_float(row["macd_hist"]),
+            bb_upper=_safe_float(row["bb_upper"]),
+            bb_lower=_safe_float(row["bb_lower"]),
+            bb_pct=_safe_float(row["bb_pct"]),
+            stoch_k=_safe_float(row["stoch_k"]),
+            stoch_d=_safe_float(row["stoch_d"]),
+            vol_ratio20=_safe_float(row["vol_ratio20"]),
+            atr14=_safe_float(row["atr14"]),
         ))
 
     logger.info("%s: compute_indicators %d rows", ticker, len(rows))

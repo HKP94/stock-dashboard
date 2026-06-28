@@ -49,6 +49,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ── DB 스키마 마이그레이션 (ADD COLUMN IF NOT EXISTS — 멱등, 안전)
+      - name: DB 마이그레이션
+        run: |
+          for f in migrations/*.sql; do
+            echo "Applying $f"
+            python -c "
+from dotenv import load_dotenv; load_dotenv()
+from src.db import get_conn
+sql = open('$f').read()
+with get_conn() as conn:
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    conn.commit()
+print('OK: $f')
+"
+          done
+
       # ── legacy 경로(롤백 전용). engine=legacy로 수동 실행할 때만 — cron/기본(split)은 안 돈다.
       - name: 파이프라인 실행 (수집 → 연산 → LLM → 조립)
         if: ${{ github.event.inputs.engine == 'legacy' }}

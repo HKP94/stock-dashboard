@@ -54,6 +54,17 @@ class IndicatorDailyRow(BaseModel):
     slope50: Optional[float] = None
     slope200: Optional[float] = None
     is_aligned: Optional[bool] = None
+    # E-1: 트레이딩 지표
+    macd_line: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_hist: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_lower: Optional[float] = None
+    bb_pct: Optional[float] = None    # Bollinger %B = (close-lower)/(upper-lower)
+    stoch_k: Optional[float] = None   # Stochastic %K(14,3)
+    stoch_d: Optional[float] = None   # Stochastic %D (3-day SMA of K)
+    vol_ratio20: Optional[float] = None  # volume / 20-day avg volume
+    atr14: Optional[float] = None
 
 
 class FundamentalsRow(BaseModel):
