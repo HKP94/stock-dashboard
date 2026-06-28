@@ -30,7 +30,7 @@ from typing import Optional
 import psycopg
 
 from src import db
-from src import ingest_drivers, ingest_kr, ingest_macro, ingest_market, ingest_market_news, ingest_news, ingest_us
+from src import ingest_drivers, ingest_investor_flow, ingest_kr, ingest_macro, ingest_market, ingest_market_news, ingest_news, ingest_us
 from src.pipeline_common import (
     PROFILE_DAILY,
     PROFILE_REFRESH,
@@ -54,6 +54,7 @@ DAILY_STEPS = (
     "ingest_us",
     "ingest_news",
     "ingest_market_news",
+    "investor_flow",        # E-2: KR 투자자 수급 (KR만)
 )
 REFRESH_STEPS = (
     "price_refresh",
@@ -198,6 +199,22 @@ def _ingest_market_news(conn: psycopg.Connection, errors: list, counts: dict) ->
         errors.append(make_error("ingest_market_news", exc))
 
 
+def _ingest_investor_flow(
+    conn: psycopg.Connection, kr_tickers: list[str], errors: list, counts: dict
+) -> None:
+    """E-2: KR 종목 투자자 수급 수집 + 신호 저장."""
+    logger.info("수집: KR 투자자 수급 (%d종목)", len(kr_tickers))
+    try:
+        result = ingest_investor_flow.run_investor_flow_ingest(conn, kr_tickers)
+        c = result.get("counts", {})
+        counts["investor_flow"] = counts.get("investor_flow", 0) + c.get("rows", 0)
+        errors.extend(result.get("errors", []))
+    except Exception as exc:
+        conn.rollback()
+        logger.error("investor_flow 수집 실패: %s", exc, exc_info=True)
+        errors.append(make_error("investor_flow", exc))
+
+
 def _ingest_refresh_prices(conn: psycopg.Connection, watchlist: list[dict], errors: list, counts: dict) -> None:
     """refresh 경량 가격: news_refresh._refresh_prices_light의 가격 부분만 (지표·퀀트 제외)."""
     logger.info("수집: 경량 가격 (%d종목)", len(watchlist))
@@ -248,6 +265,7 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
                 _ingest_us(conn, us_tickers, errors, counts)
                 _ingest_news(conn, all_tickers, errors, counts)
                 _ingest_market_news(conn, errors, counts)
+                _ingest_investor_flow(conn, kr_tickers, errors, counts)  # E-2
             else:  # PROFILE_REFRESH
                 _ingest_refresh_prices(conn, watchlist, errors, counts)
                 _ingest_news(conn, all_tickers, errors, counts)

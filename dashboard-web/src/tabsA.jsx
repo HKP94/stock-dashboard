@@ -1379,6 +1379,113 @@ function TradingSignalCard({ s }) {
   );
 }
 
+
+// E-2: 투자자 수급 신호 카드 (KR 전용, 기술신호와 독립 레이어)
+function InvestorFlowCard({ s }) {
+  // US 종목 또는 수급 데이터 없음 → 명시적 처리
+  if (s?.mk !== "KR") {
+    return (
+      <Panel title="투자자 수급" sub="KR 전용 · E-2">
+        <div style={{ fontSize: 12, color: C.ink2 }}>
+          수급 데이터 없음 — KR 종목 전용 (미국 주식은 KRX 수급 구조 부재)
+        </div>
+      </Panel>
+    );
+  }
+
+  const flow = s?.investorFlow;
+  if (!flow) {
+    return (
+      <Panel title="투자자 수급" sub="KR 전용 · E-2">
+        <div style={{ fontSize: 12, color: C.ink2 }}>
+          수급 데이터 수집 중 — 다음 업데이트 후 표시됩니다.
+        </div>
+      </Panel>
+    );
+  }
+
+  const combined = flow.combinedSignal || "중립";
+  const foreign  = flow.foreignSignal  || "중립";
+  const instit   = flow.institutionSignal || "중립";
+
+  const combColor = combined === "수급_강세" ? C.ok
+    : combined === "수급_약세" ? C.bad
+    : combined === "수급_혼조" ? C.acc
+    : C.ink2;
+  const combBg = combined === "수급_강세" ? C.okBg
+    : combined === "수급_약세" ? C.badBg
+    : combined === "수급_혼조" ? "#FFF3E0"
+    : C.surface2;
+
+  // 억원 단위 포맷 (소수점 1자리)
+  const fmt억 = (v) => {
+    if (v == null) return "—";
+    const 억 = v / 1e8;
+    return (억 >= 0 ? "+" : "") + 억.toFixed(1) + "억";
+  };
+
+  const sigColor = (sig) =>
+    sig === "매수우호" ? C.ok : sig === "매도우세" ? C.bad : C.ink2;
+
+  // E-1↔E-2 divergence: 기술신호와 수급신호 충돌 감지
+  const techLabel = s?.tradingSignal?.label;
+  const diverge =
+    (techLabel === "단기매수우호" && combined === "수급_약세") ||
+    (techLabel === "단기회피"   && combined === "수급_강세");
+
+  return (
+    <Panel title="투자자 수급" sub="최근 3거래일 외국인·기관 순매수 · KR 전용">
+      {/* 복합 수급 라벨 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <div style={{
+          padding: "6px 14px", borderRadius: 8, fontSize: 14, fontWeight: 700,
+          background: combBg, color: combColor, border: `1px solid ${combColor}44`,
+        }}>
+          {combined}
+        </div>
+        <div style={{ fontSize: 11.5, color: C.ink2 }}>
+          외국인 <b style={{ color: sigColor(foreign) }}>{foreign}</b>
+          {" · "}
+          기관 <b style={{ color: sigColor(instit) }}>{instit}</b>
+        </div>
+      </div>
+
+      {/* E-1↔E-2 divergence 경고 */}
+      {diverge && (
+        <div style={{
+          fontSize: 11.5, color: C.ink2, background: C.surface2,
+          borderRadius: 6, padding: "8px 12px", marginBottom: 12,
+        }}>
+          기술신호 <b>{techLabel}</b> ↔ 수급신호 <b>{combined}</b> 충돌 — 방향이 엇갈립니다. 양쪽 근거를 직접 확인하세요.
+        </div>
+      )}
+
+      {/* 3일 순매수 수치 */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+        {[
+          { label: "외국인 3일 합계", val: fmt억(flow.foreignNet3d), sig: foreign },
+          { label: "기관 3일 합계",   val: fmt억(flow.institutionNet3d), sig: instit },
+          { label: "기준일", val: flow.asof || "—", sig: null },
+        ].map((item) => (
+          <div key={item.label} style={{ background: C.surface2, borderRadius: 6, padding: "8px 12px" }}>
+            <MonoCaps style={{ fontSize: 9.5 }}>{item.label}</MonoCaps>
+            <div style={{
+              fontSize: 13, fontWeight: 600, marginTop: 4,
+              color: item.sig ? sigColor(item.sig) : C.ink,
+            }}>
+              {item.val}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 10.5, color: C.ink3 }}>
+        §F7: 수급 데이터는 T+0 과거 기준이며 미래 방향을 보장하지 않습니다. 투자 자문 아님 / 원금 손실 가능.
+      </div>
+    </Panel>
+  );
+}
+
 export function InsightHistoryCard({ items }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const types = useMemo(() => {
@@ -1810,6 +1917,9 @@ export function StockDetail({ D, ticker, nav }) {
 
       {/* E-1: 트레이딩 관점 (투자 등급과 별도 레이어) */}
       <TradingSignalCard s={s} />
+
+      {/* E-2: 투자자 수급 신호 (KR 전용, E-1과 독립 레이어) */}
+      <InvestorFlowCard s={s} />
 
       {/* PR-2: 재무 추이 (매출·영업이익·순이익·OCF·FCF + 추세 + 컨센서스) */}
       <FinancialsCard s={s} />

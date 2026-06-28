@@ -70,6 +70,20 @@ class IndicatorDailyRow(BaseModel):
     trading_signal_score: Optional[int] = None
 
 
+class InvestorFlowRow(BaseModel):
+    """E-2: KR 투자자별 수급 — asof별 보존(신규-F 적중률 추적용)."""
+    ticker: str
+    date: date
+    foreign_net: Optional[float] = None         # 외국인 당일 순매수 (원)
+    institution_net: Optional[float] = None     # 기관 당일 순매수 (원)
+    individual_net: Optional[float] = None      # 개인 당일 순매수 (원)
+    foreign_3d_sum: Optional[float] = None      # 외국인 최근 3거래일 합계
+    institution_3d_sum: Optional[float] = None  # 기관 최근 3거래일 합계
+    foreign_signal: Optional[str] = None        # 매수우호/중립/매도우세
+    institution_signal: Optional[str] = None
+    combined_signal: Optional[str] = None       # 수급_강세/수급_약세/수급_혼조/중립
+
+
 class FundamentalsRow(BaseModel):
     ticker: str
     period_type: Literal["annual", "quarter"]
