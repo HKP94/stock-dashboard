@@ -11,3 +11,8 @@ ALTER TABLE indicators_daily
   ADD COLUMN IF NOT EXISTS stoch_d     NUMERIC,
   ADD COLUMN IF NOT EXISTS vol_ratio20 NUMERIC,
   ADD COLUMN IF NOT EXISTS atr14       NUMERIC;
+
+-- trading_signal 저장 컬럼 추가 (E-1 신규-F 적중률 추적 토대)
+ALTER TABLE indicators_daily
+  ADD COLUMN IF NOT EXISTS trading_signal VARCHAR(20),
+  ADD COLUMN IF NOT EXISTS trading_signal_score SMALLINT;

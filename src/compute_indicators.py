@@ -45,6 +45,41 @@ STOCH_K: int = 14
 STOCH_D: int = 3
 ATR_PERIOD: int = 14
 
+# E-1: 트레이딩 신호 임계값 (4팩터, 합계≥2 → 신호 발생)
+TRADING_RSI_LOW: float = 35.0    # 침체권 → 반등 기대
+TRADING_RSI_HIGH: float = 65.0   # 과열권 → 조정 경계
+TRADING_BB_LOW: float = 0.2      # 볼린저 하단 → 과매도
+TRADING_BB_HIGH: float = 0.8     # 볼린저 상단 → 과매수
+TRADING_STOCH_LOW: float = 20.0  # 스토캐스틱 과매도
+TRADING_STOCH_HIGH: float = 80.0 # 스토캐스틱 과매수
+
+
+def _derive_trading_signal(
+    rsi14: Optional[float],
+    bb_pct: Optional[float],
+    macd_hist: Optional[float],
+    stoch_k: Optional[float],
+) -> tuple[str, int]:
+    """4팩터(MACD/볼린저/RSI/스토캐스틱) 결정론 트레이딩 신호.
+    합계 ≥+2 → 단기매수우호, ≤-2 → 단기회피, 나머지 → 중립.
+    반환: (label, score)
+    """
+    score = 0
+    if macd_hist is not None:
+        score += 1 if macd_hist > 0 else (-1 if macd_hist < 0 else 0)
+    if bb_pct is not None:
+        score += 1 if bb_pct < TRADING_BB_LOW else (-1 if bb_pct > TRADING_BB_HIGH else 0)
+    if rsi14 is not None:
+        score += 1 if rsi14 < TRADING_RSI_LOW else (-1 if rsi14 > TRADING_RSI_HIGH else 0)
+    if stoch_k is not None:
+        score += 1 if stoch_k < TRADING_STOCH_LOW else (-1 if stoch_k > TRADING_STOCH_HIGH else 0)
+
+    if score >= 2:
+        return "단기매수우호", score
+    elif score <= -2:
+        return "단기회피", score
+    return "중립", score
+
 
 def _safe_float(val) -> Optional[float]:
     if val is None:
@@ -138,7 +173,8 @@ def compute_indicators(ticker: str, price_df: pd.DataFrame) -> list[IndicatorDai
         bb_col = {c.split("_")[0]: c for c in _bb.columns}
         df["bb_lower"] = _bb[bb_col.get("BBL", _bb.columns[0])]
         df["bb_upper"] = _bb[bb_col.get("BBU", _bb.columns[2])]
-        df["bb_pct"]   = _bb[bb_col.get("BBP", _bb.columns[4])] / 100.0  # 0~1로 정규화
+        # BBP는 pandas_ta가 이미 0~1 범위로 반환 (close < BBL이면 음수, > BBU이면 1 초과)
+        df["bb_pct"]   = _bb[bb_col.get("BBP", _bb.columns[4])]
     else:
         df["bb_lower"] = df["bb_upper"] = df["bb_pct"] = np.nan
 
@@ -185,27 +221,35 @@ def compute_indicators(ticker: str, price_df: pd.DataFrame) -> list[IndicatorDai
             bool(aligned_raw.loc[idx]) if all_present.loc[idx] else None
         )
 
+        _rsi   = _safe_float(row["rsi14"])
+        _bb_p  = _safe_float(row["bb_pct"])
+        _mhist = _safe_float(row["macd_hist"])
+        _sk    = _safe_float(row["stoch_k"])
+        _sig_label, _sig_score = _derive_trading_signal(_rsi, _bb_p, _mhist, _sk)
+
         rows.append(IndicatorDailyRow(
             ticker=ticker,
             date=dt,
             sma20=_safe_float(row["sma20"]),
             sma50=_safe_float(row["sma50"]),
             sma200=_safe_float(row["sma200"]),
-            rsi14=_safe_float(row["rsi14"]),
+            rsi14=_rsi,
             disparity20=_safe_float(row["disparity20"]),
             slope50=_safe_float(row["slope50"]),
             slope200=_safe_float(row["slope200"]),
             is_aligned=is_aligned,
             macd_line=_safe_float(row["macd_line"]),
             macd_signal=_safe_float(row["macd_signal"]),
-            macd_hist=_safe_float(row["macd_hist"]),
+            macd_hist=_mhist,
             bb_upper=_safe_float(row["bb_upper"]),
             bb_lower=_safe_float(row["bb_lower"]),
-            bb_pct=_safe_float(row["bb_pct"]),
-            stoch_k=_safe_float(row["stoch_k"]),
+            bb_pct=_bb_p,
+            stoch_k=_sk,
             stoch_d=_safe_float(row["stoch_d"]),
             vol_ratio20=_safe_float(row["vol_ratio20"]),
             atr14=_safe_float(row["atr14"]),
+            trading_signal=_sig_label,
+            trading_signal_score=_sig_score,
         ))
 
     logger.info("%s: compute_indicators %d rows", ticker, len(rows))
@@ -277,6 +321,8 @@ def recompute_indicators_to_db(conn, tickers: Optional[list[str]] = None) -> int
 
 
 if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv()
     from src.db import get_conn, log_run_finish, log_run_start
 
     logging.basicConfig(

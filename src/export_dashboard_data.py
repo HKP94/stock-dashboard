@@ -159,48 +159,44 @@ def _compute_trading_signal(
     bb_pct: float | None,
     macd_hist: float | None,
     vol_ratio20: float | None,
+    stoch_k: float | None = None,
+    trading_signal_db: str | None = None,
+    trading_signal_score_db: int | None = None,
 ) -> dict:
-    """MACD/볼린저/RSI 3요소로 단기 트레이딩 신호 결정론 계산.
+    """4팩터(MACD/볼린저/RSI/스토캐스틱) 트레이딩 신호.
+    DB 저장값이 있으면 우선 사용(결정론 일관성 + 신규-F 적중률 추적 토대).
     반환: {label, score, basis, volNote}
-    label: '단기매수우호'/'중립'/'단기회피'
     """
-    score = 0
+    # DB 저장값 우선 (compute_indicators에서 이미 계산·저장)
+    if trading_signal_db is not None:
+        label = trading_signal_db
+        score = trading_signal_score_db or 0
+    else:
+        score = 0
+        if macd_hist is not None:
+            score += 1 if macd_hist > 0 else (-1 if macd_hist < 0 else 0)
+        if bb_pct is not None:
+            score += 1 if bb_pct < _TRADING_BB_LOW else (-1 if bb_pct > _TRADING_BB_HIGH else 0)
+        if rsi14 is not None:
+            score += 1 if rsi14 < _TRADING_RSI_LOW else (-1 if rsi14 > _TRADING_RSI_HIGH else 0)
+        if stoch_k is not None:
+            score += 1 if stoch_k < 20 else (-1 if stoch_k > 80 else 0)
+        label = "단기매수우호" if score >= 2 else ("단기회피" if score <= -2 else "중립")
+
+    # basis는 항상 현재 지표 값으로 재구성 (표시용)
     basis: list[dict] = []
-
-    if macd_hist is not None:
-        if macd_hist > 0:
-            score += 1
-            basis.append({"source": "MACD", "value": "양(0선 위)"})
-        elif macd_hist < 0:
-            score -= 1
-            basis.append({"source": "MACD", "value": "음(0선 아래)"})
-
-    if bb_pct is not None:
-        if bb_pct < _TRADING_BB_LOW:
-            score += 1
-            basis.append({"source": "BB%B", "value": f"{bb_pct:.2f}(하단 접근)"})
-        elif bb_pct > _TRADING_BB_HIGH:
-            score -= 1
-            basis.append({"source": "BB%B", "value": f"{bb_pct:.2f}(상단 접근)"})
-
-    if rsi14 is not None:
-        if rsi14 < _TRADING_RSI_LOW:
-            score += 1
-            basis.append({"source": "RSI", "value": f"{rsi14:.0f}(과매도)"})
-        elif rsi14 > _TRADING_RSI_HIGH:
-            score -= 1
-            basis.append({"source": "RSI", "value": f"{rsi14:.0f}(과매수)"})
+    if macd_hist is not None and macd_hist != 0:
+        basis.append({"source": "MACD", "value": "양(0선 위)" if macd_hist > 0 else "음(0선 아래)"})
+    if bb_pct is not None and (bb_pct < _TRADING_BB_LOW or bb_pct > _TRADING_BB_HIGH):
+        basis.append({"source": "BB%B", "value": f"{bb_pct:.2f}({'하단' if bb_pct < _TRADING_BB_LOW else '상단'} 접근)"})
+    if rsi14 is not None and (rsi14 < _TRADING_RSI_LOW or rsi14 > _TRADING_RSI_HIGH):
+        basis.append({"source": "RSI", "value": f"{rsi14:.0f}({'과매도' if rsi14 < _TRADING_RSI_LOW else '과매수'})"})
+    if stoch_k is not None and (stoch_k < 20 or stoch_k > 80):
+        basis.append({"source": "Stoch", "value": f"{stoch_k:.0f}({'과매도' if stoch_k < 20 else '과매수'})"})
 
     vol_note = None
     if vol_ratio20 is not None and vol_ratio20 >= 2.0:
         vol_note = f"거래량 평균 대비 {vol_ratio20:.1f}배 급증"
-
-    if score >= 2:
-        label = "단기매수우호"
-    elif score <= -2:
-        label = "단기회피"
-    else:
-        label = "중립"
 
     return {"label": label, "score": score, "basis": basis, "volNote": vol_note}
 
@@ -1631,7 +1627,8 @@ def build_data() -> dict:
             SELECT DISTINCT ON (ticker)
                 ticker, date, rsi14, disparity20, is_aligned,
                 macd_line, macd_signal, macd_hist, bb_upper, bb_lower, bb_pct,
-                stoch_k, stoch_d, vol_ratio20, atr14
+                stoch_k, stoch_d, vol_ratio20, atr14,
+                trading_signal, trading_signal_score
             FROM indicators_daily ORDER BY ticker, date DESC
         """)
         ind_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
@@ -1980,11 +1977,15 @@ def build_data() -> dict:
                 "insightHistory": ticker_context_map.get(tk, []),
                 "drivers": driver_cards_map.get(tk, []),
                 # E-1: 트레이딩 관점 (투자 등급과 별도 레이어 — 덮어쓰지 않음)
+                # DB 저장값(trading_signal) 우선 → 신규-F 적중률 추적과 동일한 기준
                 "tradingSignal": _compute_trading_signal(
                     rsi14=_f(ind.get("rsi14")),
                     bb_pct=_f(ind.get("bb_pct")),
                     macd_hist=_f(ind.get("macd_hist")),
                     vol_ratio20=_f(ind.get("vol_ratio20")),
+                    stoch_k=_f(ind.get("stoch_k")),
+                    trading_signal_db=ind.get("trading_signal"),
+                    trading_signal_score_db=ind.get("trading_signal_score"),
                 ),
                 "tradingIndicators": {
                     "macdLine":   _f(ind.get("macd_line")),

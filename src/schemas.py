@@ -65,6 +65,9 @@ class IndicatorDailyRow(BaseModel):
     stoch_d: Optional[float] = None   # Stochastic %D (3-day SMA of K)
     vol_ratio20: Optional[float] = None  # volume / 20-day avg volume
     atr14: Optional[float] = None
+    # 트레이딩 신호 (결정론, compute_indicators에서 계산·DB 저장 → 신규-F 적중률 추적 토대)
+    trading_signal: Optional[str] = None       # 단기매수우호/중립/단기회피
+    trading_signal_score: Optional[int] = None
 
 
 class FundamentalsRow(BaseModel):

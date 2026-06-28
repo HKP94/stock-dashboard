@@ -393,22 +393,95 @@ def test_vol_ratio20_none_without_volume():
     assert last.vol_ratio20 is None
 
 
+# ── _derive_trading_signal (compute_indicators 내부 — DB 저장 경로) ────────
+
+from src.compute_indicators import _derive_trading_signal  # noqa: E402
+
+
+def test_derive_all_bullish():
+    """4팩터 전부 과매도 → 단기매수우호 (score=+4≥2)."""
+    label, score = _derive_trading_signal(rsi14=25.0, bb_pct=0.1, macd_hist=0.5, stoch_k=10.0)
+    assert label == "단기매수우호"
+    assert score == 4
+
+def test_derive_all_bearish():
+    """4팩터 전부 과매수 → 단기회피 (score=-4≤-2)."""
+    label, score = _derive_trading_signal(rsi14=70.0, bb_pct=0.9, macd_hist=-0.5, stoch_k=90.0)
+    assert label == "단기회피"
+    assert score == -4
+
+def test_derive_3of4_bearish():
+    """BB/RSI/Stoch 과매수, MACD양 → score=-2 → 단기회피.
+    (TLT 케이스: 상방 모멘텀 있어도 과매수 다수면 회피)"""
+    label, score = _derive_trading_signal(rsi14=70.0, bb_pct=0.9, macd_hist=0.1, stoch_k=99.0)
+    assert label == "단기회피", f"expected 단기회피, got {label} (score={score})"
+    assert score == -2
+
+def test_derive_neutral_mixed():
+    """혼조 신호 → 중립."""
+    label, score = _derive_trading_signal(rsi14=50.0, bb_pct=0.5, macd_hist=0.1, stoch_k=50.0)
+    assert label == "중립"
+
+def test_derive_partial_none():
+    """일부 None → 나머지만 계산 (TypeError 없음)."""
+    label, score = _derive_trading_signal(rsi14=None, bb_pct=None, macd_hist=0.5, stoch_k=None)
+    assert label in ("단기매수우호", "중립", "단기회피")
+    assert score == 1  # MACD+만
+
+def test_derive_all_none():
+    """전부 None → 중립, score=0."""
+    label, score = _derive_trading_signal(rsi14=None, bb_pct=None, macd_hist=None, stoch_k=None)
+    assert label == "중립"
+    assert score == 0
+
+def test_derive_stored_in_row():
+    """compute_indicators 출력에 trading_signal/trading_signal_score 필드 포함."""
+    prices = _uptrend(MIN_BARS + 30)
+    df = _make_df(prices)
+    last = latest_indicators("TEST", df)
+    assert last is not None
+    assert hasattr(last, "trading_signal")
+    assert hasattr(last, "trading_signal_score")
+    assert last.trading_signal in ("단기매수우호", "중립", "단기회피")
+    assert isinstance(last.trading_signal_score, int)
+
+
 # ── trading signal 헬퍼 (export_dashboard_data) ───────────────
 
 from src.export_dashboard_data import _compute_trading_signal  # noqa: E402
 
 
 def test_trading_signal_all_bullish():
-    """MACD+/BB하단/RSI저 → 단기매수우호 (score=+3≥2)."""
-    result = _compute_trading_signal(rsi14=30.0, bb_pct=0.1, macd_hist=0.5, vol_ratio20=None)
+    """4팩터 전부 과매도 → 단기매수우호."""
+    result = _compute_trading_signal(
+        rsi14=30.0, bb_pct=0.1, macd_hist=0.5, vol_ratio20=None, stoch_k=10.0
+    )
     assert result["label"] == "단기매수우호"
     assert result["score"] >= 2
 
 def test_trading_signal_all_bearish():
-    """MACD-/BB상단/RSI고 → 단기회피 (score=-3≤-2)."""
-    result = _compute_trading_signal(rsi14=70.0, bb_pct=0.9, macd_hist=-0.5, vol_ratio20=None)
+    """4팩터 전부 과매수 → 단기회피."""
+    result = _compute_trading_signal(
+        rsi14=70.0, bb_pct=0.9, macd_hist=-0.5, vol_ratio20=None, stoch_k=90.0
+    )
     assert result["label"] == "단기회피"
     assert result["score"] <= -2
+
+def test_trading_signal_3of4_bearish():
+    """BB/RSI/Stoch 과매수, MACD양 → 단기회피 (score=-2)."""
+    result = _compute_trading_signal(
+        rsi14=70.0, bb_pct=0.9, macd_hist=0.1, vol_ratio20=None, stoch_k=90.0
+    )
+    assert result["label"] == "단기회피"
+
+def test_trading_signal_db_value_priority():
+    """DB 저장값이 있으면 계산값 무시 (일관성 원칙)."""
+    result = _compute_trading_signal(
+        rsi14=70.0, bb_pct=0.9, macd_hist=-1.0, vol_ratio20=None,
+        trading_signal_db="중립", trading_signal_score_db=0,
+    )
+    assert result["label"] == "중립"
+    assert result["score"] == 0
 
 def test_trading_signal_neutral_mixed():
     """혼합 신호 → 중립."""
@@ -427,22 +500,24 @@ def test_trading_signal_vol_note_none_normal():
     assert result["volNote"] is None
 
 def test_trading_signal_partial_none():
-    """일부 값 None → score 계산 생략 (TypeError 없음)."""
+    """일부 None → TypeError 없음."""
     result = _compute_trading_signal(rsi14=None, bb_pct=None, macd_hist=0.5, vol_ratio20=None)
-    assert result["label"] in ("단기매수우호", "중립", "단기회피")  # 에러 없음
+    assert result["label"] in ("단기매수우호", "중립", "단기회피")
     assert result["score"] == 1  # MACD+만
 
 def test_trading_signal_basis_populated():
-    """신호 발생 시 basis 리스트에 근거 포함."""
-    result = _compute_trading_signal(rsi14=30.0, bb_pct=0.1, macd_hist=0.5, vol_ratio20=None)
-    assert len(result["basis"]) == 3
+    """신호 발생 시 basis에 근거 포함."""
+    result = _compute_trading_signal(
+        rsi14=30.0, bb_pct=0.1, macd_hist=0.5, vol_ratio20=None, stoch_k=10.0
+    )
     sources = [b["source"] for b in result["basis"]]
     assert "MACD" in sources
     assert "BB%B" in sources
     assert "RSI" in sources
+    assert "Stoch" in sources
 
 def test_trading_signal_all_none():
-    """모두 None → 중립, 에러 없음."""
+    """모두 None → 중립, score=0."""
     result = _compute_trading_signal(rsi14=None, bb_pct=None, macd_hist=None, vol_ratio20=None)
     assert result["label"] == "중립"
     assert result["score"] == 0

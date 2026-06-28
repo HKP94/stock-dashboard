@@ -202,28 +202,32 @@ def upsert_indicators_daily(conn: psycopg.Connection, rows: list[IndicatorDailyR
         INSERT INTO indicators_daily
             (ticker, date, sma20, sma50, sma200, rsi14, disparity20, slope50, slope200, is_aligned,
              macd_line, macd_signal, macd_hist, bb_upper, bb_lower, bb_pct,
-             stoch_k, stoch_d, vol_ratio20, atr14)
+             stoch_k, stoch_d, vol_ratio20, atr14,
+             trading_signal, trading_signal_score)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s)
         ON CONFLICT (ticker, date) DO UPDATE SET
-            sma20       = EXCLUDED.sma20,
-            sma50       = EXCLUDED.sma50,
-            sma200      = EXCLUDED.sma200,
-            rsi14       = EXCLUDED.rsi14,
-            disparity20 = EXCLUDED.disparity20,
-            slope50     = EXCLUDED.slope50,
-            slope200    = EXCLUDED.slope200,
-            is_aligned  = EXCLUDED.is_aligned,
-            macd_line   = EXCLUDED.macd_line,
-            macd_signal = EXCLUDED.macd_signal,
-            macd_hist   = EXCLUDED.macd_hist,
-            bb_upper    = EXCLUDED.bb_upper,
-            bb_lower    = EXCLUDED.bb_lower,
-            bb_pct      = EXCLUDED.bb_pct,
-            stoch_k     = EXCLUDED.stoch_k,
-            stoch_d     = EXCLUDED.stoch_d,
-            vol_ratio20 = EXCLUDED.vol_ratio20,
-            atr14       = EXCLUDED.atr14
+            sma20                = EXCLUDED.sma20,
+            sma50                = EXCLUDED.sma50,
+            sma200               = EXCLUDED.sma200,
+            rsi14                = EXCLUDED.rsi14,
+            disparity20          = EXCLUDED.disparity20,
+            slope50              = EXCLUDED.slope50,
+            slope200             = EXCLUDED.slope200,
+            is_aligned           = EXCLUDED.is_aligned,
+            macd_line            = EXCLUDED.macd_line,
+            macd_signal          = EXCLUDED.macd_signal,
+            macd_hist            = EXCLUDED.macd_hist,
+            bb_upper             = EXCLUDED.bb_upper,
+            bb_lower             = EXCLUDED.bb_lower,
+            bb_pct               = EXCLUDED.bb_pct,
+            stoch_k              = EXCLUDED.stoch_k,
+            stoch_d              = EXCLUDED.stoch_d,
+            vol_ratio20          = EXCLUDED.vol_ratio20,
+            atr14                = EXCLUDED.atr14,
+            trading_signal       = EXCLUDED.trading_signal,
+            trading_signal_score = EXCLUDED.trading_signal_score
     """
     with conn.cursor() as cur:
         cur.executemany(
@@ -235,6 +239,7 @@ def upsert_indicators_daily(conn: psycopg.Connection, rows: list[IndicatorDailyR
                     r.macd_line, r.macd_signal, r.macd_hist,
                     r.bb_upper, r.bb_lower, r.bb_pct,
                     r.stoch_k, r.stoch_d, r.vol_ratio20, r.atr14,
+                    r.trading_signal, r.trading_signal_score,
                 )
                 for r in rows
             ],
