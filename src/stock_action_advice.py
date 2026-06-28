@@ -304,6 +304,20 @@ def derive_grade(stock: dict, *, market_direction: Optional[str] = None) -> tupl
     return grade, confidence, basis
 
 
+_GRADE_AXIS_LABEL = {"quant": "퀀트", "consensus": "컨센서스", "judgment": "내 판단"}
+
+
+def grade_fallback_rationale(frame: dict) -> str:
+    """LLM 없음/폴백 시 등급 해설 — 결정론 템플릿(사실+근거, 매매 단정 없음)."""
+    basis = frame.get("grade_basis") or {}
+    axes = basis.get("axes") or {}
+    parts = [f"{_GRADE_AXIS_LABEL[k]} {v}" for k, v in axes.items() if v]
+    axis_str = " · ".join(parts) if parts else "축 데이터 부족"
+    note = " 축이 엇갈려 확인이 필요합니다." if basis.get("divergence") else ""
+    return (f"{frame.get('grade', '관망')} 등급(신뢰도 {frame.get('grade_confidence', '하')}) — "
+            f"3축 정렬: {axis_str}.{note} 매매 단정이 아닌 관찰입니다.")
+
+
 def derive_concentration_note(current_weight: Optional[float], *, beta: Optional[float] = None) -> Optional[str]:
     """집중 리스크 '관찰' 노트(결정론 템플릿). 사실+영향만 — 지시·가치판단 없음.
 

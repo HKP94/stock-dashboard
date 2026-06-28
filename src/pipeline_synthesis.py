@@ -241,7 +241,7 @@ def _step_action_advice(conn: psycopg.Connection, errors: list, counts: dict) ->
                     entry_zone=frame["entry_zone"],
                     exit_zone=frame["exit_zone"],
                     confidence=frame["confidence"],
-                    rationale=(narrative.rationale if narrative else f"{frame['direction']} 제안 — 현재 비중 {frame['current_weight']}%, 목표 {frame['target_weight_low']}~{frame['target_weight_high']}%"),
+                    rationale=(narrative.rationale if narrative else stock_action_advice.grade_fallback_rationale(frame)),
                     supporting_factors=(narrative.supportingFactors if narrative and narrative.supportingFactors else frame["supporting_factors"]),
                     opposing_factors=(narrative.opposingFactors if narrative and narrative.opposingFactors else frame["opposing_factors"]),
                     divergence_note=(narrative.divergenceNote if narrative and narrative.divergenceNote is not None else frame["divergence_note"]),
