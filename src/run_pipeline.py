@@ -78,14 +78,6 @@ logger = logging.getLogger(__name__)
 # 헬퍼
 # ──────────────────────────────────────────────────────────────
 
-def _get_active_tickers(conn: psycopg.Connection) -> list[dict]:
-    """watchlist에서 active 종목 (ticker, market) 목록."""
-    sql = "SELECT ticker, market FROM watchlist WHERE active = TRUE ORDER BY ticker"
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        return [dict(r) for r in cur.fetchall()]
-
-
 def _load_price_df(ticker: str, conn: psycopg.Connection) -> pd.DataFrame:
     """prices_daily 전체 → DatetimeIndex DataFrame (compute_indicators 입력용)."""
     sql = """
