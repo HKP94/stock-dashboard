@@ -154,6 +154,31 @@ _TRADING_BB_LOW   = 0.2
 _TRADING_BB_HIGH  = 0.8
 
 
+def _format_investor_flow(row: dict | None, market: str) -> dict | None:
+    """E-2: investor_flow DB 행 → export JSON 형식.
+    KR만 유효 데이터 반환, US는 명시적 None (구조적 부재).
+    §F7: T+0 과거 데이터, 룩어헤드 없음."""
+    if market != "KR":
+        return None
+    if row is None:
+        return None
+
+    def _f(v) -> float | None:
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "foreignNet3d":      _f(row.get("foreign_3d_sum")),
+        "institutionNet3d":  _f(row.get("institution_3d_sum")),
+        "foreignSignal":     row.get("foreign_signal"),
+        "institutionSignal": row.get("institution_signal"),
+        "combinedSignal":    row.get("combined_signal"),
+        "asof":              str(row.get("date", "")),
+    }
+
+
 def _compute_trading_signal(
     rsi14: float | None,
     bb_pct: float | None,
@@ -1633,6 +1658,16 @@ def build_data() -> dict:
         """)
         ind_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
 
+        # E-2: investor_flow — KR 종목별 최신 (DISTINCT ON, 날짜 고정 금지)
+        cur.execute("""
+            SELECT DISTINCT ON (ticker)
+                ticker, date, foreign_net, institution_net, individual_net,
+                foreign_3d_sum, institution_3d_sum,
+                foreign_signal, institution_signal, combined_signal
+            FROM investor_flow ORDER BY ticker, date DESC
+        """)
+        investor_flow_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
+
         # prices_daily: 종목별 최신 close + 직전 거래일 대비 등락
         cur.execute("""
             SELECT ticker, close, chg_pct FROM (
@@ -1976,6 +2011,9 @@ def build_data() -> dict:
                 # Wave 2-C: 최근 30일 누적 인사이트
                 "insightHistory": ticker_context_map.get(tk, []),
                 "drivers": driver_cards_map.get(tk, []),
+                # E-2: 투자자 수급 신호 (E-1 기술신호와 별도 레이어 — KR만, US=None)
+                # §F7: T+0 과거 데이터, 룩어헤드 없음. 단기 신호 단정 금지.
+                "investorFlow": _format_investor_flow(investor_flow_map.get(tk), mk),
                 # E-1: 트레이딩 관점 (투자 등급과 별도 레이어 — 덮어쓰지 않음)
                 # DB 저장값(trading_signal) 우선 → 신규-F 적중률 추적과 동일한 기준
                 "tradingSignal": _compute_trading_signal(

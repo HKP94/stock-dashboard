@@ -247,6 +247,40 @@ def upsert_indicators_daily(conn: psycopg.Connection, rows: list[IndicatorDailyR
     logger.debug("upsert_indicators_daily: %d rows", len(rows))
 
 
+def upsert_investor_flow(conn: psycopg.Connection, rows: list) -> None:
+    """E-2: investor_flow upsert. rows: list[InvestorFlowRow]."""
+    sql = """
+        INSERT INTO investor_flow
+            (ticker, date, foreign_net, institution_net, individual_net,
+             foreign_3d_sum, institution_3d_sum,
+             foreign_signal, institution_signal, combined_signal)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ticker, date) DO UPDATE SET
+            foreign_net        = EXCLUDED.foreign_net,
+            institution_net    = EXCLUDED.institution_net,
+            individual_net     = EXCLUDED.individual_net,
+            foreign_3d_sum     = EXCLUDED.foreign_3d_sum,
+            institution_3d_sum = EXCLUDED.institution_3d_sum,
+            foreign_signal     = EXCLUDED.foreign_signal,
+            institution_signal = EXCLUDED.institution_signal,
+            combined_signal    = EXCLUDED.combined_signal
+    """
+    with conn.cursor() as cur:
+        cur.executemany(
+            sql,
+            [
+                (
+                    r.ticker, r.date,
+                    r.foreign_net, r.institution_net, r.individual_net,
+                    r.foreign_3d_sum, r.institution_3d_sum,
+                    r.foreign_signal, r.institution_signal, r.combined_signal,
+                )
+                for r in rows
+            ],
+        )
+    logger.debug("upsert_investor_flow: %d rows", len(rows))
+
+
 def upsert_fundamentals(conn: psycopg.Connection, rows: list[FundamentalsRow]) -> None:
     sql = """
         INSERT INTO fundamentals
