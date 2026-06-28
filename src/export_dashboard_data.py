@@ -922,6 +922,10 @@ def _group_action_advice_rows(rows: list[dict]) -> dict[str, list[dict]]:
             "holdCharacterSecondary": row.get("hold_character_secondary") or [],
             "holdCharacterBasis": row.get("hold_character_basis") or [],
             "concentrationNote": row.get("concentration_note"),
+            # 신규-A2: 3축 종합 등급
+            "grade": row.get("grade"),
+            "gradeConfidence": row.get("grade_confidence"),
+            "gradeBasis": row.get("grade_basis") or {},
         })
     return grouped
 
@@ -1086,12 +1090,14 @@ def _load_action_advice_history(conn, tickers: list[str], *, limit_per_ticker: i
         SELECT ticker, asof, direction, current_weight, target_weight_low, target_weight_high,
                weight_action, entry_zone, exit_zone, confidence, rationale,
                supporting_factors, opposing_factors, divergence_note, model, created_at,
-               hold_character, hold_character_secondary, hold_character_basis, concentration_note
+               hold_character, hold_character_secondary, hold_character_basis, concentration_note,
+               grade, grade_confidence, grade_basis
         FROM (
             SELECT ticker, asof, direction, current_weight, target_weight_low, target_weight_high,
                    weight_action, entry_zone, exit_zone, confidence, rationale,
                    supporting_factors, opposing_factors, divergence_note, model, created_at,
                    hold_character, hold_character_secondary, hold_character_basis, concentration_note,
+                   grade, grade_confidence, grade_basis,
                    ROW_NUMBER() OVER (
                      PARTITION BY ticker
                      ORDER BY asof DESC, created_at DESC
@@ -1486,6 +1492,9 @@ def _attach_market_score(conn, market: dict, stocks: list[dict]) -> None:
         ms = by_region.get(s.get("mk"))
         if ms:
             s["marketBetaNote"] = _market_beta_note(ms.get("score"), ms.get("direction"), s.get("beta"))
+            # 신규-A2: 등급의 시장·베타 보정(퀀트 축 경로)에서 읽는다.
+            s["marketScoreDirection"] = ms.get("direction")
+            s["marketScoreVal"] = ms.get("score")
 
 
 def _attach_market_attractiveness(market: dict, stocks: list[dict]) -> None:
@@ -1863,6 +1872,9 @@ def build_data() -> dict:
                 "aiDecompositionSummary": _build_ai_decomposition_summary((manual_research_history_map.get(tk) or [None])[0]),
                 "actionAdviceLatest": (action_advice_history_map.get(tk) or [None])[0],
                 "actionAdviceHistory": action_advice_history_map.get(tk, []),
+                # 신규-A2: 3축 종합 등급(스크리너 발굴·정렬용 — 최신 액션 제언에서 끌어옴)
+                "grade": ((action_advice_history_map.get(tk) or [None])[0] or {}).get("grade"),
+                "gradeConfidence": ((action_advice_history_map.get(tk) or [None])[0] or {}).get("gradeConfidence"),
                 "sent":   n_sent,
                 "sscore": round(n_score * 100) if n_score else 50,
                 "sum":    sum_bullets,

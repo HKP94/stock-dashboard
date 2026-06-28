@@ -254,6 +254,9 @@ def _step_action_advice(conn: psycopg.Connection, errors: list, counts: dict) ->
                         (narrative.concentrationNote if narrative else None),
                         frame["current_weight"],
                     ),
+                    grade=frame["grade"],
+                    grade_confidence=frame["grade_confidence"],
+                    grade_basis=frame["grade_basis"],
                 )
                 db.upsert_stock_action_advice(conn, row)
                 conn.commit()

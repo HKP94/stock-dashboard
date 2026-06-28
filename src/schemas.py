@@ -181,6 +181,10 @@ class StockActionAdviceRow(BaseModel):
     hold_character_secondary: list[str] = Field(default_factory=list)
     hold_character_basis: list[dict[str, Any]] = Field(default_factory=list)
     concentration_note: Optional[str] = None
+    # 신규-A2: 매력도 3축 종합 등급(매수/관망/축소) — 결정론 정렬 패턴, composite 미합산
+    grade: Optional[Literal["매수", "관망", "축소"]] = None
+    grade_confidence: Optional[Literal["상", "중", "하"]] = None
+    grade_basis: dict[str, Any] = Field(default_factory=dict)
 
 
 class MarketScoreRow(BaseModel):
