@@ -386,6 +386,10 @@ CREATE TABLE IF NOT EXISTS stock_action_advice (
     hold_character_secondary JSONB NOT NULL DEFAULT '[]'::jsonb,
     hold_character_basis     JSONB NOT NULL DEFAULT '[]'::jsonb,
     concentration_note       TEXT,
+    -- 신규-A2: 매력도 3축 종합 등급(결론 레이어, composite 미합산)
+    grade                    TEXT CHECK (grade IN ('매수', '관망', '축소')),
+    grade_confidence         TEXT CHECK (grade_confidence IN ('상', '중', '하')),
+    grade_basis              JSONB NOT NULL DEFAULT '{}'::jsonb,
     UNIQUE (ticker, asof)
 );
 
@@ -394,6 +398,10 @@ ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS hold_character TEXT;
 ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS hold_character_secondary JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS hold_character_basis JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS concentration_note TEXT;
+-- 신규-A2 컬럼 추가(멱등)
+ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS grade TEXT;
+ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS grade_confidence TEXT;
+ALTER TABLE stock_action_advice ADD COLUMN IF NOT EXISTS grade_basis JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_stock_action_advice_lookup
     ON stock_action_advice (ticker, asof DESC, created_at DESC);

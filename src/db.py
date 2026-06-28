@@ -421,9 +421,11 @@ def upsert_stock_action_advice(conn: psycopg.Connection, row: StockActionAdviceR
             (ticker, asof, direction, current_weight, target_weight_low, target_weight_high,
              weight_action, entry_zone, exit_zone, confidence, rationale,
              supporting_factors, opposing_factors, divergence_note, model,
-             hold_character, hold_character_secondary, hold_character_basis, concentration_note)
+             hold_character, hold_character_secondary, hold_character_basis, concentration_note,
+             grade, grade_confidence, grade_basis)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s,
-                %s, %s::jsonb, %s::jsonb, %s)
+                %s, %s::jsonb, %s::jsonb, %s,
+                %s, %s, %s::jsonb)
         ON CONFLICT (ticker, asof) DO UPDATE SET
             direction = EXCLUDED.direction,
             current_weight = EXCLUDED.current_weight,
@@ -441,7 +443,10 @@ def upsert_stock_action_advice(conn: psycopg.Connection, row: StockActionAdviceR
             hold_character = EXCLUDED.hold_character,
             hold_character_secondary = EXCLUDED.hold_character_secondary,
             hold_character_basis = EXCLUDED.hold_character_basis,
-            concentration_note = EXCLUDED.concentration_note
+            concentration_note = EXCLUDED.concentration_note,
+            grade = EXCLUDED.grade,
+            grade_confidence = EXCLUDED.grade_confidence,
+            grade_basis = EXCLUDED.grade_basis
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -466,6 +471,9 @@ def upsert_stock_action_advice(conn: psycopg.Connection, row: StockActionAdviceR
                 json.dumps(row.hold_character_secondary, ensure_ascii=False),
                 json.dumps(row.hold_character_basis, ensure_ascii=False),
                 row.concentration_note,
+                row.grade,
+                row.grade_confidence,
+                json.dumps(row.grade_basis, ensure_ascii=False),
             ),
         )
     logger.debug("upsert_stock_action_advice: ticker=%s asof=%s", row.ticker, row.asof)

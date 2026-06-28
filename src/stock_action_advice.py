@@ -26,6 +26,21 @@ RSI_OVERHEAT = 70.0
 RSI_OVERSOLD = 30.0
 CONCENTRATION_OBSERVE_PCT = 15.0   # 관찰 노트 발화 트리거(비중 상한·강제 아님)
 
+# ──────────────────────────────────────────────────────────────
+# 신규-A2: 매력도 3축 종합 등급 (매수/관망/축소)
+#   - 등급은 축 방향(강/중/약)의 "정렬 패턴"에서 결정론 규칙으로 도출 — 값 합산 아님.
+#   - 임계는 기존 AxesCard._level과 동일(퀀트 60/40·컨센서스 20/5·별점 4/2).
+#   - 시장점수(5-B)·베타(A1)는 퀀트 축 경로로만 작용(비대칭: 하방 민감·상방 신중).
+# ──────────────────────────────────────────────────────────────
+GRADES = ("매수", "관망", "축소")
+GRADE_QUANT_STRONG = 60.0
+GRADE_QUANT_WEAK = 40.0
+GRADE_CONS_STRONG = 20.0
+GRADE_CONS_WEAK = 5.0
+GRADE_MY_STRONG = 4.0
+GRADE_MY_WEAK = 2.0
+GRADE_BETA_HIGH = 1.2   # 시장·베타 보정 트리거(고베타)
+
 # 집중 리스크 관찰 금지어 — 지시·가치판단 배제(사실+영향만 허용).
 # 평가형용사(부담/과도/적정/권장/바람직 등)와 지시동사(줄이/축소/매도 등)를 모두 차단한다.
 CONCENTRATION_BANNED_WORDS = (
@@ -224,6 +239,85 @@ def derive_hold_character(stock: dict, regime: str) -> tuple[str, list[str], lis
     return matched[0], matched[1:], basis
 
 
+def _axis_level(value: Optional[float], strong: float, weak: float, *, weak_inclusive: bool = False) -> Optional[str]:
+    """축 원시값 → 강/중/약. 결측은 None('축 없음', 0점 아님)."""
+    v = _num(value)
+    if v is None:
+        return None
+    if v >= strong:
+        return "강"
+    if (v <= weak) if weak_inclusive else (v < weak):
+        return "약"
+    return "중"
+
+
+def derive_grade(stock: dict, *, market_direction: Optional[str] = None) -> tuple[str, str, dict]:
+    """매력도 3축 정렬 패턴 → 등급(매수/관망/축소) + 신뢰도(상/중/하) + 근거(basis).
+
+    합산이 아니라 축 '방향'(강/중/약)의 조합만 본다(방향 투표). 컴포지트·상승여력·별점
+    숫자를 더하거나 평균하지 않는다. 시장·베타는 퀀트 축 경로로만, 비대칭으로 작용한다
+    (시장 약세+고베타 → 보수화 가능 / 시장 강세 → 등급 끌어올리지 않음, 고점 매수 방지).
+    """
+    quant = _axis_level(stock.get("comp"), GRADE_QUANT_STRONG, GRADE_QUANT_WEAK)
+    cons = _axis_level(stock.get("up"), GRADE_CONS_STRONG, GRADE_CONS_WEAK)
+    my = _axis_level((stock.get("note") or {}).get("attractiveness"), GRADE_MY_STRONG, GRADE_MY_WEAK, weak_inclusive=True)
+
+    # 시장·베타 보정(퀀트 축 경로로만, 하방 민감·상방 신중). 강세는 끌어올리지 않는다.
+    beta = _num(stock.get("beta"))
+    market_adjust = None
+    if quant == "강" and market_direction == "약세" and beta is not None and beta >= GRADE_BETA_HIGH:
+        market_adjust = {"applied": True, "axis": "quant", "from": "강", "to": "중",
+                         "reason": f"시장 약세 · 베타 {round(beta, 2)} — 시장 역풍 시 낙폭 확대 가능(보수화)"}
+        quant = "중"
+
+    levels = {"quant": quant, "consensus": cons, "judgment": my}
+    present = [lv for lv in levels.values() if lv is not None]
+    strong = present.count("강")
+    weak = present.count("약")
+    npresent = len(present)
+
+    divergence = None
+    if npresent <= 1:
+        grade, confidence = "관망", "하"   # 단일 축 — 근거 부족, 매수/축소 단정 금지
+    elif strong >= 1 and weak >= 1:
+        grade, confidence = "관망", "하"   # 축 충돌 → 확인 우선
+        divergence = "축이 엇갈립니다 — 확인 필요"
+    elif strong >= 2 and weak == 0:
+        grade, confidence = "매수", ("상" if strong == npresent else "중")
+    elif weak >= 2 and strong == 0:
+        grade, confidence = "축소", ("상" if weak == npresent else "중")
+    elif strong == 1 and weak == 0:
+        grade, confidence = "관망", "중"   # 한 축만 강 → 약한 매수 만들지 않음(상방 신중)
+    elif weak == 1 and strong == 0:
+        grade, confidence = "축소", "중"   # 한 축만 약 → 하방 민감
+    else:
+        grade, confidence = "관망", "하"   # 전부 중립
+
+    basis = {
+        "axes": levels,
+        "present": npresent,
+        "strong": strong,
+        "weak": weak,
+        "marketAdjust": market_adjust,
+        "divergence": divergence,
+    }
+    return grade, confidence, basis
+
+
+_GRADE_AXIS_LABEL = {"quant": "퀀트", "consensus": "컨센서스", "judgment": "내 판단"}
+
+
+def grade_fallback_rationale(frame: dict) -> str:
+    """LLM 없음/폴백 시 등급 해설 — 결정론 템플릿(사실+근거, 매매 단정 없음)."""
+    basis = frame.get("grade_basis") or {}
+    axes = basis.get("axes") or {}
+    parts = [f"{_GRADE_AXIS_LABEL[k]} {v}" for k, v in axes.items() if v]
+    axis_str = " · ".join(parts) if parts else "축 데이터 부족"
+    note = " 축이 엇갈려 확인이 필요합니다." if basis.get("divergence") else ""
+    return (f"{frame.get('grade', '관망')} 등급(신뢰도 {frame.get('grade_confidence', '하')}) — "
+            f"3축 정렬: {axis_str}.{note} 매매 단정이 아닌 관찰입니다.")
+
+
 def derive_concentration_note(current_weight: Optional[float], *, beta: Optional[float] = None) -> Optional[str]:
     """집중 리스크 '관찰' 노트(결정론 템플릿). 사실+영향만 — 지시·가치판단 없음.
 
@@ -277,6 +371,9 @@ def build_action_frame(stock: dict, portfolio_snapshot: dict, regime: str) -> di
     hold_character, hold_secondary, hold_basis = derive_hold_character(stock, regime)
     concentration_note = derive_concentration_note(current_weight, beta=_num(stock.get("beta")))
 
+    # 신규-A2: 매력도 3축 종합 등급(매수/관망/축소) — 정렬 패턴, 값 합산 아님.
+    grade, grade_confidence, grade_basis = derive_grade(stock, market_direction=stock.get("marketScoreDirection"))
+
     signal_label = (stock.get("signal") or {}).get("label")
     direction = "유지"
     if not stock.get("holding"):
@@ -308,4 +405,8 @@ def build_action_frame(stock: dict, portfolio_snapshot: dict, regime: str) -> di
         "hold_character_secondary": hold_secondary,
         "hold_character_basis": hold_basis,
         "concentration_note": concentration_note,
+        # 신규-A2: 3축 종합 등급(결론 레이어, composite 미합산)
+        "grade": grade,
+        "grade_confidence": grade_confidence,
+        "grade_basis": grade_basis,
     }

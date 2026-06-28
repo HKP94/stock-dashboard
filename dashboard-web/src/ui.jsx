@@ -95,6 +95,17 @@ export function SignalCard({ signal, compact = false }) {
   </div>;
 }
 
+// 신규-A2: 매력도 3축 종합 등급 뱃지(매수/관망/축소). 결론 레이어 — 횡단면 신호와 구분.
+export function GradeBadge({ grade, confidence, compact = false }) {
+  if (!grade) return compact ? null : <span style={{ fontSize: 11.5, color: C.ink3 }}>등급 산정 전</span>;
+  const tone = grade === "매수" ? C.ok : grade === "축소" ? C.bad : C.ink2;
+  const bg = grade === "매수" ? C.okBg : grade === "축소" ? C.badBg : C.surface2;
+  return <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: compact ? "3px 9px" : "5px 12px", border: `1px solid ${tone}44`, borderRadius: 999, background: bg }}>
+    <span style={{ fontSize: compact ? 12 : 14.5, fontWeight: 800, color: tone }}>{grade}</span>
+    {confidence && <span style={{ fontSize: compact ? 9.5 : 11, color: tone, opacity: 0.85 }}>신뢰도 {confidence}</span>}
+  </span>;
+}
+
 export function CompositeCell({ value, width = 110 }) {
   const col = compColor(value);
   return <div style={{ display: "flex", alignItems: "center", gap: 9 }}>

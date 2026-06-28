@@ -4,12 +4,12 @@ import {
   C, fmtPrice, compColor, sentMeta, flagTone,
   MonoCaps, Num, ChangePct, SentBadge, HoldDot, AlignBadge,
   CompositeCell, MiniBars, FactorBar, Sparkline, PriceChart,
-  SentStack, Pill, RegimeBadge, SignalCard, btnGhost,
+  SentStack, Pill, RegimeBadge, SignalCard, GradeBadge, btnGhost,
 } from './ui.jsx';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { cleanDisplayText, extractBullets, filterStocks, portfolioAssetTotal, sortStocksBySentiment } from './display.js';
+import { cleanDisplayText, extractBullets, filterStocks, portfolioAssetTotal, sortStocksBySentiment, isCompleteSignal } from './display.js';
 
 // PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
 function fmtBig(v, cur) {
@@ -890,6 +890,13 @@ function _level(kind, v) {
   return v >= 4 ? "높음" : v <= 2 ? "낮음" : "보통";  // my (attractiveness)
 }
 
+// 신규-A2: 등급 근거 한 줄(퀀트·컨센서스·내 판단의 강/중/약). gradeBasis.axes 사용.
+const GRADE_AXIS_KO = { quant: "퀀트", consensus: "컨센서스", judgment: "내 판단" };
+function gradeAxisSummary(basis) {
+  const axes = (basis && basis.axes) || {};
+  return Object.entries(axes).filter(([, v]) => v).map(([k, v]) => `${GRADE_AXIS_KO[k] || k} ${v}`).join(" · ");
+}
+
 function AxesCard({ s }) {
   const [note, setNote] = useState(s.note || { horizon: null, attractiveness: null, thesis: "" });
   const [history, setHistory] = useState(s.noteHistory || []);
@@ -954,6 +961,13 @@ function AxesCard({ s }) {
               <span key={k} style={{ fontSize: 10.5, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "3px 6px" }}>{k} <b style={{ color: C.ink }}>{v}</b></span>
             ))}
           </div>
+          {/* 횡단면 신호(display_signals) — 퀀트 축 내부 상대 위치. 등급(결론)과 구분. */}
+          {isCompleteSignal(s.signal) && (
+            <div style={{ marginTop: 10, fontSize: 10.5, color: C.ink3, lineHeight: 1.5 }}>
+              횡단면 위치 <b style={{ color: s.signal.label === "매수" ? C.ok : s.signal.label === "축소" ? C.bad : C.ink2 }}>{s.signal.label}</b>
+              <span style={{ color: C.ink3 }}> · {s.signal.reason}</span>
+            </div>
+          )}
           {/* 신규-A1: 시장 민감도(베타·상관) — 별도 보조 지표, composite와 합산하지 않음 */}
           <div style={{ marginTop: 10, fontSize: 11, color: C.ink3, lineHeight: 1.5 }}>
             시장 민감도{" "}
@@ -1187,14 +1201,23 @@ function ActionAdviceCard({ advice, history = [] }) {
 
   return (
     <Panel
-      title="종목 성격 · 액션"
-      sub="보유성격 + 관찰 · 표시 전용(비중 강요 아님)"
+      title="등급 · 종목 성격 · 액션"
+      sub="3축 종합 등급(결론) + 보유성격 + 관찰 · 표시 전용(비중 강요 아님)"
       right={<button onClick={() => setShowHistory((v) => !v)} style={{ ...btnGhost, fontSize: 11.5 }}>{showHistory ? "이력 접기 −" : "과거 제언 +"}</button>}
     >
       {!advice ? (
         <div style={{ padding: "24px 18px", fontSize: 12.5, color: C.ink3 }}>최신 종목 성격 판단이 없습니다.</div>
       ) : (
         <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* 신규-A2: 등급 = 상위 결론(헤드라인). 3축 정렬 근거 + 신뢰도. */}
+          {advice.grade && (
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", paddingBottom: 10, borderBottom: `1px solid ${C.line}` }}>
+              <span style={{ fontSize: 9.5, fontWeight: 700, color: C.ink3, letterSpacing: ".04em" }}>등급</span>
+              <GradeBadge grade={advice.grade} confidence={advice.gradeConfidence} />
+              {gradeAxisSummary(advice.gradeBasis) && <span style={{ fontSize: 11.5, color: C.ink2 }}>3축 정렬: {gradeAxisSummary(advice.gradeBasis)}</span>}
+              <span style={{ fontSize: 10, color: C.ink3 }}>합산 아님 · 매매 신호일 뿐 자동 집행 아님</span>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{ fontSize: 9.5, fontWeight: 700, color: C.ink3, letterSpacing: ".04em" }}>보유성격</span>
             <span style={{ fontSize: 12.5, fontWeight: 800, color: tone, background: tone + "14", border: `1px solid ${tone}33`, borderRadius: 999, padding: "5px 10px" }}>{character}</span>
@@ -1261,9 +1284,8 @@ function ActionAdviceCard({ advice, history = [] }) {
           {(history || []).length ? history.map((item, idx) => (
             <div key={`${item.asof}-${idx}`} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "10px 12px" }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink }}>{item.direction}</span>
-                <span style={{ fontSize: 11, color: C.ink2 }}>{item.currentWeight != null ? `${item.currentWeight}% → ${item.targetWeightLow}~${item.targetWeightHigh}%` : `${item.targetWeightLow}~${item.targetWeightHigh}%`}</span>
-                <span style={{ fontSize: 11, color: C.ink2 }}>신뢰도 {item.confidence}</span>
+                {item.grade && <GradeBadge grade={item.grade} confidence={item.gradeConfidence} compact />}
+                <span style={{ fontSize: 11, color: C.ink2 }}>{item.holdCharacter || item.direction}</span>
                 <span className="mono" style={{ marginLeft: "auto", fontSize: 10, color: C.ink3 }}>{item.asof}</span>
               </div>
             </div>
@@ -1530,7 +1552,23 @@ export function StockDetail({ D, ticker, nav }) {
         </div>
       </div>
 
-      <SignalCard signal={s.signal} />
+      {/* 신규-A2: 매력도 3축 종합 등급 — 상위 결론(횡단면 신호는 퀀트 축 안으로 이동) */}
+      {(() => {
+        const aa = s.actionAdviceLatest;
+        const grade = aa?.grade || s.grade;
+        if (!grade) return <SignalCard signal={s.signal} />;
+        const tone = grade === "매수" ? C.ok : grade === "축소" ? C.bad : C.ink2;
+        const summary = gradeAxisSummary(aa?.gradeBasis);
+        return (
+          <div style={{ padding: "10px 12px", border: `1px solid ${tone}33`, borderRadius: 8, background: grade === "매수" ? C.okBg : grade === "축소" ? C.badBg : C.surface2 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <GradeBadge grade={grade} confidence={aa?.gradeConfidence || s.gradeConfidence} />
+              <span style={{ fontSize: 10.5, color: C.ink3 }}>3축 종합 결론 · 합산 아님</span>
+            </div>
+            {summary && <div style={{ marginTop: 6, fontSize: 11.5, color: C.ink2 }}>3축 정렬: {summary}</div>}
+          </div>
+        );
+      })()}
 
       {/* PR-1: 개선된 종목 네비게이션 */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

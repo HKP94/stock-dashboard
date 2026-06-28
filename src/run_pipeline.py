@@ -69,7 +69,7 @@ from src.ingest_us import run_us_ingest
 from src import pipeline_analysis, pipeline_ingest, pipeline_synthesis
 from src.schemas import StockDailyRecord
 from src.schemas import StockActionAdviceRow
-from src.stock_action_advice import build_action_frame, finalize_concentration_note
+from src.stock_action_advice import build_action_frame, finalize_concentration_note, grade_fallback_rationale
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +190,7 @@ def _step_action_advice(conn: psycopg.Connection, errors: list) -> None:
                     entry_zone=frame["entry_zone"],
                     exit_zone=frame["exit_zone"],
                     confidence=frame["confidence"],
-                    rationale=(narrative.rationale if narrative else f"{frame['direction']} 제안 — 현재 비중 {frame['current_weight']}%, 목표 {frame['target_weight_low']}~{frame['target_weight_high']}%"),
+                    rationale=(narrative.rationale if narrative else grade_fallback_rationale(frame)),
                     supporting_factors=(narrative.supportingFactors if narrative and narrative.supportingFactors else frame["supporting_factors"]),
                     opposing_factors=(narrative.opposingFactors if narrative and narrative.opposingFactors else frame["opposing_factors"]),
                     divergence_note=(narrative.divergenceNote if narrative and narrative.divergenceNote is not None else frame["divergence_note"]),
@@ -203,6 +203,9 @@ def _step_action_advice(conn: psycopg.Connection, errors: list) -> None:
                         (narrative.concentrationNote if narrative else None),
                         frame["current_weight"],
                     ),
+                    grade=frame["grade"],
+                    grade_confidence=frame["grade_confidence"],
+                    grade_basis=frame["grade_basis"],
                 )
                 upsert_stock_action_advice(conn, row)
                 conn.commit()
