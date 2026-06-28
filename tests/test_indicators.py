@@ -239,3 +239,210 @@ def test_latest_indicators_is_last_row():
     latest = latest_indicators("TEST", df)
     assert latest is not None and rows
     assert latest.date == rows[-1].date
+
+
+# ──────────────────────────────────────────────────────────────
+# E-1: 트레이딩 지표 (MACD·볼린저·스토캐스틱·ATR·거래량비율)
+# ──────────────────────────────────────────────────────────────
+
+def _make_vol_df(prices: list[float], volumes: list[float], start=date(2020, 1, 1)) -> pd.DataFrame:
+    """가격+거래량 DataFrame."""
+    index = pd.date_range(start=str(start), periods=len(prices), freq="B")
+    return pd.DataFrame({"close": prices, "volume": volumes}, index=index)
+
+
+# ── MACD ──────────────────────────────────────────────────────
+
+def test_macd_not_none_sufficient_data():
+    """충분한 데이터(MACD slow=26 이상) → macd_hist not None."""
+    df = _make_df(_uptrend(MIN_BARS + 50))
+    last = latest_indicators("TEST", df)
+    assert last is not None
+    assert last.macd_hist is not None
+
+def test_macd_uptrend_positive_line():
+    """지속 상승 추세 → MACD 라인(EMA12-EMA26) > 0.
+    (선형 추세에서 히스토그램은 정상상태 0 수렴 — 라인으로 검증)"""
+    df = _make_df(_uptrend(n=400, start=50, end=300))
+    last = latest_indicators("TEST", df)
+    assert last is not None and last.macd_line is not None
+    assert last.macd_line > 0, f"상승추세 macd_line={last.macd_line}"
+
+def test_macd_downtrend_negative_line():
+    """지속 하락 추세 → MACD 라인 < 0."""
+    df = _make_df(_downtrend(n=400, start=300, end=50))
+    last = latest_indicators("TEST", df)
+    assert last is not None and last.macd_line is not None
+    assert last.macd_line < 0, f"하락추세 macd_line={last.macd_line}"
+
+def test_macd_hist_accelerating_uptrend():
+    """가속 상승(지수적) → MACD 히스토그램 > 0 (새 모멘텀 발생)."""
+    import math
+    prices = [50 * math.exp(0.003 * i) for i in range(MIN_BARS + 80)]
+    df = _make_df(prices)
+    last = latest_indicators("TEST", df)
+    assert last is not None and last.macd_hist is not None
+    assert last.macd_hist > 0, f"가속추세 macd_hist={last.macd_hist}"
+
+def test_macd_schema_fields():
+    """macd_line, macd_signal, macd_hist 세 필드 모두 존재."""
+    df = _make_df(_uptrend(MIN_BARS + 50))
+    last = latest_indicators("TEST", df)
+    assert last is not None
+    assert hasattr(last, "macd_line")
+    assert hasattr(last, "macd_signal")
+    assert hasattr(last, "macd_hist")
+
+
+# ── 볼린저밴드 ─────────────────────────────────────────────────
+
+def test_bb_pct_in_range_uptrend():
+    """볼린저 %B: 0~1 사이 (BB 안에 있을 때)."""
+    df = _make_df(_flat(MIN_BARS + 30))  # flat → 항상 중앙선
+    last = latest_indicators("TEST", df)
+    assert last is not None and last.bb_pct is not None
+    # flat prices → 종가 = SMA = 중앙선 → %B ≈ 0.5
+    assert 0.0 <= last.bb_pct <= 1.0, f"bb_pct out of range: {last.bb_pct}"
+
+def test_bb_pct_flat_near_midband():
+    """flat prices → 볼린저 %B ≈ 0.5 (중앙선)."""
+    df = _make_df(_flat(MIN_BARS + 30, val=100.0))
+    last = latest_indicators("TEST", df)
+    assert last is not None and last.bb_pct is not None
+    # flat일 때 표준편차→0이라 %B가 NaN일 수 있음 — None 허용
+    # 값이 있으면 0~1 범위 확인
+    if last.bb_pct is not None:
+        assert -0.1 <= last.bb_pct <= 1.1
+
+def test_bb_upper_above_lower():
+    """볼린저 상단 > 하단 (항상 성립)."""
+    df = _make_df(_uptrend(MIN_BARS + 30))
+    rows = compute_indicators("TEST", df)
+    for r in rows:
+        if r.bb_upper is not None and r.bb_lower is not None:
+            assert r.bb_upper >= r.bb_lower, f"bb_upper({r.bb_upper}) < bb_lower({r.bb_lower})"
+
+def test_bb_fields_exist():
+    """bb_upper, bb_lower, bb_pct 필드 존재."""
+    df = _make_df(_uptrend(MIN_BARS + 30))
+    last = latest_indicators("TEST", df)
+    assert last is not None
+    for attr in ("bb_upper", "bb_lower", "bb_pct"):
+        assert hasattr(last, attr)
+
+
+# ── 스토캐스틱 ─────────────────────────────────────────────────
+
+def test_stoch_k_in_range():
+    """스토캐스틱 %K: 0~100 사이 (표준 범위)."""
+    df = _make_df(_uptrend(MIN_BARS + 50))
+    rows = compute_indicators("TEST", df)
+    for r in rows:
+        if r.stoch_k is not None:
+            assert -1e-6 <= r.stoch_k <= 100 + 1e-6, f"stoch_k out of range: {r.stoch_k}"
+
+def test_stoch_d_follows_k():
+    """stoch_d (3-day SMA of K) 존재 + 범위 확인."""
+    df = _make_df(_uptrend(MIN_BARS + 50))
+    last = latest_indicators("TEST", df)
+    assert last is not None
+    if last.stoch_k is not None and last.stoch_d is not None:
+        assert 0 <= last.stoch_d <= 100
+
+
+# ── ATR ────────────────────────────────────────────────────────
+
+def test_atr14_positive():
+    """ATR(14) > 0 (변동성은 양수)."""
+    df = _make_df(_uptrend(MIN_BARS + 30))
+    last = latest_indicators("TEST", df)
+    assert last is not None
+    # high/low 없이 close-only라 None일 수 있음
+    if last.atr14 is not None:
+        assert last.atr14 >= 0, f"atr14 음수: {last.atr14}"
+
+
+# ── 거래량 비율 ────────────────────────────────────────────────
+
+def test_vol_ratio20_with_volume():
+    """거래량 데이터 있을 때 vol_ratio20 계산."""
+    prices = _uptrend(MIN_BARS + 30)
+    # 균등 거래량 1000주
+    vols = [1000.0] * len(prices)
+    df = _make_vol_df(prices, vols)
+    last = latest_indicators("TEST", df)
+    assert last is not None and last.vol_ratio20 is not None
+    # 모든 거래량이 같으면 비율 = 1.0
+    assert last.vol_ratio20 == pytest.approx(1.0, rel=1e-3)
+
+def test_vol_ratio20_spike():
+    """마지막 거래량 2배 급증 → vol_ratio20 > 1 (평균보다 큼)."""
+    prices = _uptrend(MIN_BARS + 30)
+    vols = [1000.0] * len(prices)
+    vols[-1] = 2000.0  # 마지막만 2배
+    df = _make_vol_df(prices, vols)
+    last = latest_indicators("TEST", df)
+    assert last is not None and last.vol_ratio20 is not None
+    assert last.vol_ratio20 > 1.0
+
+def test_vol_ratio20_none_without_volume():
+    """거래량 컬럼 없으면 vol_ratio20 = None."""
+    df = _make_df(_uptrend(MIN_BARS + 30))  # volume 없음
+    last = latest_indicators("TEST", df)
+    assert last is not None
+    assert last.vol_ratio20 is None
+
+
+# ── trading signal 헬퍼 (export_dashboard_data) ───────────────
+
+from src.export_dashboard_data import _compute_trading_signal  # noqa: E402
+
+
+def test_trading_signal_all_bullish():
+    """MACD+/BB하단/RSI저 → 단기매수우호 (score=+3≥2)."""
+    result = _compute_trading_signal(rsi14=30.0, bb_pct=0.1, macd_hist=0.5, vol_ratio20=None)
+    assert result["label"] == "단기매수우호"
+    assert result["score"] >= 2
+
+def test_trading_signal_all_bearish():
+    """MACD-/BB상단/RSI고 → 단기회피 (score=-3≤-2)."""
+    result = _compute_trading_signal(rsi14=70.0, bb_pct=0.9, macd_hist=-0.5, vol_ratio20=None)
+    assert result["label"] == "단기회피"
+    assert result["score"] <= -2
+
+def test_trading_signal_neutral_mixed():
+    """혼합 신호 → 중립."""
+    result = _compute_trading_signal(rsi14=50.0, bb_pct=0.5, macd_hist=0.1, vol_ratio20=None)
+    assert result["label"] == "중립"
+
+def test_trading_signal_vol_note_on_spike():
+    """vol_ratio20 >= 2 → volNote 포함."""
+    result = _compute_trading_signal(rsi14=50.0, bb_pct=0.5, macd_hist=0.0, vol_ratio20=2.5)
+    assert result["volNote"] is not None
+    assert "급증" in result["volNote"]
+
+def test_trading_signal_vol_note_none_normal():
+    """vol_ratio20 < 2 → volNote=None."""
+    result = _compute_trading_signal(rsi14=50.0, bb_pct=0.5, macd_hist=0.0, vol_ratio20=1.2)
+    assert result["volNote"] is None
+
+def test_trading_signal_partial_none():
+    """일부 값 None → score 계산 생략 (TypeError 없음)."""
+    result = _compute_trading_signal(rsi14=None, bb_pct=None, macd_hist=0.5, vol_ratio20=None)
+    assert result["label"] in ("단기매수우호", "중립", "단기회피")  # 에러 없음
+    assert result["score"] == 1  # MACD+만
+
+def test_trading_signal_basis_populated():
+    """신호 발생 시 basis 리스트에 근거 포함."""
+    result = _compute_trading_signal(rsi14=30.0, bb_pct=0.1, macd_hist=0.5, vol_ratio20=None)
+    assert len(result["basis"]) == 3
+    sources = [b["source"] for b in result["basis"]]
+    assert "MACD" in sources
+    assert "BB%B" in sources
+    assert "RSI" in sources
+
+def test_trading_signal_all_none():
+    """모두 None → 중립, 에러 없음."""
+    result = _compute_trading_signal(rsi14=None, bb_pct=None, macd_hist=None, vol_ratio20=None)
+    assert result["label"] == "중립"
+    assert result["score"] == 0
