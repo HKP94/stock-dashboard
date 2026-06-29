@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 RUN_KIND = "pipeline_analysis"
 
 # 단계 순서를 짧은 튜플 상수로 노출 (설계 §5)
-DAILY_STEPS = ("compute_indicators", "compute_quant", "market_score", "compute_portfolio", "backtest")
+DAILY_STEPS = ("compute_indicators", "compute_quant", "market_score", "compute_portfolio", "backtest", "signal_track")
 REFRESH_STEPS = ("compute_indicators", "compute_quant", "market_score")
 
 
@@ -173,6 +173,22 @@ def _step_backtest(conn: psycopg.Connection, errors: list, counts: dict) -> None
         errors.append(make_error("backtest", exc))
 
 
+def _step_signal_track(conn: psycopg.Connection, errors: list, counts: dict) -> None:
+    """신규-F: A2 등급 신호 적중률 추적. 실패해도 파이프라인 계속."""
+    logger.info("분석: 신호 적중률 추적")
+    try:
+        from src.compute_signal_track import compute_signal_track
+        result = compute_signal_track(conn)
+        counts["signal_track_inserted"] = result["inserted"]
+        counts["signal_track_updated"] = result["updated"]
+        if result["errors"]:
+            errors.extend([make_error(e["stage"], Exception(e["error"])) for e in result["errors"]])
+    except Exception as exc:
+        conn.rollback()
+        logger.warning("신호 적중률 추적 실패(비치명적): %s", exc)
+        errors.append(make_error("signal_track", exc))
+
+
 # ──────────────────────────────────────────────────────────────
 # 진입점
 # ──────────────────────────────────────────────────────────────
@@ -200,6 +216,7 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
                 _step_market_score(conn, errors, counts)
                 _step_portfolio(conn, errors, counts)
                 _step_backtest(conn, errors, counts)
+                _step_signal_track(conn, errors, counts)
             else:  # PROFILE_REFRESH — 포트폴리오·백테스트 제외
                 _step_indicators_refresh(conn, all_tickers, errors, counts)
                 _step_quant(conn, all_tickers, errors, counts)
