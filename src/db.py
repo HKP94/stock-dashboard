@@ -885,6 +885,37 @@ def replace_ticker_context(conn: psycopg.Connection, row: TickerContextRow) -> N
     logger.debug("replace_ticker_context: %s %s %s", row.ticker, row.context_type, row.valid_from)
 
 
+def upsert_signal_grade_track(conn: psycopg.Connection, rows: list[dict]) -> int:
+    """신규-F: 신호 적중률 추적 upsert. rows는 compute_signal_track._build_row 반환 dict 목록."""
+    sql = """
+        INSERT INTO signal_grade_track
+            (signal_type, ticker, asof, grade, grade_conf, n_days,
+             entry_date, entry_price, exit_date, exit_price,
+             bench_entry, bench_exit, raw_return, bench_return,
+             excess_return, hit_excess, hit_raw, pending)
+        VALUES
+            (%(signal_type)s, %(ticker)s, %(asof)s, %(grade)s, %(grade_conf)s, %(n_days)s,
+             %(entry_date)s, %(entry_price)s, %(exit_date)s, %(exit_price)s,
+             %(bench_entry)s, %(bench_exit)s, %(raw_return)s, %(bench_return)s,
+             %(excess_return)s, %(hit_excess)s, %(hit_raw)s, %(pending)s)
+        ON CONFLICT (signal_type, ticker, asof, n_days) DO UPDATE SET
+            exit_date     = EXCLUDED.exit_date,
+            exit_price    = EXCLUDED.exit_price,
+            bench_exit    = EXCLUDED.bench_exit,
+            raw_return    = EXCLUDED.raw_return,
+            bench_return  = EXCLUDED.bench_return,
+            excess_return = EXCLUDED.excess_return,
+            hit_excess    = EXCLUDED.hit_excess,
+            hit_raw       = EXCLUDED.hit_raw,
+            pending       = EXCLUDED.pending,
+            computed_at   = NOW()
+    """
+    with conn.cursor() as cur:
+        cur.executemany(sql, rows)
+    logger.debug("upsert_signal_grade_track: %d rows", len(rows))
+    return len(rows)
+
+
 # ──────────────────────────────────────────────────────────────
 # 실행 로그 (runs 테이블)
 # ──────────────────────────────────────────────────────────────

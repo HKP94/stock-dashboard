@@ -2073,6 +2073,16 @@ def build_data() -> dict:
         _attach_market_score(conn, market, stocks)
         strategy_guidance = _build_strategy_guidance(backtest_data, market)
 
+        # 신규-F: 신호 적중률 요약 (n>=30이어야 notnull, 그 전엔 None — 데이터 축적 대기)
+        signal_accuracy = None
+        try:
+            from src.compute_signal_track import compute_accuracy_summary, SIGNAL_TYPE_A2
+            summary = compute_accuracy_summary(conn, SIGNAL_TYPE_A2)
+            if summary and summary.get("n", 0) >= 30:
+                signal_accuracy = summary
+        except Exception as _exc:
+            logger.warning("signalAccuracy 요약 실패(비치명적): %s", _exc)
+
         now = datetime.now()
         refresh_context = _infer_refresh_context(now, price_asof)
         market["refreshContext"] = refresh_context
@@ -2099,6 +2109,7 @@ def build_data() -> dict:
             "portfolioAdvice": portfolio_advice,  # 전략 조언(CoT) 최근 캐시(+stale)
             "backtest":   backtest_data,        # PR-7: 백테스트 + 회고
             "strategyGuidance": strategy_guidance,
+            "signalAccuracy": signal_accuracy,   # 신규-F: n>=30 이전엔 null
             "research":   {
                 "files": {}, "notes": {},
                 "tags": ["매수후보", "관망", "리스크주의", "장기보유", "분할매수", "비중축소"],

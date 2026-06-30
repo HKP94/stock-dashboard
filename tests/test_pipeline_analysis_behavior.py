@@ -235,6 +235,7 @@ def test_run_kind_is_pipeline_analysis():
         stack.enter_context(patch("src.backtest.run_backtest", lambda _c: BACKTEST_RESULT))
         stack.enter_context(patch.object(PA.db, "get_conn", lambda: conn))
         stack.enter_context(patch.object(PA, "_step_market_score", lambda *a, **k: None))
+        stack.enter_context(patch.object(PA, "_step_signal_track", lambda *a, **k: None))
         stack.enter_context(patch.object(PA.db, "log_run_start", lambda _c, kind: captured.setdefault("kind", kind) or 1))
         stack.enter_context(patch.object(PA.db, "log_run_finish", lambda _c, run_id, status, errors: captured.setdefault("status", status)))
         result = PA.run("daily")
