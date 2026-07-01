@@ -76,7 +76,7 @@ def _legacy_daily(narrative=None):
         stack.enter_context(patch.object(RP, "summarize_macro_environment", _enrich_bool_mock(calls, "macro_summary")))
         stack.enter_context(patch.object(RP, "summarize_stock_action_advice", lambda _f: narrative))
         stack.enter_context(patch.object(RP, "_within_budget", lambda _s, _b: True))
-        stack.enter_context(patch.object(RP, "_get_manual_research_model", lambda: "fake-model"))
+        stack.enter_context(patch.object(RP, "_get_action_advice_model", lambda: "fake-model"))
         stack.enter_context(patch.object(RP, "upsert_stock_action_advice", _action_sink(rows)))
         stack.enter_context(patch("src.export_dashboard_data.build_data", lambda: BUILD_DATA))
 
@@ -99,7 +99,7 @@ def _new_daily(narrative=None):
         stack.enter_context(patch.object(PS.enrich_gemini, "summarize_macro_environment", _enrich_bool_mock(calls, "macro_summary")))
         stack.enter_context(patch.object(PS.enrich_gemini, "summarize_stock_action_advice", lambda _f: narrative))
         stack.enter_context(patch.object(PS.enrich_gemini, "_within_budget", lambda _s, _b: True))
-        stack.enter_context(patch.object(PS.enrich_gemini, "_get_manual_research_model", lambda: "fake-model"))
+        stack.enter_context(patch.object(PS.enrich_gemini, "_get_action_advice_model", lambda: "fake-model"))
         stack.enter_context(patch.object(PS.db, "upsert_stock_action_advice", _action_sink(rows)))
         stack.enter_context(patch("src.export_dashboard_data.build_data", lambda: BUILD_DATA))
         stack.enter_context(patch.object(PS.db, "get_conn", lambda: conn))

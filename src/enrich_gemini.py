@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import signal
 import time
 from datetime import date, datetime
@@ -63,18 +64,31 @@ GEMINI_BULK_MODEL_DEFAULT: str = "gemini-2.5-flash-lite"
 # 시황 종합(1회/일)·상위 티어. 2.5-flash 계열로 통일(실호출 검증 2026-06-17). 무효 모델명이면 전량 실패.
 GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-2.5-flash"
 GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT: str = os.environ.get("GEMINI_MANUAL_RESEARCH_MODEL", "gemini-2.5-pro")
+# 액션제언(매일 ~38종목) 모델. 비용 안정화 기간엔 flash 계열만(무료티어 자격). pro 복귀는
+# 파이프라인 안정 확인 후 PM 승인 하에 ACTION_ADVICE_MODEL=gemini-2.5-pro 한 값으로. (CLAUDE.md §5)
+ACTION_ADVICE_MODEL_DEFAULT: str = "gemini-2.5-flash"
 MAX_NEWS_PER_TICKER: int = 15
 BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
 GEMINI_HTTP_TIMEOUT_MS: int = int(os.environ.get("GEMINI_HTTP_TIMEOUT_MS", "45000"))
 GEMINI_BATCH_BUDGET_SECONDS: float = float(os.environ.get("GEMINI_BATCH_BUDGET_SECONDS", "1800"))
-# pro p95 레이턴시(17~20s)와 http 타임아웃(45s) 위의 하드 백스톱. 20s는 정상 pro 호출을
-# false timeout으로 트립시켜 재시도 이중과금을 유발했다(run #157 종합 폭주 원인).
+# 액션제언 하드 백스톱(대기가 아닌 상한). http 타임아웃(45s) 위. flash(현재 기본, <10s)엔
+# 트립되지 않고, pro 복귀 시 p95 17~20s도 커버. 20s는 정상 pro를 false timeout으로 트립시켜
+# 재시도 이중과금을 유발했다(run #157). pro 복귀 대비 값 유지.
 ACTION_ADVICE_LLM_TIMEOUT_SECONDS: int = int(os.environ.get("ACTION_ADVICE_LLM_TIMEOUT_SECONDS", "60"))
 
 # PR-1(진단): 네트워크/일시오류(429·503·타임아웃) 지수 백오프 재시도. 파싱/스키마 실패와 구분.
 TRANSIENT_RETRIES: int = 3        # _call_gemini 일시오류 재시도 횟수 (CLAUDE.md §3)
 TRANSIENT_BACKOFF_BASE: float = 2.0   # 백오프 기준(초): 2, 4, 8 ...
+# 지터: 동시 재시도 폭발(thundering herd) 방지. 실제 대기 = base*2^n + U(0, jitter).
+TRANSIENT_BACKOFF_JITTER: float = float(os.environ.get("GEMINI_BACKOFF_JITTER", "1.0"))
+# 서킷브레이커: _call_gemini_with_backoff 단위 '연속' 일시오류가 임계 이상이면 이후 호출은
+# API를 때리지 않고 즉시 실패시켜 쿼터·시간 낭비를 차단(우아한 degrade). 성공 1회로 리셋,
+# 쿨다운 경과 시 half-open(프로브 1회 허용). 파이프라인은 단명 프로세스라 다음 실행은 0에서 시작.
+CIRCUIT_BREAKER_THRESHOLD: int = int(os.environ.get("GEMINI_CIRCUIT_BREAKER_THRESHOLD", "5"))
+CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = float(os.environ.get("GEMINI_CIRCUIT_BREAKER_COOLDOWN", "300"))
+_consecutive_transient_failures: int = 0
+_circuit_tripped_at: float = 0.0
 _TRANSIENT_MARKERS: tuple[str, ...] = (
     "429", "503", "500", "resource_exhausted", "rate limit", "ratelimit",
     "quota", "unavailable", "overloaded", "deadline", "timeout", "timed out",
@@ -135,6 +149,11 @@ def _get_manual_research_model() -> str:
     return os.environ.get("GEMINI_MANUAL_RESEARCH_MODEL", GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT)
 
 
+def _get_action_advice_model() -> str:
+    """액션제언 전용 모델. 기본 flash(비용 안정화). pro 복귀는 ACTION_ADVICE_MODEL 값 하나로."""
+    return os.environ.get("ACTION_ADVICE_MODEL", ACTION_ADVICE_MODEL_DEFAULT)
+
+
 def _get_gemini_client():
     """google-genai 클라이언트 반환. 키는 환경변수에서만."""
     from google import genai  # 지연 임포트 (테스트 환경 미설치 대응)
@@ -165,21 +184,53 @@ def _is_transient(exc: Exception) -> bool:
     return any(m in msg for m in _TRANSIENT_MARKERS)
 
 
+def reset_circuit_breaker() -> None:
+    """서킷 상태 초기화. 새 배치 시작·테스트에서 명시 호출."""
+    global _consecutive_transient_failures, _circuit_tripped_at
+    _consecutive_transient_failures = 0
+    _circuit_tripped_at = 0.0
+
+
+def _circuit_open() -> bool:
+    """연속 일시오류가 임계 이상이고 쿨다운이 안 지났으면 True(호출 차단)."""
+    if _consecutive_transient_failures < CIRCUIT_BREAKER_THRESHOLD:
+        return False
+    # 쿨다운 경과 → half-open: 프로브 1회 통과시킴
+    return (time.monotonic() - _circuit_tripped_at) < CIRCUIT_BREAKER_COOLDOWN_SECONDS
+
+
+def _record_transient_failure() -> None:
+    global _consecutive_transient_failures, _circuit_tripped_at
+    _consecutive_transient_failures += 1
+    if _consecutive_transient_failures >= CIRCUIT_BREAKER_THRESHOLD:
+        _circuit_tripped_at = time.monotonic()
+
+
 def _call_gemini_with_backoff(client, model: str, prompt: str) -> str:
-    """PR-1(진단): _call_gemini를 지수 백오프로 감싼다.
+    """PR-1(진단): _call_gemini를 지수 백오프+지터+서킷브레이커로 감싼다.
     429/503/타임아웃 등 '일시오류'만 재시도(최대 TRANSIENT_RETRIES). 그 외(잘못된 요청 등)는 즉시 전파.
     이게 종목별 폴백 사고(production ~60%)를 줄이는 핵심 — 단건 일시오류를 흡수.
-    파싱/스키마 실패는 여기서 다루지 않는다(상위 _call_gemini_for_*가 별도 재시도)."""
+    파싱/스키마 실패는 여기서 다루지 않는다(상위 _call_gemini_for_*가 별도 재시도).
+    서킷 오픈 시 API를 때리지 않고 즉시 예외 → 상위가 폴백으로 우아하게 degrade(쿼터·시간 보존)."""
+    if _circuit_open():
+        raise RuntimeError(
+            f"Gemini 서킷 오픈(연속 일시오류 {_consecutive_transient_failures}회) — API 호출 스킵(폴백 degrade)"
+        )
     last: Optional[Exception] = None
     for attempt in range(TRANSIENT_RETRIES):
         try:
-            return _call_gemini(client, model, prompt)
+            result = _call_gemini(client, model, prompt)
+            reset_circuit_breaker()  # 성공 → 연속 카운터·서킷 리셋
+            return result
         except Exception as exc:
             last = exc
-            if not _is_transient(exc) or attempt == TRANSIENT_RETRIES - 1:
+            if not _is_transient(exc):
+                raise  # 비일시(파싱/요청오류)는 서킷과 무관 — 즉시 전파, 카운터 불변
+            if attempt == TRANSIENT_RETRIES - 1:
+                _record_transient_failure()  # 재시도 소진 → 서킷 카운트
                 raise
-            wait = TRANSIENT_BACKOFF_BASE * (2 ** attempt)
-            logger.warning("Gemini 일시오류(%s) — %.0fs 후 재시도 %d/%d",
+            wait = TRANSIENT_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, TRANSIENT_BACKOFF_JITTER)
+            logger.warning("Gemini 일시오류(%s) — %.1fs 후 재시도 %d/%d",
                            str(exc)[:80], wait, attempt + 2, TRANSIENT_RETRIES)
             time.sleep(wait)
     assert last is not None
@@ -347,7 +398,7 @@ def summarize_stock_action_advice(context: dict) -> StockActionAdviceNarrativeOu
         signal.signal(signal.SIGALRM, _handle_timeout)
         signal.alarm(ACTION_ADVICE_LLM_TIMEOUT_SECONDS)
         client = _get_gemini_client()
-        text = _call_gemini_with_backoff(client, _get_manual_research_model(), _build_stock_action_advice_prompt(context))
+        text = _call_gemini_with_backoff(client, _get_action_advice_model(), _build_stock_action_advice_prompt(context))
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous)
         return _parse_stock_action_advice_output(text)
