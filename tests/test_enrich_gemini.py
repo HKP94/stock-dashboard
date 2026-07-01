@@ -14,13 +14,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+import src.enrich_gemini as EG
 from src.enrich_gemini import (
+    ACTION_ADVICE_MODEL_DEFAULT,
     BODY_CAP,
+    CIRCUIT_BREAKER_THRESHOLD,
     TRANSIENT_RETRIES,
     _build_market_prompt,
     _build_region_market_prompt,
     _build_market_news_digest_prompt,
     _build_news_prompt,
+    _get_action_advice_model,
     _get_gemini_client,
     _call_gemini_for_market,
     _call_gemini_for_news,
@@ -32,6 +36,7 @@ from src.enrich_gemini import (
     _parse_news_output,
     _within_budget,
     is_fallback_summary,
+    reset_circuit_breaker,
 )
 
 # ──────────────────────────────────────────────────────────────
@@ -198,6 +203,12 @@ class TestIsFallbackSummary:
 
 
 class TestTransientBackoff:
+    @pytest.fixture(autouse=True)
+    def _reset_circuit(self):
+        reset_circuit_breaker()
+        yield
+        reset_circuit_breaker()
+
     def test_is_transient_detects_429(self):
         assert _is_transient(Exception("429 RESOURCE_EXHAUSTED")) is True
         assert _is_transient(Exception("503 UNAVAILABLE, model overloaded")) is True
@@ -224,6 +235,90 @@ class TestTransientBackoff:
             with pytest.raises(Exception):
                 _call_gemini_with_backoff(MagicMock(), "m", "p")
             assert mock_call.call_count == TRANSIENT_RETRIES
+
+
+class TestBackoffJitter:
+    @pytest.fixture(autouse=True)
+    def _reset_circuit(self):
+        reset_circuit_breaker()
+        yield
+        reset_circuit_breaker()
+
+    def test_wait_includes_jitter(self):
+        # random.uniform이 실제로 대기 계산에 반영되는지 — 고정값 주입해 확인
+        sleeps: list[float] = []
+        with patch("src.enrich_gemini._call_gemini") as mock_call, \
+             patch("src.enrich_gemini.random.uniform", return_value=0.7) as mock_jitter, \
+             patch("src.enrich_gemini.time.sleep", side_effect=lambda s: sleeps.append(s)):
+            mock_call.side_effect = [Exception("429"), "OK"]
+            assert _call_gemini_with_backoff(MagicMock(), "m", "p") == "OK"
+        # attempt 0: base*2^0(=2.0) + jitter(0.7) = 2.7
+        assert sleeps == [pytest.approx(2.7)]
+        assert mock_jitter.called
+
+
+class TestCircuitBreaker:
+    @pytest.fixture(autouse=True)
+    def _reset_circuit(self):
+        reset_circuit_breaker()
+        yield
+        reset_circuit_breaker()
+
+    def test_opens_after_threshold_consecutive_failures(self):
+        # 매 호출이 재시도 소진(전량 429) → 호출당 연속카운터 +1. threshold회째부터 서킷 오픈.
+        with patch("src.enrich_gemini._call_gemini") as mock_call, patch("src.enrich_gemini.time.sleep"):
+            mock_call.side_effect = Exception("503 overloaded")
+            for _ in range(CIRCUIT_BREAKER_THRESHOLD):
+                with pytest.raises(Exception):
+                    _call_gemini_with_backoff(MagicMock(), "m", "p")
+            calls_before = mock_call.call_count
+            # 서킷 오픈: 다음 호출은 API를 때리지 않고 즉시 실패
+            with pytest.raises(RuntimeError, match="서킷 오픈"):
+                _call_gemini_with_backoff(MagicMock(), "m", "p")
+            assert mock_call.call_count == calls_before  # API 미호출
+
+    def test_success_resets_breaker(self):
+        with patch("src.enrich_gemini._call_gemini") as mock_call, patch("src.enrich_gemini.time.sleep"):
+            # threshold-1회 실패 → 아직 안 열림
+            mock_call.side_effect = Exception("429")
+            for _ in range(CIRCUIT_BREAKER_THRESHOLD - 1):
+                with pytest.raises(Exception):
+                    _call_gemini_with_backoff(MagicMock(), "m", "p")
+            # 성공 1회 → 카운터 리셋
+            mock_call.side_effect = None
+            mock_call.return_value = "OK"
+            assert _call_gemini_with_backoff(MagicMock(), "m", "p") == "OK"
+            # 리셋됐으므로 이후 실패가 다시 threshold까지 쌓여야 열림(즉시 안 열림)
+            mock_call.side_effect = Exception("503")
+            mock_call.return_value = None
+            with pytest.raises(Exception):
+                _call_gemini_with_backoff(MagicMock(), "m", "p")  # 1회째 — 안 열림
+            assert EG._consecutive_transient_failures == 1
+
+    def test_cooldown_half_open_allows_probe(self, monkeypatch):
+        with patch("src.enrich_gemini._call_gemini") as mock_call, patch("src.enrich_gemini.time.sleep"):
+            mock_call.side_effect = Exception("503")
+            for _ in range(CIRCUIT_BREAKER_THRESHOLD):
+                with pytest.raises(Exception):
+                    _call_gemini_with_backoff(MagicMock(), "m", "p")
+            # 쿨다운 경과로 시간을 밀어 half-open
+            monkeypatch.setattr(EG, "CIRCUIT_BREAKER_COOLDOWN_SECONDS", 0.0)
+            mock_call.side_effect = None
+            mock_call.return_value = "OK"
+            # half-open 프로브 통과 → 성공 → 리셋
+            assert _call_gemini_with_backoff(MagicMock(), "m", "p") == "OK"
+            assert EG._consecutive_transient_failures == 0
+
+
+class TestActionAdviceModel:
+    def test_default_is_flash(self, monkeypatch):
+        monkeypatch.delenv("ACTION_ADVICE_MODEL", raising=False)
+        assert _get_action_advice_model() == ACTION_ADVICE_MODEL_DEFAULT
+        assert "flash" in _get_action_advice_model()
+
+    def test_env_flag_switches_to_pro(self, monkeypatch):
+        monkeypatch.setenv("ACTION_ADVICE_MODEL", "gemini-2.5-pro")
+        assert _get_action_advice_model() == "gemini-2.5-pro"
 
 
 class TestGeminiClientTimeout:

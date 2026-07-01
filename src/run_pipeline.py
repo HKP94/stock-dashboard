@@ -49,7 +49,7 @@ from src.db import (
 )
 from src.enrich_gemini import (
     GEMINI_BATCH_BUDGET_SECONDS,
-    _get_manual_research_model,
+    _get_action_advice_model,
     _within_budget,
     enrich_market_summary,
     enrich_news_batch,
@@ -186,7 +186,7 @@ def _step_action_advice(conn: psycopg.Connection, errors: list) -> None:
                     supporting_factors=(narrative.supportingFactors if narrative and narrative.supportingFactors else frame["supporting_factors"]),
                     opposing_factors=(narrative.opposingFactors if narrative and narrative.opposingFactors else frame["opposing_factors"]),
                     divergence_note=(narrative.divergenceNote if narrative and narrative.divergenceNote is not None else frame["divergence_note"]),
-                    model=(_get_manual_research_model() if narrative else "deterministic-fallback"),
+                    model=(_get_action_advice_model() if narrative else "deterministic-fallback"),
                     hold_character=frame["hold_character"],
                     hold_character_secondary=frame["hold_character_secondary"],
                     hold_character_basis=frame["hold_character_basis"],
