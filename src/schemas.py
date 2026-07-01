@@ -465,7 +465,7 @@ class StockDailyRecord(BaseModel):
 class CatalystItem(BaseModel):
     date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     headline: str
-    impact: Literal["긍정", "부정"]
+    impact: Literal["긍정", "중립", "부정"]
     importance: Literal["상", "중", "하"]
 
 
