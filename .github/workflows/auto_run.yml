@@ -18,7 +18,7 @@ jobs:
   pipeline:
     if: github.event_name != 'push'   # push phantom run → skip(회색). schedule·dispatch는 push 아님 → 그대로 실행.
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     # 7-A: split step들이 상속할 공용 env(legacy step은 자체 inline env를 그대로 유지).
     #      DB_HOST/PORT/USER/NAME은 접속 정보, 비밀(PASSWORD/KEY)은 GitHub Secrets에서만.

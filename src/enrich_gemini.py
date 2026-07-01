@@ -68,7 +68,9 @@ BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)
 GEMINI_HTTP_TIMEOUT_MS: int = int(os.environ.get("GEMINI_HTTP_TIMEOUT_MS", "45000"))
 GEMINI_BATCH_BUDGET_SECONDS: float = float(os.environ.get("GEMINI_BATCH_BUDGET_SECONDS", "1800"))
-ACTION_ADVICE_LLM_TIMEOUT_SECONDS: int = int(os.environ.get("ACTION_ADVICE_LLM_TIMEOUT_SECONDS", "20"))
+# pro p95 레이턴시(17~20s)와 http 타임아웃(45s) 위의 하드 백스톱. 20s는 정상 pro 호출을
+# false timeout으로 트립시켜 재시도 이중과금을 유발했다(run #157 종합 폭주 원인).
+ACTION_ADVICE_LLM_TIMEOUT_SECONDS: int = int(os.environ.get("ACTION_ADVICE_LLM_TIMEOUT_SECONDS", "60"))
 
 # PR-1(진단): 네트워크/일시오류(429·503·타임아웃) 지수 백오프 재시도. 파싱/스키마 실패와 구분.
 TRANSIENT_RETRIES: int = 3        # _call_gemini 일시오류 재시도 횟수 (CLAUDE.md §3)
@@ -416,12 +418,13 @@ def _build_news_prompt(
         "- 가장 최근 날짜 뉴스에 더 큰 가중치를 둬라.\n"
         "- 부정·리스크 뉴스도 중요하게 평가하라. 악재·우려·하락 요인을 호재보다 낮게 다루지 마라.\n"
         "- 주가에 핵심 영향을 주는 항목은 catalysts에 날짜·중요도와 함께 분리하라.\n"
+        "- catalysts의 impact는 방향이 뚜렷하지 않으면 억지로 긍정/부정으로 몰지 말고 '중립'을 써도 된다.\n"
         "- 코드가 제공하는 표시 신호를 새로 만들지 마라. 뉴스 사실과 심리 해석만 작성하라.\n"
         "- 과도한 강조 표시(*, **)는 쓰지 마라. 꼭 필요한 강조가 아니면 평문으로 써라.\n\n"
         "아래 JSON 스키마로만, 순수 JSON으로 답하라(코드펜스·설명 금지):\n"
         '{"sentiment":"긍정|중립|부정","sentiment_score":-1.0~1.0,'
         '"key_points":["[사실]→[의미] 형태 불릿3~6개"],'
-        '"catalysts":[{"date":"YYYY-MM-DD","headline":"요약","impact":"긍정|부정","importance":"상|중|하"}],'
+        '"catalysts":[{"date":"YYYY-MM-DD","headline":"요약","impact":"긍정|중립|부정","importance":"상|중|하"}],'
         '"risks":["하방리스크0~4개"],'
         '"summary_md":"- 한 줄 결론(의미)\\n- [사실]→[의미] 불릿","confidence":"상|중|하","based_on":"recent|fallback_old"}\n\n'
         f"[분석할 뉴스 리스트]\n{news_text}"
