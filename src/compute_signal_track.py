@@ -164,7 +164,9 @@ def _load_prices(conn: psycopg.Connection, ticker: str, from_date: date) -> pd.D
 def _load_bench(conn: psycopg.Connection, bench_ticker: str, from_date: date) -> pd.DataFrame:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT date, close FROM index_daily WHERE ticker=%s AND date >= %s ORDER BY date",
+            # index_daily 컬럼은 index_code/asof (prices_daily의 ticker/date와 다름).
+            # asof AS date로 별칭해 아래 df 처리(df["date"])를 그대로 유지한다.
+            "SELECT asof AS date, close FROM index_daily WHERE index_code=%s AND asof >= %s ORDER BY asof",
             (bench_ticker, from_date),
         )
         rows = cur.fetchall()
