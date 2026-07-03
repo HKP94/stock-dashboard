@@ -117,6 +117,25 @@ PRD.md, CLAUDE.md 기준으로 다음을 PR로 만들어줘:
 
 ---
 
+## 운영 3층 분업 (현행 모델)
+> 역할이 셋으로 나뉜다. 각자 하는 일과 경계가 다르다.
+
+| 층 | 도구 | 하는 일 | 경계 |
+|---|---|---|---|
+| **화면** | 대시보드(로컬 React) | 데이터 스캔·조회 | 로컬 전용, 외부 접근 없음 |
+| **판단 대화** | **Claude 웹(MCP)** | "내 판단" 축 상대 — 관찰·3축 괴리 지적·근거 검증 + **결론을 DB에 기록** | 판단 기록 계열만 **쓰기**, 자동 수집 테이블 **읽기 전용** |
+| **개발** | Claude Code | 파이프라인·워크플로·스킬 코드 PR | PR 단위, PM 검수 후 머지 |
+
+**Claude 웹(MCP) 사용 원칙:**
+- 역할 = **내 판단 축의 대화 상대**. 종목/시장을 함께 관찰하고, 3축(퀀트·컨센서스·내 판단)이 엇갈리면 괴리를 지적하고 근거를 검증한다. **적극적으로 노트를 남긴다.**
+- **판단 기록 원칙(★핵심)**: 대화에서 내린 결론(투자 논거·관찰·주의점)은 반드시 `stock_notes`/`stock_note_history`/`manual_research_*`에 **써서 남긴다**. 다음 세션은 대화 히스토리가 아니라 **DB에서 컨텍스트를 승계**한다 — "지난번에 뭐라 했더라"를 대화 로그에 의존하지 않는다.
+- **쓰기 허용**: `stock_notes`, `stock_note_history`, `manual_research_entries/horizons/points/consensus`, `research_items`, `market_view_manual`.
+- **읽기 전용(절대 쓰지 말 것)**: `prices_daily`·`indicators_daily`·`quant_scores`·`investor_flow`·`news_analysis`·`signal_grade_track`·`market_score` 등 자동 수집·파이프라인 테이블 — 수집 무결성이 신뢰성의 근간.
+- **최종 매매/집행 판단은 KPH.** Claude는 관찰·근거·괴리까지. (투자 자문 아님 / 원금 손실 가능)
+- **설정**: MCP는 `project_ref` 스코프 + database 그룹 한정. **Vercel 미사용**(로컬 집중). RLS 미설정은 리스크 수용(로컬 데이터·실자금 아님) — 보안 강화는 우선순위 낮음.
+
+---
+
 ## 로컬 자동화 (맥, 한국 IP) — 수급 수집 + 대시보드 상시화
 > KRX가 GitHub Actions IP를 차단해 E-2 수급은 CI로 못 받는다. 로컬 launchd가 이것과 화면 갱신을 맡는다. CI(나머지 전부)와 완전 분리 — 로컬이 죽어도 CI 무관.
 
