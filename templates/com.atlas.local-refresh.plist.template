@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ATLAS 로컬 보조 수집 (KRX investor_flow + data.json export). 하루 2회.
+     install_local_automation.sh가 __REPO__/__PY__를 실제 경로로 치환해 설치한다. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.atlas.local-refresh</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PY__</string>
+        <string>__REPO__/scripts/local_refresh.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <!-- 19:10 KST (KR 수급 확정 후) + 08:00 KST (06:00 CI run 완료 후 아침 export) -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>19</integer>
+            <key>Minute</key><integer>10</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+
+    <!-- 부팅 시 중복 실행 방지. 놓친 스케줄은 다음 회차가 백필로 커버. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/atlas_logs/launchd_local_refresh.out</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/atlas_logs/launchd_local_refresh.err</string>
+</dict>
+</plist>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ATLAS 대시보드 서버 로그인 자동 기동 (local_api 8765 + vite 5173).
+     RunAtLoad=true로 로그인/설치 시 idempotent 기동. install 스크립트가 경로 치환. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.atlas.dashboard</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO__/scripts/dashboard_up.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <!-- 로그인 시 1회 기동(포트 가드로 idempotent). 서버는 nohup 백그라운드로 유지. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/atlas_logs/launchd_dashboard.out</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/atlas_logs/launchd_dashboard.err</string>
+</dict>
+</plist>

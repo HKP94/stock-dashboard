@@ -117,6 +117,29 @@ PRD.md, CLAUDE.md 기준으로 다음을 PR로 만들어줘:
 
 ---
 
+## 로컬 자동화 (맥, 한국 IP) — 수급 수집 + 대시보드 상시화
+> KRX가 GitHub Actions IP를 차단해 E-2 수급은 CI로 못 받는다. 로컬 launchd가 이것과 화면 갱신을 맡는다. CI(나머지 전부)와 완전 분리 — 로컬이 죽어도 CI 무관.
+
+**1회 설치 (KPH):**
+```
+./scripts/install_local_automation.sh
+```
+- `com.atlas.local-refresh` : 하루 2회(**19:10** KR수급확정후 · **08:00** 06시 CI완료후) `local_refresh.py` = KRX 수급 수집 + `data.json` export. RunAtLoad=false(놓친 회차는 다음 스케줄이 ~10일 백필로 커버).
+- `com.atlas.dashboard` : 로그인 시 `dashboard_up.sh`로 local_api(8765)+vite(5173) idempotent 기동 → 브라우저 열면 항상 최신, 터미널 타이핑 제로.
+
+**확인·운영:**
+- 설치 확인: `launchctl list | grep com.atlas`
+- 즉시 수급 테스트: `launchctl kickstart -k gui/$(id -u)/com.atlas.local-refresh`
+- 로그: `~/atlas_logs/local_refresh_YYYYMMDD.log` · 상태(신선도): `~/atlas_logs/local_refresh_state.json`(`last_success_utc`·`last_investor_flow_rows`)
+- 수동 1회 갱신: `./.venv/bin/python scripts/local_refresh.py`
+- 제거: `./scripts/uninstall_local_automation.sh`
+
+**문제 시:**
+- 수급이 안 쌓임 → 상태파일 `last_error` 확인. KRX 로그인 실패면 `.env`의 `KRX_ID`/`KRX_PW` 확인(로컬에서만 유효).
+- 화면이 옛날 → `local_refresh` 로그의 export 성공 여부, 대시보드 서버(8765·5173) 기동 여부.
+
+---
+
 ## 자주 막히는 지점 (미리 알아둘 것)
 - **KR 컨센서스/목표가**가 무료 소스에서 비면 → 해당 팩터는 자동으로 중립(50) 처리되니 파이프라인은 안 멈춤. 부족하면 그때 유료 검토.
 - **무료 데이터 레이트리밋** → n8n에서 호출 간격·배치로 제어(Claude Code가 처리).
