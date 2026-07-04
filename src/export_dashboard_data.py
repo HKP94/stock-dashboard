@@ -1701,6 +1701,13 @@ def build_data() -> dict:
         """)
         val_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
 
+        # 밸류에이션 교차검증 게이트(H-1): 종목별 최신 스냅샷. flagged 종목만 화면에 노출.
+        cur.execute("""
+            SELECT DISTINCT ON (ticker) ticker, flagged, reason, asof
+            FROM valuation_xcheck ORDER BY ticker, asof DESC
+        """)
+        xcheck_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
+
         cur.execute("""
             SELECT DISTINCT ON (ticker) ticker, rating, rating_label, rating_score, target_price, upside, eps_fwd, n_analysts, source, asof
             FROM analyst ORDER BY ticker, asof DESC
@@ -1804,6 +1811,7 @@ def build_data() -> dict:
             ind  = ind_map.get(tk, {})
             q    = quant_map.get(tk, {})
             val  = val_map.get(tk, {})
+            xc   = xcheck_map.get(tk, {})
             ana  = ana_map.get(tk, {})
             news = news_map.get(tk, {})
             fund = fund_map.get(tk, {})
@@ -1940,6 +1948,8 @@ def build_data() -> dict:
                 "rank":   [rk, total_stocks],
                 "per":    round(per, 1) if per else None,
                 "pbr":    round(pbr, 2) if pbr else None,
+                # H-1: 밸류 교차검증 flag(네이버 vs KRX 편차). 의심 종목만, 정상은 None.
+                "valuationFlag": ({"reason": xc.get("reason")} if xc.get("flagged") else None),
                 "roe":    round(roe * 100, 1) if roe is not None else None,  # PR-0: 비율→% 표시(US/KR 모두 ratio 저장)
                 "rev":    round(rev * 100, 1) if rev else None,
                 "fscore": fscore,
