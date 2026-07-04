@@ -786,6 +786,20 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [x] **7-B단계 CI 스케줄 전환** (2026-06-25): 06시 split 수동 실행(#137, 51분 success)·18시 split 완주 확인 후 cron 스케줄을 split 경로로 전환. `auto_run.yml`/`news_refresh.yml`의 분기 반전 — split step `if engine != 'legacy'`(cron·기본), legacy step `if engine == 'legacy'`(롤백 전용 수동), 입력 기본값 `split`. 진리표: cron→split만, dispatch legacy→legacy만(배타). cron 스케줄(06/18시)·workflow timeout(90/45)·Gemini 환경변수·Secrets 유지. **legacy 롤백 경로는 dispatch engine=legacy로 보존**. .yml 2개만 변경.
 - [ ] **8단계 dead code 제거**: run_pipeline/news_refresh 중복 `_step_*`·`_refresh_prices_light`·헬퍼 삭제(호환 래퍼 자체는 다음 Wave까지 유지).
 
+### 데이터 신뢰성 트랙 (차기 최우선, 설계 진행 중)
+- [x] **① 신선도 감시** (2026-07-04): `src/freshness.py` — 테이블×시장 `max(date/asof)`를 시장 캘린더 기준 기대 최신 거래일과 대조(KR T+0 18시후·US T-1·주말/휴장 세트, 스테일=2거래일+·grace로 휴장 오경보 방지). export가 `data.json.freshness`(items·anyStale·localRefresh)에 넣고 스테일 시 WARNING. 로컬 수집 신선도(`local_refresh_state.json`) 포함. 결정론·읽기 전용. 단위테스트 13.
+- [ ] **② 완결성 검사**: 종목×날짜 커버리지 갭(수집 누락 종목/날짜) 탐지.
+- [ ] **③ 교차 검증**: 소스 간 값 상충(예: 네이버 vs FnGuide) 감지.
+- [ ] **④ 크론 감시**: GitHub cron 상습 지연·미실행 탐지(news_refresh +2~5h 지연 관측).
+- [ ] **수집 53분 흡수**: 06시 수집 병목(KRX 재로그인/yfinance/DART) 진단·완화.
+
+### 판단 기록 쓰기 경로 (신규, MCP 대화 결론 영속화)
+- [ ] **판단 기록 쓰기 설계·구현**: Claude 웹 대화 결론을 `stock_notes`/`stock_note_history`/`manual_research_*`에 남겨 새 세션이 DB로 컨텍스트 승계. **형식·3축 매핑 선행 설계** 후 구현. 자동 수집 테이블은 읽기 전용(§0 MCP 경계).
+
+### 트레이딩 신호 확장
+- [ ] **신규-G**: (범위 확정 예정)
+- [ ] **신규-H**: (범위 확정 예정)
+
 ---
 
 ## 12. 미해결 질문 (사용자 답변 필요)
@@ -852,6 +866,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - *v2.1 (2026-06-16) 가격 신선도 PR-1: news_refresh(18:00)에 경량 가격갱신(prices+indicators+quant) 추가→KR/US 당일 가격 확보, 헤더 가격기준일(priceAsof) 표시. US 뉴스 PR-2: Yahoo RSS·Finnhub(옵션)·Google쿼리보강·_MARKET_US 다양화→US 종목당 67→82.4. 단위테스트 +5(261 passed) — Claude Code.*
 - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
 - *v3.8 (2026-06-20) Wave 4-D-1: 기존 `analyst` 컨센서스 경로를 확장해 `rating_label/rating_score/eps_fwd/source`를 저장하고, `analyst_views`에 출처 URL이 있는 bull/bear 논거를 추가. 06시 파이프라인에 논거 추출 단계와 export `consensus`/`analystViews` 계약을 편입 — Codex.*
+- *v7.7 (2026-07-04) 지침서 대개편 + 데이터 신뢰성 ① 신선도 감시: [Part A] 운영 3층 분업 명문화(대시보드 로컬·Claude 웹 MCP 판단대화·Claude Code 개발). §0 절대규칙에 MCP 접근 경계 추가 — 판단 기록 계열(stock_notes·stock_note_history·manual_research_*·research_items·market_view_manual)만 쓰기, 자동 수집·파이프라인 테이블 읽기 전용(무결성=신뢰성 근간). project_ref+database 스코프·Vercel 미사용·RLS 리스크 수용(보안 우선순위↓). 판단 기록 원칙(대화 결론 DB 영속화→새 세션 DB 승계, KPH 핵심). CLAUDE.md/START_HERE 3층·MCP 원칙 반영. [Part B] `src/freshness.py` 신설 — 테이블×시장 max(date/asof) vs 시장 캘린더 기대 거래일(KR T+0 18시후·US T-1·NYSE/KRX 휴장 세트, 스테일=2거래일+·grace로 오경보 방지). export `data.json.freshness`(items·anyStale·localRefresh) + 스테일 WARNING, 로컬 수집 신선도(local_refresh_state) 연동. 결정론·읽기 전용. 검증: pytest 658(+13), standalone 실행 테이블별 판정, 7/3 US 휴장 오경보 없음(prices_daily[US] fresh). 프론트/완결성/교차검증/크론감시는 후속 — Claude Code.*
 - *v7.6 (2026-07-04) FnGuide 스크래이퍼 복구 — 전 KR ROE/부채 None 해소: 진단 결과 `comp.fnguide.com/SVO2/ASP/SVD_Main.asp`가 **302→wcomp.fnguide.com 삼성 기본페이지**로 리다이렉트(gicode 무시·Referer 무효)돼 `#highlight_D_A` 영구 미매칭 → KR valuation.roe/debt_ratio 전건 None(21/21). 헤더 튜닝으로 복구 불가(엔드포인트 사망) → **네이버 종목메인 '기업실적분석' 표**(`div.section.cop_analysis`)로 전환: 같은 페이지에서 PER/PBR과 함께 ROE/부채를 파싱(`_parse_naver_financials`), **추정((E)) 아닌 최근 연간** 컬럼 선택(룩어헤드·분기노이즈 방지). FnGuide 코드·URL 제거, source `naver+fnguide`→`naver`. 검증(실DB): KR roe/debt null **21→1**(잔여 1건은 malformed 오펀 `39480.KS`, 활성 아님), 대표5(하이닉스 ROE44%/부채46%·KT&G12%/52%·LS15%/131%·효성24%/190%·BNK7.6%/1333%[은행이라 정상]) 실제 부합, PER/PBR·정상종목 무회귀. 단위테스트 갱신(FnGuide fixture→네이버 실적표, +1net), pytest 652. 밸류 리프레시는 스크래핑 전용(Gemini 무관), 전 종목 재확인은 예약 cron. CLAUDE.md KR 밸류 소스 규칙 갱신 — Claude Code.*
 - *v7.5 (2026-07-04) 밸류에이션 교차검증 게이트(H-1): 실전 2렌즈 중 "LS일렉트릭·효성 PBR/PER 인플레" 의심 제기 → 진단 결과 **버그 아님**. 저장값이 네이버 라이브 + KRX 공식(거래소 원천)과 3중 일치(LS PBR 16.5≈16.49, 효성 12.9≈13.2), 내부 정합(mcap÷지배자본)도 확인. "동일배율 인플레"는 분모 버그가 아니라 **주가 급등**(전력기기 슈퍼사이클) 시그니처 — PBR·PER 둘 다 가격에 선형 비례. "~6.6" 참조치는 랠리 이전 스테일 PBR. → 소급 수정 없음(정확한 데이터 훼손 금지). 대신 게이트 구축: `compute_valuation_xcheck.py`가 KR 저장 PBR/PER를 KRX와 대조해 `valuation_xcheck.flagged`(PBR 15%·PER 35% 임계 — 네이버/KRX EPS·BPS 관례차 노이즈 위만 flag) 표식, export `stock.valuationFlag` 노출. 실측 21종목 중 3 flag(하이닉스·삼성·059090 — 네이버 vs KRX 진짜 괴리), LS·효성 미flag(정상 확정). KRX 로그인 CI 차단이라 로컬 실행 전용(`python -m src.compute_valuation_xcheck`). `valuation` 원본 불변, 신규 `valuation_xcheck` 테이블(§5.1). 진단 중 FnGuide 스크래핑 완전 파손(삼성 기본페이지 반환→전 KR ROE/부채 None) 발견 — 별건 백로그. 단위테스트 +6(651 passed) — Claude Code.*
 - *v7.4 (2026-07-03) 로컬 보조 수집 자동화(KRX CI 차단 우회): KRX가 GitHub IP 차단→E-2 수급 CI 수집 불가(PR#74 확정). `scripts/local_refresh.py`(기존 run_investor_flow_ingest+export 재사용, 로그·상태파일) 신설, launchd 하루 2회(19:10·08:00 KST) 스케줄(`templates/*.plist.template`+install/uninstall 스크립트, plutil-lint). 대시보드 서버 로그인 상시화(`scripts/dashboard_up.sh` idempotent + `com.atlas.dashboard`). CI는 `SKIP_INVESTOR_FLOW=1`(auto_run.yml)로 수급 조용히 스킵(로그인 실패 노이즈 제거, CI 구조 불변). 검증: local_refresh 단독 실행 investor_flow max 06-26→07-03(198행/0오류), data.json 갱신, pytest 645. 운영모델 갱신(수급=로컬·나머지=CI) CLAUDE.md/START_HERE 반영 — Claude Code.*

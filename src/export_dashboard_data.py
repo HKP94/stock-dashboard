@@ -2093,6 +2093,14 @@ def build_data() -> dict:
         except Exception as _exc:
             logger.warning("signalAccuracy 요약 실패(비치명적): %s", _exc)
 
+        # 데이터 신뢰성 ①: 신선도 감시(테이블×시장 max vs 기대 거래일). 실패해도 export 계속.
+        freshness = None
+        try:
+            from src.freshness import build_freshness
+            freshness = build_freshness(conn)
+        except Exception as _exc:
+            logger.warning("freshness 요약 실패(비치명적): %s", _exc)
+
         now = datetime.now()
         refresh_context = _infer_refresh_context(now, price_asof)
         market["refreshContext"] = refresh_context
@@ -2120,6 +2128,7 @@ def build_data() -> dict:
             "backtest":   backtest_data,        # PR-7: 백테스트 + 회고
             "strategyGuidance": strategy_guidance,
             "signalAccuracy": signal_accuracy,   # 신규-F: n>=30 이전엔 null
+            "freshness":  freshness,             # 데이터 신뢰성 ①: 테이블×시장 신선도(배너용)
             "research":   {
                 "files": {}, "notes": {},
                 "tags": ["매수후보", "관망", "리스크주의", "장기보유", "분할매수", "비중축소"],
