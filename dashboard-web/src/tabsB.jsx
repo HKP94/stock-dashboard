@@ -137,6 +137,60 @@ function DualLensQuadrant({ stocks, nav }) {
   );
 }
 
+// Phase C: 발굴(관심종목 밖) — 대형주 경량 스크린 장기·모멘텀 상위. 표시 전용(승격은 수동).
+function DiscoveryList({ title, items, primary, color }) {
+  return (
+    <div style={{ flex: "1 1 320px" }}>
+      <MonoCaps style={{ fontSize: 9.5 }} color={color}>{title}</MonoCaps>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+        {(items || []).length === 0 ? <span style={{ fontSize: 11.5, color: C.ink3 }}>데이터 준비 중</span> : null}
+        {(items || []).map((it, i) => (
+          <div key={it.ticker} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 6px", borderBottom: `1px solid ${C.line}` }}>
+            <span style={{ fontSize: 11, color: C.ink3, width: 15 }}>{i + 1}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
+              <div className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{it.ticker} · {it.sourceIndex}</div>
+            </div>
+            {primary === "long" ? (
+              <span className="mono" style={{ fontSize: 9.5, color: C.ink3 }} title={`가치 ${it.value ?? "—"} · 퀄리티 ${it.quality ?? "—"} · 성장 ${it.growth ?? "—"}`}>
+                v{it.value ?? "—"}·q{it.quality ?? "—"}·g{it.growth ?? "—"}
+              </span>
+            ) : (
+              <span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>1Y {it.ret1y != null ? `${it.ret1y >= 0 ? "+" : ""}${it.ret1y.toFixed(0)}%` : "—"}</span>
+            )}
+            <Num size={13} weight={800} color={color}>{primary === "long" ? it.longScore : it.momoScore}</Num>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DiscoveryPanel({ D }) {
+  const disc = D.discovery;
+  const [mk, setMk] = useState("US");
+  if (!disc) return null;
+  const m = disc.markets?.[mk] || {};
+  return (
+    <Panel title="발굴 · 관심종목 밖" sub={`대형주 경량 스크린 (${disc.asof}) · 승격은 관심종목 관리에서 수동`}
+      right={
+        <div style={{ display: "flex", gap: 6 }}>
+          {["US", "KR"].map((k) => (
+            <button key={k} onClick={() => setMk(k)}
+              style={{ border: `1px solid ${mk === k ? C.acc : C.line2}`, background: mk === k ? C.accTint : C.surface, color: mk === k ? C.acc : C.ink2, borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              {k}{disc.markets?.[k]?.count != null ? ` ${disc.markets[k].count}` : ""}
+            </button>
+          ))}
+        </div>}>
+      <div style={{ display: "flex", gap: 20, padding: 16, flexWrap: "wrap" }}>
+        <DiscoveryList title="장기점수 상위 (가치·퀄리티·성장)" items={m.long} primary="long" color={C.ok} />
+        <DiscoveryList title="모멘텀점수 상위 (가격 프록시 · 심리 미반영)" items={m.momentum} primary="momentum" color={C.acc} />
+      </div>
+      <div style={{ padding: "0 16px 12px", fontSize: 11, color: C.ink3, lineHeight: 1.5 }}>{disc.note}</div>
+    </Panel>
+  );
+}
+
 export function Screener({ D, nav }) {
   const [showAll, setShowAll] = useState(false);
   const [sortKey, setSortKey] = useState("comp");
@@ -236,6 +290,7 @@ export function Screener({ D, nav }) {
     </div>
 
     <DualLensQuadrant stocks={D.stocks} nav={nav} />
+    <DiscoveryPanel D={D} />
 
     <Panel title="전체 종목 · 통합 정렬" sub={`${D.stocks.length}종목 · 등급순/컬럼 클릭 정렬 · 매수 ${buyCount}종목`}
       right={

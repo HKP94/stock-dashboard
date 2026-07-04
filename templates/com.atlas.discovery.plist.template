@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ATLAS 발굴 스크린 (Phase C, 관심종목 밖 대형주 경량 스크린). 주간 1회.
+     뉴스·LLM(Gemini) 호출 없음. KR은 KRX 로그인이라 로컬 전용. US=yfinance(~5분).
+     install_local_automation.sh가 __REPO__/__PY__를 실제 경로로 치환해 설치한다. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.atlas.discovery</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PY__</string>
+        <string>-m</string>
+        <string>src.discovery_screen</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <!-- 매주 일요일 07:00 KST (장 없는 날, 최근 거래일 데이터로 스크린). -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>0</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/atlas_logs/launchd_discovery.out</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/atlas_logs/launchd_discovery.err</string>
+</dict>
+</plist>

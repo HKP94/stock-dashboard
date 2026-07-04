@@ -628,3 +628,29 @@ CREATE TABLE IF NOT EXISTS market_score (
 
 CREATE INDEX IF NOT EXISTS idx_market_score_lookup
     ON market_score (region, asof DESC);
+
+-- =============================================================
+-- 발굴 스크린 (Phase C — 관심종목 밖 대형주 경량 스코어)
+-- watchlist quant_scores와 분리. 뉴스·LLM 없음. DDL: migrations/i1_discovery_screen.sql
+-- =============================================================
+CREATE TABLE IF NOT EXISTS discovery_screen (
+    ticker           TEXT        NOT NULL,
+    asof             DATE        NOT NULL,
+    market           TEXT        NOT NULL CHECK (market IN ('US', 'KR')),
+    name             TEXT,
+    source_index     TEXT,
+    in_watchlist     BOOLEAN     NOT NULL DEFAULT FALSE,
+    value            NUMERIC,
+    quality          NUMERIC,
+    growth           NUMERIC,
+    momentum         NUMERIC,
+    long_term_score  NUMERIC,
+    momentum_score   NUMERIC,
+    metrics          JSONB       NOT NULL DEFAULT '{}',
+    computed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, asof)
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_screen_asof ON discovery_screen (asof DESC);
+CREATE INDEX IF NOT EXISTS idx_discovery_long ON discovery_screen (asof, long_term_score DESC) WHERE NOT in_watchlist;
+CREATE INDEX IF NOT EXISTS idx_discovery_momo ON discovery_screen (asof, momentum_score DESC) WHERE NOT in_watchlist;
