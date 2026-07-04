@@ -332,6 +332,35 @@ def upsert_valuation(conn: psycopg.Connection, rows: list[ValuationRow]) -> None
     logger.debug("upsert_valuation: %d rows", len(rows))
 
 
+def upsert_discovery_screen(conn: psycopg.Connection, rows: list[dict]) -> None:
+    """발굴 스크린 스냅샷 upsert(같은 날 재실행=덮어쓰기, 과거 asof 보존). rows=dict 리스트."""
+    sql = """
+        INSERT INTO discovery_screen
+            (ticker, asof, market, name, source_index, in_watchlist,
+             value, quality, growth, momentum, long_term_score, momentum_score, metrics)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ticker, asof) DO UPDATE SET
+            market = EXCLUDED.market, name = EXCLUDED.name,
+            source_index = EXCLUDED.source_index, in_watchlist = EXCLUDED.in_watchlist,
+            value = EXCLUDED.value, quality = EXCLUDED.quality, growth = EXCLUDED.growth,
+            momentum = EXCLUDED.momentum, long_term_score = EXCLUDED.long_term_score,
+            momentum_score = EXCLUDED.momentum_score, metrics = EXCLUDED.metrics,
+            computed_at = now()
+    """
+    with conn.cursor() as cur:
+        cur.executemany(
+            sql,
+            [
+                (r["ticker"], r["asof"], r["market"], r.get("name"), r.get("source_index"),
+                 r.get("in_watchlist", False), r.get("value"), r.get("quality"), r.get("growth"),
+                 r.get("momentum"), r.get("long_term_score"), r.get("momentum_score"),
+                 _to_json(r.get("metrics") or {}))
+                for r in rows
+            ],
+        )
+    logger.debug("upsert_discovery_screen: %d rows", len(rows))
+
+
 def upsert_valuation_xcheck(conn: psycopg.Connection, rows: list[dict]) -> None:
     """밸류 교차검증 스냅샷 upsert(같은 날 재실행=덮어쓰기, 과거 보존). rows=dict 리스트."""
     sql = """

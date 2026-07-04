@@ -2,6 +2,7 @@
 # ATLAS 로컬 자동화 설치 (macOS launchd) — KPH 1회 수동 실행.
 #   1) com.atlas.local-refresh : 하루 2회 KRX 수급 수집 + data.json export
 #   2) com.atlas.dashboard     : 로그인 시 대시보드 서버 자동 기동
+#   3) com.atlas.discovery     : 주간 1회 발굴 스크린(관심종목 밖, 뉴스·LLM 없음)
 #
 # templates/*.plist.template의 __REPO__/__PY__/__HOME__를 실제 경로로 치환해
 # ~/Library/LaunchAgents/에 설치하고 load 한다. 재실행해도 안전(재설치).
@@ -11,7 +12,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="$REPO/.venv/bin/python"
 AGENTS="$HOME/Library/LaunchAgents"
-LABELS=(com.atlas.local-refresh com.atlas.dashboard)
+LABELS=(com.atlas.local-refresh com.atlas.dashboard com.atlas.discovery)
 
 [ -x "$PY" ] || { echo "✗ .venv 없음: $PY — 먼저 venv+requirements 설치"; exit 1; }
 mkdir -p "$AGENTS" "$HOME/atlas_logs"

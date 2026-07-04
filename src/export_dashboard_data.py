@@ -1031,6 +1031,46 @@ def _build_strategy_constituents(conn) -> dict:
     out["equal_weight_bh"] = {"axis": None, "topN": None, "count": len(rows),
                               "items": _top("composite", None)}
     return out
+# ── Phase C: 발굴 스크린(관심종목 밖) 로드 ────────────────────────────────
+def _load_discovery(conn, top_n: int = 12) -> dict | None:
+    """discovery_screen 최신 asof → 시장별 장기·모멘텀 상위 N(in_watchlist=false만)."""
+    cur = conn.cursor()
+    cur.execute("SELECT max(asof) AS mx FROM discovery_screen")
+    row = cur.fetchone()
+    asof = row["mx"] if row else None
+    if asof is None:
+        return None
+    cur.execute("""
+        SELECT ticker, name, market, source_index, value, quality, growth,
+               long_term_score, momentum_score, metrics
+        FROM discovery_screen WHERE asof = %s AND NOT in_watchlist
+    """, (asof,))
+    rows = [dict(r) for r in cur.fetchall()]
+
+    def _item(r):
+        return {
+            "ticker": r["ticker"], "name": r["name"] or r["ticker"], "market": r["market"],
+            "sourceIndex": r["source_index"],
+            "longScore": _f(r["long_term_score"]), "momoScore": _f(r["momentum_score"]),
+            "value": _f(r["value"]), "quality": _f(r["quality"]), "growth": _f(r["growth"]),
+            "ret1y": _f((r["metrics"] or {}).get("ret1y")),
+        }
+
+    def _top(key, market):
+        pool = [r for r in rows if r["market"] == market and r.get(key) is not None]
+        pool.sort(key=lambda r: float(r[key]), reverse=True)
+        return [_item(r) for r in pool[:top_n]]
+
+    markets = {}
+    for mk in ("US", "KR"):
+        markets[mk] = {"long": _top("long_term_score", mk), "momentum": _top("momentum_score", mk),
+                       "count": sum(1 for r in rows if r["market"] == mk)}
+    return {
+        "asof": str(asof),
+        "note": "관심종목 밖 대형주(S&P500·나스닥100·코스피200·코스닥150) 경량 스크린. "
+                "뉴스·LLM 없음 · 모멘텀=가격 프록시(심리 미반영) · percentile은 시장 내부 · 승격은 수동 검토.",
+        "markets": markets,
+    }
 
 
 # ── PR-4(이번): stock_notes 로드 ─────────────────────────────────────
@@ -2248,6 +2288,13 @@ def build_data() -> dict:
         except Exception as _exc:
             logger.warning("freshness 요약 실패(비치명적): %s", _exc)
 
+        # Phase C: 발굴 스크린(관심종목 밖). 없으면 None(비치명적).
+        discovery = None
+        try:
+            discovery = _load_discovery(conn)
+        except Exception as _exc:
+            logger.warning("discovery 로드 실패(비치명적): %s", _exc)
+
         now = datetime.now()
         refresh_context = _infer_refresh_context(now, price_asof)
         market["refreshContext"] = refresh_context
@@ -2276,6 +2323,7 @@ def build_data() -> dict:
             "strategyGuidance": strategy_guidance,
             "signalAccuracy": signal_accuracy,   # 신규-F: n>=30 이전엔 null
             "freshness":  freshness,             # 데이터 신뢰성 ①: 테이블×시장 신선도(배너용)
+            "discovery":  discovery,             # Phase C: 관심종목 밖 발굴 스크린(장기·모멘텀 상위)
             "research":   {
                 "files": {}, "notes": {},
                 "tags": ["매수후보", "관망", "리스크주의", "장기보유", "분할매수", "비중축소"],
