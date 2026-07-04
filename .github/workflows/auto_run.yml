@@ -29,8 +29,9 @@ jobs:
       DB_PASSWORD:        ${{ secrets.DB_PASSWORD }}
       DB_NAME:            postgres
       DART_API_KEY:       ${{ secrets.DART_API_KEY }}
-      KRX_ID:             ${{ secrets.KRX_ID }}
-      KRX_PW:             ${{ secrets.KRX_PW }}
+      # KRX는 GitHub IP를 차단 → CI 수급 수집 불가. 수급은 로컬 보조 수집(scripts/local_refresh.py)이 담당.
+      # KRX_ID/PW는 CI에서 미사용(스킵). SKIP_INVESTOR_FLOW=1로 매일 로그인 실패 노이즈 제거.
+      SKIP_INVESTOR_FLOW: "1"
       GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
       GEMINI_BULK_MODEL:  gemini-2.5-flash-lite
       GEMINI_SYNTH_MODEL: gemini-2.5-flash

@@ -203,6 +203,11 @@ def _ingest_investor_flow(
     conn: psycopg.Connection, kr_tickers: list[str], errors: list, counts: dict
 ) -> None:
     """E-2: KR 종목 투자자 수급 수집 + 신호 저장."""
+    # KRX가 GitHub Actions IP를 차단하므로 CI에선 수집 불가(로그인 실패 노이즈만 남김).
+    # 수급은 로컬 보조 수집(scripts/local_refresh.py)이 담당 → CI는 조용히 스킵.
+    if os.getenv("SKIP_INVESTOR_FLOW") == "1":
+        logger.info("investor_flow: KRX가 CI(GitHub) IP 차단 → 스킵(로컬 보조 수집 담당)")
+        return
     logger.info("수집: KR 투자자 수급 (%d종목)", len(kr_tickers))
     try:
         result = ingest_investor_flow.run_investor_flow_ingest(conn, kr_tickers)
