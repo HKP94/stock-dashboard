@@ -891,6 +891,112 @@ def _build_strategy_guidance(backtest: dict, market: dict) -> dict | None:
     }
 
 
+# ── 전략비교 고도화: 현재 장세→전략 / 전략별 구성종목 ────────────────────
+_DIRECTION_TO_REGIME = {"강세": "bull", "중립": "neutral", "약세": "bear"}
+
+
+def _build_regime_strategy(backtest: dict, market: dict) -> dict:
+    """Part 2: region(KR/US)별 현재 장세(market_score.direction)에서 regime_returns 최상위 전략.
+
+    관찰·비교 전용(매매지시 아님). true/retrospective를 **분리**해 랭킹하고, 회고는 선택편향
+    경고와 함께만 참고로 노출한다(§F7·3축 비합산 — 단일 우열 점수로 뭉개지 않음).
+    """
+    def _fmt(v):
+        if v is None:
+            return "—"
+        return f"{'+' if v >= 0 else ''}{v * 100:.1f}%"
+
+    def _rank(strategies, track, regime):
+        scored = []
+        for s in strategies or []:
+            for horizon in ("5y", "3y", "1y"):  # 가장 긴 창 우선(관측 표본↑)
+                h = (s.get("horizons") or {}).get(horizon)
+                if not h:
+                    continue
+                rr = (h.get("regimeReturns") or {}).get(regime)
+                if rr is None:
+                    continue
+                scored.append({
+                    "name": s.get("name"), "label": s.get("label") or s.get("name"),
+                    "track": track, "horizon": horizon, "regimeReturn": float(rr),
+                })
+                break
+        scored.sort(key=lambda x: x["regimeReturn"], reverse=True)
+        return scored
+
+    out: dict = {}
+    for region in ("kr", "us"):
+        ms = ((market or {}).get(region) or {}).get("marketScore") or {}
+        direction = ms.get("direction")
+        regime = _DIRECTION_TO_REGIME.get(direction)
+        if regime is None:
+            continue
+        true_ranked = _rank((backtest.get("trueTrack") or {}).get("strategies"), "true", regime)
+        retro_ranked = _rank((backtest.get("retrospective") or {}).get("strategies"), "retrospective", regime)
+        regime_ko = _REGIME_GUIDANCE_LABEL[regime]
+        obs = None
+        if true_ranked:
+            top = true_ranked[0]
+            bottom = true_ranked[-1]
+            obs = f"{region.upper()} {direction} 국면: 역사적으로 {top['label']} {_fmt(top['regimeReturn'])}로 우위"
+            if bottom["name"] != top["name"]:
+                obs += f", {bottom['label']} {_fmt(bottom['regimeReturn'])}로 열위"
+            obs += "."
+            if retro_ranked:
+                obs += f" (회고 참고: {retro_ranked[0]['label']} {_fmt(retro_ranked[0]['regimeReturn'])} — 선택편향, 백테스트 아님)"
+        out[region] = {
+            "direction": direction, "regime": regime, "regimeKo": regime_ko,
+            "score": ms.get("score"), "confidence": ms.get("confidence"),
+            "trueRanked": true_ranked, "retroRanked": retro_ranked,
+            "observation": obs,
+        }
+    return out
+
+
+# 전략 → 최신 quant_scores 랭킹 축, 상위 N (top_n은 backtest.py 정의와 정합: true=8·retro=5)
+_STRATEGY_AXIS: dict[str, tuple[str, int]] = {
+    "momentum_12_1": ("momentum", 8),
+    "value": ("value", 5),
+    "quality": ("quality", 5),
+    "multifactor": ("composite", 5),
+}
+
+
+def _build_strategy_constituents(conn) -> dict:
+    """Part 3: 각 전략이 '지금' 담는 종목 = 활성 유니버스 최신 quant_scores 축 상위 N.
+
+    momentum→momentum, value/quality→해당 축, multifactor→composite, equal_weight_bh→유니버스 전체.
+    low_vol은 quant 축이 아니라 변동성 기준이므로 여기서 제외(UI가 백테스트 리밸런싱 바스켓을 참조).
+    종목별 해당 축 점수를 함께 노출. 읽기 전용·최신 스냅샷(DISTINCT ON 종목별 asof DESC).
+    """
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT ON (q.ticker) q.ticker, q.momentum, q.value, q.quality, q.growth,
+               q.composite, w.name, w.market
+        FROM quant_scores q JOIN watchlist w ON w.ticker = q.ticker
+        WHERE w.active = TRUE
+        ORDER BY q.ticker, q.asof DESC
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+
+    def _top(axis: str, n: int | None) -> list[dict]:
+        vals = [r for r in rows if r.get(axis) is not None]
+        vals.sort(key=lambda r: float(r[axis]), reverse=True)
+        picked = vals if n is None else vals[:n]
+        return [{
+            "ticker": r["ticker"], "name": r["name"], "market": r["market"],
+            "score": round(float(r[axis]), 1),
+        } for r in picked]
+
+    out: dict = {}
+    for name, (axis, n) in _STRATEGY_AXIS.items():
+        out[name] = {"axis": axis, "topN": n, "count": len(rows), "items": _top(axis, n)}
+    # equal_weight_bh = 벤치마크(유니버스 전체, composite로 표시정렬)
+    out["equal_weight_bh"] = {"axis": None, "topN": None, "count": len(rows),
+                              "items": _top("composite", None)}
+    return out
+
+
 # ── PR-4(이번): stock_notes 로드 ─────────────────────────────────────
 def _load_stock_notes(conn) -> dict[str, dict]:
     """stock_notes → {ticker: {horizon, attractiveness, thesis}}."""
@@ -2082,6 +2188,9 @@ def build_data() -> dict:
         # Wave 5-B: 시장 매력도 점수·방향 + 종목 베타 경로 관찰
         _attach_market_score(conn, market, stocks)
         strategy_guidance = _build_strategy_guidance(backtest_data, market)
+        # 전략비교 고도화: 현재 장세(region별)→전략 관찰 + 전략별 현재 구성종목(최신 quant)
+        backtest_data["regimeStrategy"] = _build_regime_strategy(backtest_data, market)
+        backtest_data["constituents"] = _build_strategy_constituents(conn)
 
         # 신규-F: 신호 적중률 요약 (n>=30이어야 notnull, 그 전엔 None — 데이터 축적 대기)
         signal_accuracy = None

@@ -19,6 +19,10 @@ const SERIES_COLOR = {
 const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
 const pctColor = (v) => (v == null ? C.ink3 : v >= 0 ? C.ok : C.bad);
 
+const DIR_COLOR = { "강세": C.ok, "중립": C.warn, "약세": C.bad };
+const AXIS_LABEL = { momentum: "모멘텀", value: "가치", quality: "우량성", growth: "성장", composite: "종합" };
+const REGION_LABEL = { kr: "한국 (KR)", us: "미국 (US)" };
+
 function buildLineData(h) {
   if (!h) return [];
   const map = {};
@@ -41,6 +45,76 @@ function buildRegimeData(h) {
     { regime: "횡보", value: rr.neutral },
     { regime: "하락", value: rr.bear },
   ];
+}
+
+// Part 2: 현재 장세(region별 market_score.direction) → regime_returns 최상위 전략 관찰.
+function RegimeStrategyPanel({ regimeStrategy }) {
+  const regions = ["kr", "us"].filter((k) => regimeStrategy?.[k]);
+  if (!regions.length) return null;
+  return (
+    <Panel title="현재 장세 최적 전략" sub="지금 장세에서 역사적으로 강했던 전략 · 관찰(매매지시 아님)">
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: 16 }}>
+        {regions.map((k) => {
+          const r = regimeStrategy[k];
+          const dirColor = DIR_COLOR[r.direction] || C.ink2;
+          return (
+            <div key={k} style={{ flex: "1 1 340px", border: `1px solid ${C.line2}`, borderRadius: 10, padding: 14, background: C.surface }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{REGION_LABEL[k]}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: dirColor, background: C.surface2, border: `1px solid ${dirColor}33`, borderRadius: 5, padding: "2px 8px" }}>{r.direction} 장세</span>
+                {r.score != null ? <span style={{ fontSize: 11, color: C.ink3 }}>점수 {Math.round(r.score)}{r.confidence ? ` · 신뢰도 ${r.confidence}` : ""}</span> : null}
+              </div>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>진짜 백테스트 · {r.regimeKo} 구간 수익</MonoCaps>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                {(r.trueRanked || []).map((s, i) => (
+                  <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, color: C.ink3, width: 14 }}>{i + 1}</span>
+                    <span style={{ fontSize: 12.5, fontWeight: i === 0 ? 800 : 600, color: i === 0 ? C.acc : C.ink2, flex: 1 }}>{s.label}</span>
+                    <span style={{ fontSize: 10, color: C.ink3 }}>{HORIZON_LABEL[s.horizon] || s.horizon}</span>
+                    <Num size={12} weight={700} color={pctColor(s.regimeReturn)} style={{ textDecoration: "none" }}>{pct(s.regimeReturn)}</Num>
+                  </div>
+                ))}
+              </div>
+              {r.observation ? <div style={{ marginTop: 11, fontSize: 11.5, color: C.ink2, lineHeight: 1.6 }}>{r.observation}</div> : null}
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
+// Part 3: 전략별 현재 구성종목 (최신 quant_scores 축 상위 N).
+function ConstituentsPanel({ con, strategyName }) {
+  if (!con) {
+    if (strategyName === "low_vol") {
+      return (
+        <Panel title="현재 구성종목" sub="저변동성 = 변동성 기준 선택">
+          <div style={{ padding: 14, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
+            저변동성 전략은 quant 팩터가 아니라 실현변동성 기준으로 종목을 고릅니다. 위 "선택 전략 비교"의 백테스트 최근 리밸런싱 바스켓을 참고하세요.
+          </div>
+        </Panel>
+      );
+    }
+    return null;
+  }
+  const cap = con.topN || 24;
+  const shown = (con.items || []).slice(0, cap);
+  const rest = (con.items || []).length - shown.length;
+  const sub = con.axis ? `최신 ${AXIS_LABEL[con.axis] || con.axis} 점수 상위 ${con.topN}` : `유니버스 전체 (벤치마크 · ${con.count}종목, 종합순)`;
+  return (
+    <Panel title="현재 구성종목" sub={sub}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: 14 }}>
+        {shown.map((it) => (
+          <div key={it.ticker} style={{ display: "flex", alignItems: "center", gap: 7, border: `1px solid ${C.line2}`, borderRadius: 8, padding: "6px 10px", background: C.surface }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{it.name || it.ticker}</span>
+            {it.score != null ? <span style={{ fontSize: 11, fontWeight: 700, color: C.acc }}>{it.score}</span> : null}
+          </div>
+        ))}
+        {rest > 0 ? <div style={{ display: "flex", alignItems: "center", fontSize: 11, color: C.ink3, padding: "6px 4px" }}>외 {rest}종목</div> : null}
+      </div>
+    </Panel>
+  );
 }
 
 function MetricsTable({ strategies }) {
@@ -84,7 +158,7 @@ function MetricsTable({ strategies }) {
   );
 }
 
-function StrategyExplorer({ title, badge, badgeColor, badgeBg, strategies, warning }) {
+function StrategyExplorer({ title, badge, badgeColor, badgeBg, strategies, warning, constituents }) {
   const [selectedName, setSelectedName] = useState(strategies[0]?.name || "");
   const [selectedHorizon, setSelectedHorizon] = useState("5y");
   const selected = strategies.find((s) => s.name === selectedName) || strategies[0];
@@ -184,6 +258,8 @@ function StrategyExplorer({ title, badge, badgeColor, badgeBg, strategies, warni
           </ResponsiveContainer>
         </div>
       </Panel>
+
+      <ConstituentsPanel con={constituents?.[selected?.name]} strategyName={selected?.name} />
     </div>
   );
 }
@@ -203,12 +279,15 @@ export function Strategy({ D }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <RegimeStrategyPanel regimeStrategy={bt.regimeStrategy} />
+
       <StrategyExplorer
         title="진짜 백테스트"
         badge="실제 백테스트"
         badgeColor={C.ok}
         badgeBg={C.okBg}
         strategies={trueTrack.strategies || []}
+        constituents={bt.constituents}
       />
 
       <StrategyExplorer
@@ -218,6 +297,7 @@ export function Strategy({ D }) {
         badgeBg={C.warnBg}
         strategies={retro.strategies || []}
         warning={retro.warning}
+        constituents={bt.constituents}
       />
     </div>
   );
