@@ -332,6 +332,33 @@ def upsert_valuation(conn: psycopg.Connection, rows: list[ValuationRow]) -> None
     logger.debug("upsert_valuation: %d rows", len(rows))
 
 
+def upsert_valuation_xcheck(conn: psycopg.Connection, rows: list[dict]) -> None:
+    """밸류 교차검증 스냅샷 upsert(같은 날 재실행=덮어쓰기, 과거 보존). rows=dict 리스트."""
+    sql = """
+        INSERT INTO valuation_xcheck
+            (ticker, asof, src_pbr, src_per, ref_pbr, ref_per, pbr_dev, per_dev,
+             flagged, reason, ref_source)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ticker, asof) DO UPDATE SET
+            src_pbr = EXCLUDED.src_pbr, src_per = EXCLUDED.src_per,
+            ref_pbr = EXCLUDED.ref_pbr, ref_per = EXCLUDED.ref_per,
+            pbr_dev = EXCLUDED.pbr_dev, per_dev = EXCLUDED.per_dev,
+            flagged = EXCLUDED.flagged, reason  = EXCLUDED.reason,
+            ref_source = EXCLUDED.ref_source, checked_at = now()
+    """
+    with conn.cursor() as cur:
+        cur.executemany(
+            sql,
+            [
+                (r["ticker"], r["asof"], r["src_pbr"], r["src_per"], r["ref_pbr"],
+                 r["ref_per"], r["pbr_dev"], r["per_dev"], r["flagged"], r["reason"],
+                 r.get("ref_source", "krx"))
+                for r in rows
+            ],
+        )
+    logger.debug("upsert_valuation_xcheck: %d rows", len(rows))
+
+
 def upsert_analyst(conn: psycopg.Connection, rows: list[AnalystRow]) -> None:
     sql = """
         INSERT INTO analyst

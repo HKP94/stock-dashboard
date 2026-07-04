@@ -92,6 +92,30 @@ CREATE TABLE IF NOT EXISTS valuation (
 );
 
 -- =============================================================
+-- 밸류에이션 교차검증 게이트 (H-1)
+-- KR 저장 PBR/PER(네이버) vs KRX 공식 대조. flagged=편차 임계 초과("밸류 의심").
+-- valuation 원본 불변. 로컬 실행(KRX 로그인, CI 차단). DDL: migrations/h1_valuation_xcheck.sql
+-- =============================================================
+CREATE TABLE IF NOT EXISTS valuation_xcheck (
+    ticker     TEXT        NOT NULL,
+    asof       DATE        NOT NULL,
+    src_pbr    NUMERIC,
+    src_per    NUMERIC,
+    ref_pbr    NUMERIC,
+    ref_per    NUMERIC,
+    pbr_dev    NUMERIC,
+    per_dev    NUMERIC,
+    flagged    BOOLEAN     NOT NULL DEFAULT FALSE,
+    reason     TEXT,
+    ref_source TEXT        NOT NULL DEFAULT 'krx',
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, asof)
+);
+
+CREATE INDEX IF NOT EXISTS idx_valuation_xcheck_asof    ON valuation_xcheck (asof DESC);
+CREATE INDEX IF NOT EXISTS idx_valuation_xcheck_flagged ON valuation_xcheck (flagged) WHERE flagged;
+
+-- =============================================================
 -- 애널리스트 컨센서스
 -- =============================================================
 CREATE TABLE IF NOT EXISTS analyst (
