@@ -93,6 +93,50 @@ const _GRADE_RANK = { "매수": 3, "관망": 2, "축소": 1 };
 const _CONF_RANK = { "상": 3, "중": 2, "하": 1 };
 const gradeScore = (s) => (_GRADE_RANK[s.grade] || 0) * 10 + (_CONF_RANK[s.gradeConfidence] || 0);
 
+// 점수 이원화 4상한: 장기(가치·퀄리티·성장) × 모멘텀(모멘텀·심리). 각 점수의 중앙값으로 분면.
+// §2: 두 점수를 하나로 재합산하지 않는다 — 분면 내 정렬도 해당 렌즈 기준(합산 순위 금지).
+function DualLensQuadrant({ stocks, nav }) {
+  const ds = (stocks || []).filter((s) => s.longScore != null && s.momoScore != null);
+  if (ds.length < 4) return null;
+  const median = (arr) => { const a = [...arr].sort((x, y) => x - y); const m = Math.floor(a.length / 2); return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+  const mL = median(ds.map((s) => s.longScore));
+  const mM = median(ds.map((s) => s.momoScore));
+  const boxes = [
+    { key: "both", title: "핵심", desc: "장기·모멘텀 모두 상위", color: C.ok, items: ds.filter((s) => s.longScore >= mL && s.momoScore >= mM).sort((a, b) => b.longScore - a.longScore) },
+    { key: "long", title: "가치·인내", desc: "장기 상위 · 모멘텀 하위", color: C.acc, items: ds.filter((s) => s.longScore >= mL && s.momoScore < mM).sort((a, b) => b.longScore - a.longScore) },
+    { key: "momo", title: "모멘텀·단기", desc: "모멘텀 상위 · 장기 하위", color: C.warn, items: ds.filter((s) => s.longScore < mL && s.momoScore >= mM).sort((a, b) => b.momoScore - a.momoScore) },
+    { key: "none", title: "관망", desc: "둘 다 하위", color: C.ink3, items: ds.filter((s) => s.longScore < mL && s.momoScore < mM).sort((a, b) => b.longScore - a.longScore) },
+  ];
+  return (
+    <Panel title="2렌즈 4상한" sub={`장기(가치·퀄리티·성장) × 모멘텀(모멘텀·심리) · 중앙값 분할 (장기 ${mL.toFixed(0)} / 모멘텀 ${mM.toFixed(0)})`}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, padding: 14 }}>
+        {boxes.map((b) => (
+          <div key={b.key} style={{ border: `1px solid ${b.color}33`, borderRadius: 10, padding: 12, background: C.surface }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: b.color }}>{b.title}</span>
+              <span style={{ fontSize: 10.5, color: C.ink3 }}>{b.desc}</span>
+              <span style={{ marginLeft: "auto", fontSize: 10.5, color: C.ink3 }}>{b.items.length}종목</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {b.items.slice(0, 6).map((s) => (
+                <div key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "3px 4px", borderRadius: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.ink, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
+                  <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>장기</span><Num size={11.5} weight={700} color={gradeCol(s.longScore)}>{s.longScore}</Num>
+                  <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>모멘</span><Num size={11.5} weight={700} color={gradeCol(s.momoScore)}>{s.momoScore}</Num>
+                </div>
+              ))}
+              {b.items.length === 0 ? <span style={{ fontSize: 11, color: C.ink3 }}>—</span> : null}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ padding: "0 16px 12px", fontSize: 11, color: C.ink3, lineHeight: 1.5 }}>
+        composite(종합)가 70대에 갇히는 건 상한이 아니라 <b>상반된 축을 한 점수로 합쳐 상쇄</b>되기 때문(예: 엔비디아 장기 70·모멘텀 15 → 종합 38). 그래서 한 점수 대신 두 렌즈로 나눠 봅니다.
+      </div>
+    </Panel>
+  );
+}
+
 export function Screener({ D, nav }) {
   const [showAll, setShowAll] = useState(false);
   const [sortKey, setSortKey] = useState("comp");
@@ -110,7 +154,7 @@ export function Screener({ D, nav }) {
     .sort((a, b) => (b.safety ?? 0) - (a.safety ?? 0))
     .slice(0, 9);
 
-  const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : k === "grade" ? gradeScore(s) : s.f[k];
+  const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : k === "grade" ? gradeScore(s) : k === "longScore" ? (s.longScore ?? -1) : k === "momoScore" ? (s.momoScore ?? -1) : s.f[k];
   const unified = [...D.stocks]
     .filter((s) => gradeFilter === "all" || s.grade === gradeFilter)
     .sort((a, b) => {
@@ -191,6 +235,8 @@ export function Screener({ D, nav }) {
       </Panel>
     </div>
 
+    <DualLensQuadrant stocks={D.stocks} nav={nav} />
+
     <Panel title="전체 종목 · 통합 정렬" sub={`${D.stocks.length}종목 · 등급순/컬럼 클릭 정렬 · 매수 ${buyCount}종목`}
       right={
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -202,14 +248,16 @@ export function Screener({ D, nav }) {
         </div>}>
       {showAll && <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-          <Th label="종목" /><Th k="grade" label="등급" /><Th k="comp" label="종합" /><Th label="신호" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
+          <Th label="종목" /><Th k="grade" label="등급" /><Th k="longScore" label="장기점수" /><Th k="momoScore" label="모멘텀점수" /><Th k="comp" label="종합" /><Th label="신호" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
         </tr></thead>
         <tbody>
           {unified.length === 0 ? (
-            <tr><td colSpan={11} style={{ padding: "22px 12px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>해당 등급 종목이 없습니다.</td></tr>
+            <tr><td colSpan={13} style={{ padding: "22px 12px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>해당 등급 종목이 없습니다.</td></tr>
           ) : unified.map((s) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
             <td style={{ padding: "9px 10px" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 12.5, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{s.t}·{s.mk}</span></div></td>
             <td style={{ padding: "7px 10px", textAlign: "center" }}>{s.grade ? <GradeBadge grade={s.grade} confidence={s.gradeConfidence} compact /> : <span style={{ fontSize: 10.5, color: C.ink3 }}>—</span>}</td>
+            <td style={{ padding: "9px 10px", textAlign: "right" }} title={s.longParts ? `가치 ${s.longParts.v} · 퀄리티 ${s.longParts.q} · 성장 ${s.longParts.g}` : ""}><Num size={13} weight={700} color={sortKey === "longScore" ? gradeCol(s.longScore ?? 0) : C.ink}>{s.longScore ?? "—"}</Num></td>
+            <td style={{ padding: "9px 10px", textAlign: "right" }} title={s.momoParts ? `모멘텀 ${s.momoParts.m} · 심리 ${s.momoParts.s}` : ""}><Num size={13} weight={700} color={sortKey === "momoScore" ? gradeCol(s.momoScore ?? 0) : C.ink}>{s.momoScore ?? "—"}</Num></td>
             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={13} weight={700} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num></td>
             <td style={{ padding: "7px 10px" }}><SignalCard signal={s.signal} compact /></td>
             {["m", "v", "q", "g", "s"].map((k) => <td key={k} style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={sortKey === k ? gradeCol(s.f[k]) : C.ink2}>{s.f[k]}</Num></td>)}

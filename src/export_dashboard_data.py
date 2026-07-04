@@ -66,6 +66,42 @@ REGIMES = {
     "bear":    {"label": "약세",  "color": "bad",  "w": {"m": 10, "v": 35, "q": 45, "g":  5, "s": 5}},
 }
 
+# ── 점수 이원화(장기/모멘텀) — §2 3축 합산 안티패턴 해소 ──────────────────
+# composite는 상반된 축(예: 높은 quality + 낮은 momentum)을 한 점수로 합쳐 70대에 갇힌다
+# (NVDA: 장기 71 / 모멘텀 15 → composite 38). 이를 두 렌즈로 분리한다.
+#   장기점수 = 가치·퀄리티·성장 블렌드(무엇을 사느냐 = 펀더멘털)
+#   모멘텀점수 = 모멘텀·심리 블렌드(언제 사느냐 = 타이밍)
+# **두 점수를 다시 하나로 합치지 않는다**(§2). 괴리(장기高·모멘텀低 등)가 관찰 신호다.
+# trading_signal_score(기술)는 v1 제외 — 모멘텀 축이 이미 12-1 모멘텀이고, 단기 기술신호는
+# 다른 호라이즌·노이즈라 점수를 흐린다(튜닝 옵션으로 보류). composite는 유지(타 화면 사용).
+LONG_SCORE_WEIGHTS = {"quality": 0.35, "value": 0.35, "growth": 0.30}
+MOMO_SCORE_WEIGHTS = {"momentum": 0.60, "sentiment": 0.40}
+
+
+def _blend(parts: list[tuple[float | None, float]]) -> float | None:
+    """결측 축은 제외하고 남은 가중치로 정규화(0~100). 전부 결측이면 None. 결정론."""
+    valid = [(float(v), w) for v, w in parts if v is not None]
+    if not valid:
+        return None
+    return round(sum(v * w for v, w in valid) / sum(w for _, w in valid), 1)
+
+
+def _dual_scores(momentum, value, quality, growth, sentiment) -> dict:
+    """장기점수·모멘텀점수 두 렌즈(재합산 금지). 축 소분해도 함께(드릴다운용)."""
+    return {
+        "longScore": _blend([(quality, LONG_SCORE_WEIGHTS["quality"]),
+                             (value, LONG_SCORE_WEIGHTS["value"]),
+                             (growth, LONG_SCORE_WEIGHTS["growth"])]),
+        "momoScore": _blend([(momentum, MOMO_SCORE_WEIGHTS["momentum"]),
+                             (sentiment, MOMO_SCORE_WEIGHTS["sentiment"])]),
+        "longParts": {"q": _rr(quality), "v": _rr(value), "g": _rr(growth)},
+        "momoParts": {"m": _rr(momentum), "s": _rr(sentiment)},
+    }
+
+
+def _rr(v):
+    return round(float(v)) if v is not None else None
+
 # ── helpers ───────────────────────────────────────────────────────────
 def _f(v) -> float | None:
     """None·NaN·Decimal → float or None."""
@@ -2041,6 +2077,8 @@ def build_data() -> dict:
                     "g": round(grow),
                     "s": round(sent_f),
                 },
+                # 점수 이원화: 장기(가치·퀄리티·성장) / 모멘텀(모멘텀·심리). 재합산 금지(§2).
+                **_dual_scores(mom, value, qual, grow, sent_f),
                 # 신규-A1: 시장 민감도(퀀트 축 별도 팩터, composite 미합산). None=미산출.
                 "beta":       _f(q.get("beta")),
                 "marketCorr": _f(q.get("market_corr")),
