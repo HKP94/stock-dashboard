@@ -476,18 +476,20 @@ def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
 # ──────────────────────────────────────────────────────────────
 
 # ──────────────────────────────────────────────────────────────
-# KR 밸류에이션·컨센서스 (무료 공개 페이지 — 네이버 금융 + FnGuide)
+# KR 밸류에이션·컨센서스 (무료 공개 페이지 — 네이버 금융 단일 소스)
 #
 # 개인·비상업 분석 용도. 계좌 불필요. yfinance KR 사용 금지 규칙 유지.
 # 소스:
-#   - 네이버 금융 종목 메인: PER(#_per)·PBR(#_pbr)·현재가·목표주가·투자의견
-#   - FnGuide Company Guide(#highlight_D_A): ROE·부채비율·매출증가율 보강
+#   - 네이버 금융 종목 메인(단일 페이지):
+#       · PER(#_per)·PBR(#_pbr)·현재가·목표주가·투자의견
+#       · ROE·부채비율(기업실적분석 표 div.section.cop_analysis, 추정 아닌 최근 연간)
+# FnGuide는 comp.fnguide.com→wcomp 삼성 기본페이지로 302 리다이렉트(gicode 무시)돼 파손 →
+# 2026-07 네이버 실적표로 전환(ROE/부채 복구). KIS(키 있을 때)는 여전히 우선 보강.
 # 규칙: 종목 단위 try/except, 값 없으면 None('N/A' 문자열 금지), 요청 사이 sleep,
 #       User-Agent 설정, 천단위 콤마/%/음수/공란 견고 파싱.
 # ──────────────────────────────────────────────────────────────
 
 NAVER_MAIN_URL: str = "https://finance.naver.com/item/main.naver?code={code}"
-FNGUIDE_URL: str = "https://comp.fnguide.com/SVO2/ASP/SVD_Main.asp?pGB=1&gicode=A{code}"
 _KR_WEB_HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -538,8 +540,61 @@ def _get_html(url: str) -> bytes:
     return resp.content
 
 
+def _parse_naver_financials(soup: BeautifulSoup) -> dict:
+    """네이버 종목메인 '기업실적분석' 표 → {roe, debt_ratio, op_margin} (%, 최근 '실적' 연간).
+
+    FnGuide 스크래핑이 죽어(comp.fnguide.com→wcomp 삼성 기본페이지 302) 대체 소스로 사용.
+    표는 연간 N열 + 분기 M열이며 (E)는 추정치. 룩어헤드 방지 위해 **추정 아닌 가장 최근 연간**
+    (오른쪽 끝 non-(E) 연간)을 고른다. ROE/부채는 %로 반환(ROE는 호출부에서 /100 정규화).
+    """
+    out: dict = {}
+    tbl = soup.select_one("div.section.cop_analysis table")
+    if not tbl:
+        return out
+    period_row = None
+    for tr in tbl.select("thead tr"):
+        texts = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+        if any(re.match(r"\d{4}\.\d{2}", t) for t in texts):
+            period_row = texts
+            break
+    if not period_row:
+        return out
+    n_annual = 4  # 폴백
+    for tr in tbl.select("thead tr"):
+        for c in tr.find_all(["th", "td"]):
+            if "연간" in c.get_text():
+                n_annual = int(c.get("colspan") or 1)
+    # 추정 아닌 연간 컬럼 인덱스(오른쪽=최근)
+    annual_actual = [i for i in range(min(n_annual, len(period_row))) if "(E)" not in period_row[i]]
+
+    def _pick(vals: list[str]) -> Optional[float]:
+        for i in reversed(annual_actual):
+            if i < len(vals):
+                n = _parse_kr_number(vals[i])
+                if n is not None:
+                    return n
+        return None
+
+    for tr in tbl.select("tbody tr"):
+        th = tr.select_one("th")
+        if not th:
+            continue
+        label = th.get_text(" ", strip=True)
+        vals = [td.get_text(strip=True) for td in tr.select("td")]
+        if "ROE" in label:
+            out["roe"] = _pick(vals)
+        elif "부채비율" in label:
+            out["debt_ratio"] = _pick(vals)
+        elif "영업이익률" in label:
+            out["op_margin"] = _pick(vals)
+    return out
+
+
 def _fetch_naver_main(code: str) -> dict:
-    """네이버 금융 종목 메인 → {per_t, pbr, current_price, target_price, rating}."""
+    """네이버 금융 종목 메인 → {per_t, pbr, current_price, target_price, rating, roe, debt_ratio, n_analysts}.
+
+    한 페이지에서 밸류(PER/PBR)·컨센서스(목표가/투자의견)·재무(ROE/부채, 기업실적분석 표)를 모두 파싱.
+    """
     soup = BeautifulSoup(_get_html(NAVER_MAIN_URL.format(code=code)), "html.parser")
     out: dict = {}
 
@@ -568,41 +623,11 @@ def _fetch_naver_main(code: str) -> dict:
                 break
     out["target_price"] = target
     out["rating"] = rating
-    return out
 
-
-def _fetch_fnguide(code: str) -> dict:
-    """FnGuide #highlight_D_A → {roe, debt_ratio, rev_growth, op_margin, n_analysts}. best-effort."""
-    out: dict = {}
-    try:
-        soup = BeautifulSoup(_get_html(FNGUIDE_URL.format(code=code)), "html.parser")
-    except Exception as exc:
-        logger.warning("FnGuide 조회 실패 (A%s): %s", code, exc)
-        return out
-
-    tbl = soup.select_one("#highlight_D_A")
-    if tbl:
-        for tr in tbl.select("tr"):
-            th = tr.select_one("th")
-            if not th:
-                continue
-            label = th.get_text(" ", strip=True)
-            vals = [td.get_text(strip=True) for td in tr.select("td")]
-            # 마지막 비어있지 않은 값(가장 최근 실적/추정)
-            last = next((v for v in reversed(vals) if v and v.strip() not in ("", "-")), None)
-            num = _parse_kr_number(last)
-            if "ROE" in label:
-                out["roe"] = num
-            elif "부채비율" in label:
-                out["debt_ratio"] = num
-            elif "매출액증가율" in label or "매출증가율" in label:
-                out["rev_growth"] = num
-            elif "영업이익률" in label:
-                out["op_margin"] = num
-
-    # 추정기관수(컨센서스 참여 기관) — 목표주가 영역
-    txt = soup.get_text(" ", strip=True)
-    m = re.search(r"추정기관수\s*([\d.]+)", txt)
+    # 기업실적분석 표 → ROE/부채(FnGuide 대체)
+    out.update(_parse_naver_financials(soup))
+    # 추정기관수(있으면) — best-effort
+    m = re.search(r"추정기관수\s*([\d.]+)", soup.get_text(" ", strip=True))
     if m:
         out["n_analysts"] = int(float(m.group(1)))
     return out
@@ -620,8 +645,14 @@ def fetch_kr_valuation_analyst(
 
     naver = _fetch_naver_main(code)
     time.sleep(KR_WEB_SLEEP)
-    fn = _fetch_fnguide(code)
-    time.sleep(KR_WEB_SLEEP)
+    # FnGuide는 comp.fnguide.com→wcomp 삼성 기본페이지로 302 리다이렉트돼 gicode 무시(파손) →
+    # ROE/부채는 네이버 기업실적분석 표에서 채운다(_fetch_naver_main이 함께 파싱, 추가 요청 없음).
+    fn = {
+        "roe": naver.get("roe"),
+        "debt_ratio": naver.get("debt_ratio"),
+        "op_margin": naver.get("op_margin"),
+        "n_analysts": naver.get("n_analysts"),
+    }
 
     # PR-4: KIS 옵션 경로(키 있을 때만) — '있으면 우선'으로 보강. 키 없으면 {} 반환→무영향.
     try:
@@ -674,7 +705,7 @@ def fetch_kr_valuation_analyst(
         target_price=target,
         upside=upside,
         n_analysts=fn.get("n_analysts"),
-        source="naver+fnguide",
+        source="naver",
     )
 
     has_val = any(v is not None for v in (val.per_t, val.pbr, val.roe, val.debt_ratio))

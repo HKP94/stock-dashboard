@@ -89,11 +89,29 @@ from datetime import date as _date
 from src.ingest_kr import (
     _parse_kr_number,
     _fetch_naver_main,
-    _fetch_fnguide,
+    _parse_naver_financials,
     fetch_kr_valuation_analyst,
 )
+from bs4 import BeautifulSoup as _BS
 
 # 네이버 종목 메인 최소 fixture (실제 구조의 핵심 요소만)
+# 기업실적분석 표: 연간 3열(2023·2024·2025E) + 분기 2열. 파서는 '추정 아닌 최근 연간'=2024.12를
+# 골라야 하므로 ROE/부채/영업이익률의 index1(2024.12)=7.11/45.21/17.44가 채택돼야 한다
+# (2025.12는 (E)라 제외, 분기값 3.00/50.0도 제외).
+_NAVER_FIN_TABLE = """
+<div class="section cop_analysis"><table>
+  <thead>
+    <tr><th rowspan="2">주요재무정보</th><th colspan="3">최근 연간 실적</th><th colspan="2">최근 분기 실적</th></tr>
+    <tr><th>2023.12</th><th>2024.12</th><th>2025.12 (E)</th><th>2025.09</th><th>2025.12 (E)</th></tr>
+  </thead>
+  <tbody>
+    <tr><th>ROE(지배주주)</th><td>10.83</td><td>7.11</td><td>9.99</td><td>3.00</td><td>4.00</td></tr>
+    <tr><th>부채비율</th><td>41.59</td><td>45.21</td><td></td><td>50.0</td><td>60.0</td></tr>
+    <tr><th>영업이익률</th><td>18.18</td><td>17.44</td><td>20.0</td><td>19.0</td><td>21.0</td></tr>
+  </tbody>
+</table></div>
+"""
+
 _NAVER_HTML = """
 <html><body>
   <div class="rate_info"><p class="no_today"><em><span class="blind">248,000</span></em></p></div>
@@ -102,20 +120,10 @@ _NAVER_HTML = """
   <div class="aside_invest_info"><table><tbody>
     <tr><th>투자의견 l 목표주가</th><td><em>4.00</em> 매수 l <em>329,227</em></td></tr>
   </tbody></table></div>
+  <div>추정기관수 4.0 목표주가</div>
+  __FIN__
 </body></html>
-"""
-
-# FnGuide #highlight_D_A 최소 fixture
-_FNGUIDE_HTML = """
-<html><body>
-<table id="highlight_D_A"><tbody>
-  <tr><th>부채비율(%)</th><td>41.59</td><td>41.90</td><td>45.21</td><td></td></tr>
-  <tr><th>ROE(%)</th><td>10.83</td><td>4.57</td><td>4.00</td><td>7.11</td></tr>
-  <tr><th>영업이익률(%)</th><td>18.18</td><td>19.11</td><td>16.72</td><td>17.44</td></tr>
-</tbody></table>
-<div>추정기관수 4.0 목표주가</div>
-</body></html>
-"""
+""".replace("__FIN__", _NAVER_FIN_TABLE)
 
 
 class TestParseKrNumber:
@@ -144,24 +152,29 @@ class TestFetchNaverMain:
         assert out["current_price"] == 248000.0
         assert out["target_price"] == 329227.0
         assert out["rating"] == "매수"
-
-
-class TestFetchFnguide:
-    def test_parses_roe_debt_lastcol(self):
-        with patch("src.ingest_kr._get_html", return_value=_FNGUIDE_HTML.encode()):
-            out = _fetch_fnguide("035420")
-        # 마지막 비어있지 않은 값 사용: 부채비율 45.21(빈칸 제외), ROE 7.11
-        assert out["debt_ratio"] == 45.21
+        # 같은 페이지 기업실적분석 표에서 ROE/부채/추정기관수도 파싱(FnGuide 대체)
         assert out["roe"] == 7.11
-        assert out["op_margin"] == 17.44
+        assert out["debt_ratio"] == 45.21
         assert out["n_analysts"] == 4
+
+
+class TestParseNaverFinancials:
+    def test_picks_most_recent_actual_annual(self):
+        # 최근 '실적' 연간(2024.12)을 골라야 함: 2025.12는 (E) 추정, 분기값도 제외.
+        soup = _BS(_NAVER_FIN_TABLE, "html.parser")
+        out = _parse_naver_financials(soup)
+        assert out["roe"] == 7.11        # index1(2024.12), not 9.99(E)/3.00(분기)
+        assert out["debt_ratio"] == 45.21
+        assert out["op_margin"] == 17.44
+
+    def test_empty_when_no_table(self):
+        assert _parse_naver_financials(_BS("<html></html>", "html.parser")) == {}
 
 
 class TestFetchKrValuationAnalyst:
     def test_combines_and_converts(self):
-        def fake_html(url):
-            return (_FNGUIDE_HTML if "fnguide" in url else _NAVER_HTML).encode()
-        with patch("src.ingest_kr._get_html", side_effect=fake_html), \
+        # 단일 네이버 페이지에서 밸류+컨센서스+재무 모두 파싱(FnGuide 제거).
+        with patch("src.ingest_kr._get_html", return_value=_NAVER_HTML.encode()), \
              patch("src.ingest_kr.time.sleep", return_value=None):
             val, ana = fetch_kr_valuation_analyst("035420.KS", asof=_date(2026, 6, 15))
         # ROE %→비율 변환 (7.11% → 0.0711)
@@ -176,7 +189,7 @@ class TestFetchKrValuationAnalyst:
         assert ana.rating_score == 1.0
         assert ana.upside == pytest.approx(329227.0 / 248000.0 - 1, rel=1e-4)
         assert ana.n_analysts == 4
-        assert ana.source == "naver+fnguide"
+        assert ana.source == "naver"
 
     def test_none_when_pages_empty(self):
         with patch("src.ingest_kr._get_html", return_value=b"<html></html>"), \
