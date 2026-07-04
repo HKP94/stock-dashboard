@@ -517,6 +517,38 @@ CREATE INDEX IF NOT EXISTS idx_stock_note_history_ticker
     ON stock_note_history (ticker, created_at DESC, id DESC);
 
 -- =============================================================
+-- 판단 기록 (G-1 — 대화에서 확정된 판단의 append-only 로그, 세션 간 승계)
+-- 전용 role atlas_note_writer 만 쓰기(DELETE 미부여). DDL: migrations/g1_judgment_notes.sql
+-- role: db/atlas_note_writer_role.sql (수동 1회 실행)
+-- =============================================================
+CREATE TABLE IF NOT EXISTS judgment_notes (
+    id             BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ticker         TEXT,                               -- NULL = 시장 전체 판단
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(), -- §F7
+    author         TEXT        NOT NULL DEFAULT 'claude_pm',  -- claude_pm | kph
+    axis           TEXT,                               -- quant|consensus|my_judgment|observation (태깅, 합산 금지)
+    stance         TEXT,                               -- 자유 라벨(관망/관심/주의). ENUM 금지
+    thesis         TEXT        NOT NULL,
+    rationale      TEXT,
+    confidence     TEXT,                               -- 하/중/상 자유
+    source_session TEXT,
+    superseded_by  BIGINT      REFERENCES judgment_notes(id),
+    CONSTRAINT judgment_notes_axis_chk
+        CHECK (axis IS NULL OR axis IN ('quant', 'consensus', 'my_judgment', 'observation'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_judgment_notes_ticker     ON judgment_notes (ticker);
+CREATE INDEX IF NOT EXISTS idx_judgment_notes_created_at ON judgment_notes (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_judgment_notes_live       ON judgment_notes (ticker) WHERE superseded_by IS NULL;
+
+CREATE OR REPLACE VIEW v_current_judgment AS   -- 라이브 판단 전체(다축·시장전체 보존)
+    SELECT * FROM judgment_notes WHERE superseded_by IS NULL;
+
+CREATE OR REPLACE VIEW v_latest_judgment AS    -- 종목별 최신 라이브 1건
+    SELECT DISTINCT ON (ticker) * FROM judgment_notes
+    WHERE superseded_by IS NULL ORDER BY ticker, created_at DESC;
+
+-- =============================================================
 -- 포트폴리오 전략 조언 (CoT 결과 캐시) — cache_key = 보유·현금·레짐 시그니처
 -- 보유 변경 시 cache_key가 달라져 stale 판정.
 -- =============================================================
