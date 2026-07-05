@@ -33,6 +33,8 @@ from src.compute_quant import (
     compute_quant_universe,
     is_filtered,
     piotroski_fscore,
+    _is_financial,
+    _score_quality,
 )
 
 # ── 합성 데이터 헬퍼 ──────────────────────────────────────────
@@ -464,3 +466,47 @@ class TestComputeQuantUniverse:
         assert bull_diff > 0, f"bull에서 HIGH_MOM이 더 높아야 함: diff={bull_diff}"
         # bear: quality 가중치 0.45 → HIGH_QUAL 유리 → diff < 0
         assert bear_diff < 0, f"bear에서 HIGH_QUAL이 더 높아야 함: diff={bear_diff}"
+
+
+# ── 금융 섹터 인지형 quality/필터 (은행·보험·증권) ──────────────────────
+class TestFinancialSectorQuality:
+    def test_is_financial_normalizes_messy_sectors(self):
+        for s in ["insurance", "Fiance", "Financials", "Financial Services",
+                  "Bank", "증권", "보험", "은행", "금융"]:
+            assert _is_financial(s) is True, s
+        for s in ["Technology", "Semiconductors", "Energy", "bond", "", None]:
+            assert _is_financial(s) is False, s
+
+    def test_is_filtered_skips_fscore_for_financials(self):
+        # 비금융: 저fscore → 필터. 금융: 저fscore여도 필터 안 함(Piotroski 부적합).
+        assert is_filtered(1, None, 999, "US", is_financial=False) is True
+        assert is_filtered(1, None, 999, "US", is_financial=True) is False
+        # 고유변동성 필터는 금융도 유지(KR)
+        assert is_filtered(1, 0.05, 0.03, "KR", is_financial=True) is True
+
+    def test_financial_quality_roe_driven_not_debt_penalized(self):
+        # FIN(보험)과 IND(산업재)가 동일 고ROE·거대부채·저fscore. FIN은 ROE로 높게,
+        # IND는 부채 페널티+저fscore로 낮게 나와야(섹터 분기).
+        val_map = {
+            "FIN": {"roe": 0.20, "roa": None, "debt_ratio": 900.0},
+            "IND": {"roe": 0.20, "roa": 0.10, "debt_ratio": 900.0},
+            "LO1": {"roe": 0.02, "roa": 0.01, "debt_ratio": 30.0},
+            "LO2": {"roe": 0.05, "roa": 0.02, "debt_ratio": 20.0},
+        }
+        fund_map = {t: [{"op_margin": 0.1}] for t in val_map}
+        fscore_map = {"FIN": 1, "IND": 1, "LO1": 6, "LO2": 5}
+        fin = {"FIN": True, "IND": False}
+        q = _score_quality(val_map, fscore_map, {t: [] for t in val_map}, fund_map, fin)
+        assert q["FIN"] > q["IND"]          # 부채 페널티·fscore에서 자유로워 더 높음
+        assert q["FIN"] >= 60               # 최상위 ROE → 상위권
+
+    def test_nonfinancial_quality_unchanged_by_default(self):
+        # financial_map 없이 호출 = 종전 로직(비금융 회귀 0 확인).
+        val_map = {"A": {"roe": 0.1, "roa": 0.05, "debt_ratio": 50.0},
+                   "B": {"roe": 0.2, "roa": 0.10, "debt_ratio": 30.0}}
+        fund_map = {t: [{"op_margin": 0.1}] for t in val_map}
+        fscore_map = {"A": 5, "B": 6}
+        flags = {t: [] for t in val_map}
+        q_default = _score_quality(val_map, fscore_map, flags, fund_map)
+        q_nonfin = _score_quality(val_map, fscore_map, flags, fund_map, {"A": False, "B": False})
+        assert q_default == q_nonfin        # financial_map 유무가 비금융에 영향 없음
