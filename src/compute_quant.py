@@ -41,6 +41,23 @@ _REGIME_WEIGHTS: dict[str, dict[str, float]] = {
 
 # ── 상수 ─────────────────────────────────────────────────────
 FSCORE_FILTER_THRESHOLD: int = 3
+
+# 금융 섹터(은행·보험·증권): 레버리지가 사업 본질이라 산업재식 부채 페널티·Piotroski가 부적합.
+# watchlist.sector 값이 뒤섞여(insurance/Fiance오타/Financials 등) 있어 토큰 부분일치로 정규화.
+# 'bond' 등 애매값은 제외(불명은 기존 로직 유지 — 비금융 회귀 방지).
+_FINANCIAL_SECTOR_TOKENS: tuple[str, ...] = (
+    "financ", "fiance", "insurance", "bank", "securities", "brokerage", "capital markets",
+    "금융", "보험", "은행", "증권",
+)
+
+
+def _is_financial(sector: Optional[str]) -> bool:
+    """섹터 문자열이 은행·보험·증권 계열이면 True(부분일치·대소문자 무시). 결측·불명은 False."""
+    if not sector:
+        return False
+    s = sector.strip().lower()
+    return any(tok in s for tok in _FINANCIAL_SECTOR_TOKENS)
+
 IDIO_VOL_UNIV_PERCENTILE: float = 80.0
 VIX_SPIKE_MULT: float = 1.15
 KRW_SPIKE_MULT: float = 1.03
@@ -213,6 +230,14 @@ def _fetch_ticker_market(ticker: str, conn: psycopg.Connection) -> str:
         return row["market"] if row else "US"
 
 
+def _fetch_ticker_sector(ticker: str, conn: psycopg.Connection) -> Optional[str]:
+    sql = "SELECT sector FROM watchlist WHERE ticker = %s"
+    with conn.cursor() as cur:
+        cur.execute(sql, (ticker,))
+        row = cur.fetchone()
+        return (row["sector"] if row else None)
+
+
 def _fetch_fundamentals_annual(ticker: str, conn: psycopg.Connection) -> list[dict]:
     sql = """
         SELECT period_end, revenue, op_income, op_margin, net_income
@@ -382,9 +407,12 @@ def is_filtered(
     idio_vol: Optional[float],
     univ_p80: float,
     market: str,
+    is_financial: bool = False,
 ) -> bool:
-    """True이면 composite=None."""
-    if fscore <= FSCORE_FILTER_THRESHOLD:
+    """True이면 composite=None. 금융(은행·보험·증권)은 Piotroski가 부적합하므로 fscore
+    사전필터를 적용하지 않는다(레버리지=사업본질 → 저fscore로 랭킹 전체 제외되던 왜곡 해소).
+    고유변동성 필터는 섹터 무관하게 유지."""
+    if not is_financial and fscore <= FSCORE_FILTER_THRESHOLD:
         return True
     if market == "KR" and idio_vol is not None and idio_vol > univ_p80:
         return True
@@ -570,8 +598,15 @@ def _score_quality(
     fscore_map: dict[str, int],
     flags_map: dict[str, list[str]],
     fund_map: Optional[dict[str, list[dict]]] = None,
+    financial_map: Optional[dict[str, bool]] = None,
 ) -> dict[str, float]:
-    """퀄리티 팩터 0~100. op_margin은 fundamentals에서 가져옴."""
+    """퀄리티 팩터 0~100. op_margin은 fundamentals에서 가져옴.
+
+    **섹터 인지형**: 비금융은 종전 그대로(ROE·ROA·op_margin·역부채 4균등의 60% + fscore 40%).
+    금융(은행·보험·증권)은 부채(레버리지=사업본질)·ROA(구조적 저값 횡단면 왜곡)·Piotroski(부적합)를
+    제외하고 **ROE 중심**(+op_margin 있으면 평균)으로 계산 — discovery의 ROE 프록시와 방향 정합.
+    """
+    financial_map = financial_map or {}
     q1 = _safe_pct_rank({t: (v.get("roe") if v else None) for t, v in val_map.items()})
     q2 = _safe_pct_rank({t: (v.get("roa") if v else None) for t, v in val_map.items()})
     # op_margin: fundamentals 최신 연도에서 가져옴 (없으면 None → 50)
@@ -583,10 +618,19 @@ def _score_quality(
     # debt_ratio 낮을수록 좋음 → 역순
     dr  = _safe_pct_rank({t: (v.get("debt_ratio") if v else None) for t, v in val_map.items()})
     q4  = {t: 100.0 - dr[t] for t in val_map}
-    qmj = {t: (q1[t] + q2[t] + q3[t] + q4[t]) / 4 for t in val_map}
 
     fs_scores = _safe_pct_rank({t: float(fscore_map.get(t, 4)) for t in val_map})
-    return {t: 0.6 * qmj[t] + 0.4 * fs_scores[t] for t in val_map}
+    out: dict[str, float] = {}
+    for t in val_map:
+        if financial_map.get(t):
+            parts = [q1[t]]                       # ROE(백분위) 중심
+            if op_m.get(t) is not None:
+                parts.append(q3[t])               # op_margin 있으면 함께
+            out[t] = sum(parts) / len(parts)
+        else:
+            qmj = (q1[t] + q2[t] + q3[t] + q4[t]) / 4
+            out[t] = 0.6 * qmj + 0.4 * fs_scores[t]
+    return out
 
 
 def _score_growth(
@@ -666,6 +710,7 @@ def compute_quant_universe(
     # 종목별 원시 데이터 수집
     flags_map: dict[str, list[str]] = {t: [] for t in tickers}
     markets: dict[str, str] = {}
+    fin_map: dict[str, bool] = {}   # 금융 섹터(은행·보험·증권) 여부 — 섹터 인지형 quality/필터
     fscore_map: dict[str, int] = {}
     prices_252: dict[str, pd.DataFrame] = {}
     prices_60: dict[str, pd.DataFrame] = {}
@@ -688,6 +733,7 @@ def compute_quant_universe(
 
     for ticker in tickers:
         markets[ticker] = _fetch_ticker_market(ticker, conn)
+        fin_map[ticker] = _is_financial(_fetch_ticker_sector(ticker, conn))
         fs, fflags = piotroski_fscore(ticker, conn)
         fscore_map[ticker] = fs
         flags_map[ticker].extend(fflags)
@@ -718,14 +764,15 @@ def compute_quant_universe(
     # 팩터 점수 (유니버스 백분위)
     mom_scores  = _score_momentum(mom_raw, flags_map)
     val_scores  = _score_value(val_map, flags_map)
-    qual_scores = _score_quality(val_map, fscore_map, flags_map, fund_map)
+    qual_scores = _score_quality(val_map, fscore_map, flags_map, fund_map, fin_map)
     grow_scores = _score_growth(fund_map, val_map, analyst_map, flags_map)
     sent_scores = _score_sentiment(sent_map)
 
     # 복합 점수 & QuantScoresRow 생성
     results: list[QuantScoresRow] = []
     for ticker in tickers:
-        filtered = is_filtered(fscore_map[ticker], idio_vol_map.get(ticker), univ_p80, markets[ticker])
+        filtered = is_filtered(fscore_map[ticker], idio_vol_map.get(ticker), univ_p80,
+                               markets[ticker], is_financial=fin_map[ticker])
 
         mom  = mom_scores.get(ticker, 50.0)
         val  = val_scores.get(ticker, 50.0)
@@ -775,7 +822,8 @@ def compute_quant_universe(
                 growth=round(grow, 2),
                 sentiment=round(sent, 2),
                 composite=round(composite, 2) if composite is not None else None,
-                fscore=fscore_map.get(ticker),  # PR-1: 스크리너 안전마진 입력으로 영속화
+                # 금융은 Piotroski 부적합 → fscore=None 저장(스크리너 안전마진이 ROE·부채 폴백 사용).
+                fscore=None if fin_map.get(ticker) else fscore_map.get(ticker),
                 flags=flags_map[ticker],
                 beta=beta_map.get(ticker),          # 신규-A1: 시장 민감도(별도 팩터, composite 미합산)
                 market_corr=corr_map.get(ticker),
