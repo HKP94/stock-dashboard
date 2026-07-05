@@ -102,6 +102,77 @@ def _dual_scores(momentum, value, quality, growth, sentiment) -> dict:
 def _rr(v):
     return round(float(v)) if v is not None else None
 
+
+# ── 섹터-상대 팩터(크로스섹터 왜곡 해소, 추가 렌즈) ────────────────────────
+# 전 유니버스 백분위는 섹터 특성을 왜곡한다(테크 ROE vs 은행 ROE를 같은 자로 잼).
+# 정규화 매크로 섹터 그룹 내 상대 위치를 **글로벌 옆에 병기**(글로벌 값 불변). export 전용.
+# watchlist.sector 값이 뒤섞여(Fiance오타·insurance·Financials 등) 토큰 부분일치로 정규화.
+SECTOR_MIN_PEERS: int = 5   # 그룹 표본 < 이 값이면 섹터-상대 미산출 → 글로벌 폴백(정직)
+
+_SECTOR_TAXONOMY: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # (매크로 그룹, 매칭 토큰들 — 소문자 부분일치, 위에서부터 우선)
+    ("Financials",        ("financ", "fiance", "insurance", "bank", "securities", "brokerage",
+                           "금융", "보험", "은행", "증권")),
+    ("Semiconductors",    ("semic", "반도체")),
+    ("Energy/Chem",       ("energy", "petro", "oil", "chemi", "정유", "화학")),
+    ("Healthcare",        ("health", "bio", "pharma", "제약", "바이오")),
+    ("Industrials",       ("industr", "equipment", "machin", "산업")),
+    ("Consumer",          ("consumer", "staple", "retail", "cosmet", "discretion", "food")),
+    ("InfoTech",          ("tech", "display", "software", "semic")),  # semic 위에서 이미 분리
+    ("Communication",     ("commun", "media", "telecom")),
+    ("Materials",         ("material",)),
+)
+
+
+def _norm_sector(raw: str | None) -> str:
+    """뒤섞인 sector 문자열 → 정규화 매크로 섹터. 불명은 'Other'(섹터-상대 제외·글로벌 폴백)."""
+    if not raw:
+        return "Other"
+    x = raw.strip().lower()
+    for group, tokens in _SECTOR_TAXONOMY:
+        if any(tok in x for tok in tokens):
+            return group
+    return "Other"
+
+
+def _attach_sector_relative(stocks: list[dict]) -> None:
+    """각 종목에 `sectorRel`(섹터 내 백분위 q/v/m/g + group·n·fallback) 부착(in-place).
+
+    글로벌 팩터값(`f`)은 **불변**. 그룹 표본 < SECTOR_MIN_PEERS이거나 'Other'면 fallback=True
+    (섹터-상대 값 = 글로벌 값). §F7·결정론(이미 저장된 팩터의 순수 함수).
+    """
+    from collections import defaultdict
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for s in stocks:
+        s["_grp"] = _norm_sector(s.get("sec"))
+        groups[s["_grp"]].append(s)
+
+    def _pct_within(members: list[dict], key: str) -> dict[str, float]:
+        vals = [(s["t"], s["f"].get(key)) for s in members if s.get("f", {}).get(key) is not None]
+        if len(vals) < 2:
+            return {t: 50.0 for t, _ in vals}
+        order = sorted(vals, key=lambda kv: kv[1])
+        n = len(order)
+        return {t: round(100 * i / (n - 1), 1) for i, (t, _) in enumerate(order)}
+
+    for grp, members in groups.items():
+        n = len(members)
+        eligible = grp != "Other" and n >= SECTOR_MIN_PEERS
+        pct = {k: _pct_within(members, k) for k in ("m", "v", "q", "g")} if eligible else {}
+        for s in members:
+            if eligible:
+                s["sectorRel"] = {
+                    "group": grp, "n": n, "fallback": False,
+                    **{k: pct[k].get(s["t"]) for k in ("m", "v", "q", "g")},
+                }
+            else:  # 표본 부족/불명 → 글로벌 폴백(섹터-상대 = 글로벌 값)
+                s["sectorRel"] = {
+                    "group": grp, "n": n, "fallback": True,
+                    **{k: s["f"].get(k) for k in ("m", "v", "q", "g")},
+                }
+            s.pop("_grp", None)
+
+
 # ── helpers ───────────────────────────────────────────────────────────
 def _f(v) -> float | None:
     """None·NaN·Decimal → float or None."""
@@ -2234,6 +2305,7 @@ def build_data() -> dict:
             })
 
         _attach_display_signals(stocks)
+        _attach_sector_relative(stocks)   # 섹터-상대 팩터(추가 렌즈, 글로벌 불변)
 
         # PR-3: 액션 신호만 카운트
         rules_count = sum(len(s["flagsAction"]) for s in stocks)

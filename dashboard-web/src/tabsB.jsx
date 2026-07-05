@@ -196,6 +196,7 @@ export function Screener({ D, nav }) {
   const [sortKey, setSortKey] = useState("comp");
   const [sortDir, setSortDir] = useState("desc");
   const [gradeFilter, setGradeFilter] = useState("all");  // 신규-A2: 등급 발굴 필터
+  const [factorView, setFactorView] = useState("global"); // 글로벌 vs 섹터내 팩터 렌즈(크로스섹터 왜곡 해소)
 
   const overall = D.market.overall;
   const regimeBasis = D.market.kr?.regimeBasis || D.market.us?.regimeBasis || "";
@@ -208,7 +209,8 @@ export function Screener({ D, nav }) {
     .sort((a, b) => (b.safety ?? 0) - (a.safety ?? 0))
     .slice(0, 9);
 
-  const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : k === "grade" ? gradeScore(s) : k === "longScore" ? (s.longScore ?? -1) : k === "momoScore" ? (s.momoScore ?? -1) : s.f[k];
+  const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : k === "grade" ? gradeScore(s) : k === "longScore" ? (s.longScore ?? -1) : k === "momoScore" ? (s.momoScore ?? -1)
+    : (factorView === "sector" && k !== "s" && s.sectorRel ? (s.sectorRel[k] ?? -1) : s.f[k]);  // 섹터내 렌즈면 섹터-상대로 정렬
   const unified = [...D.stocks]
     .filter((s) => gradeFilter === "all" || s.grade === gradeFilter)
     .sort((a, b) => {
@@ -295,6 +297,14 @@ export function Screener({ D, nav }) {
     <Panel title="전체 종목 · 통합 정렬" sub={`${D.stocks.length}종목 · 등급순/컬럼 클릭 정렬 · 매수 ${buyCount}종목`}
       right={
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {/* 팩터 렌즈: 글로벌(전 유니버스) vs 섹터내(같은 섹터끼리 공정비교) */}
+          <div style={{ display: "flex", border: `1px solid ${C.line2}`, borderRadius: 6, overflow: "hidden", marginRight: 4 }}>
+            {[["global", "글로벌"], ["sector", "섹터내"]].map(([v, label]) => (
+              <button key={v} onClick={() => { setFactorView(v); setShowAll(true); }}
+                title={v === "sector" ? "모멘텀·가치·우량성·성장을 같은 섹터 종목끼리 백분위(표본<5는 글로벌 폴백, *표시)" : "전 유니버스 백분위"}
+                style={{ border: "none", background: factorView === v ? C.acc : C.surface, color: factorView === v ? "#fff" : C.ink2, padding: "4px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{label}</button>
+            ))}
+          </div>
           {[["all", "전체"], ["매수", "매수만"], ["관망", "관망"], ["축소", "축소"]].map(([v, label]) => (
             <button key={v} onClick={() => { setGradeFilter(v); setShowAll(true); }}
               style={{ border: `1px solid ${gradeFilter === v ? C.acc : C.line2}`, background: gradeFilter === v ? C.accTint : C.surface, color: gradeFilter === v ? C.acc : C.ink2, borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{label}</button>
@@ -315,7 +325,15 @@ export function Screener({ D, nav }) {
             <td style={{ padding: "9px 10px", textAlign: "right" }} title={s.momoParts ? `모멘텀 ${s.momoParts.m} · 심리 ${s.momoParts.s}` : ""}><Num size={13} weight={700} color={sortKey === "momoScore" ? gradeCol(s.momoScore ?? 0) : C.ink}>{s.momoScore ?? "—"}</Num></td>
             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={13} weight={700} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num></td>
             <td style={{ padding: "7px 10px" }}><SignalCard signal={s.signal} compact /></td>
-            {["m", "v", "q", "g", "s"].map((k) => <td key={k} style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={sortKey === k ? gradeCol(s.f[k]) : C.ink2}>{s.f[k]}</Num></td>)}
+            {["m", "v", "q", "g", "s"].map((k) => {
+              const useSector = factorView === "sector" && k !== "s" && s.sectorRel;
+              const val = useSector ? s.sectorRel[k] : s.f[k];
+              const fb = useSector && s.sectorRel.fallback;
+              return <td key={k} style={{ padding: "9px 10px", textAlign: "right" }}
+                title={useSector ? `섹터내 ${s.sectorRel.group}${fb ? " · 표본부족→글로벌" : ` (n=${s.sectorRel.n})`} · 글로벌 ${s.f[k]}` : ""}>
+                <Num size={12.5} weight={600} color={sortKey === k ? gradeCol(val ?? 0) : (fb ? C.ink3 : C.ink2)}>{val ?? "—"}{fb ? "*" : ""}</Num>
+              </td>;
+            })}
             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>
             <td style={{ padding: "9px 10px", textAlign: "right" }}><span className="mono" style={{ fontSize: 12, fontWeight: 700, color: s.fscore >= 7 ? C.ok : C.ink2 }}>{s.fscore ?? "—"}</span></td>
           </tr>)}
