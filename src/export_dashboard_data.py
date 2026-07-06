@@ -173,6 +173,24 @@ def _attach_sector_relative(stocks: list[dict]) -> None:
             s.pop("_grp", None)
 
 
+# ── 주주환원(배당수익률) 팩터 — 독립 축(composite·dual-score 미반영, PM 결정) ────────
+def _attach_shareholder_yield(stocks: list[dict]) -> None:
+    """배당수익률(`divYield`, %) 크로스섹션 백분위 → `stock.shYield`(0~100, 독립 팩터).
+
+    beta 패턴: 저장·표시만, **composite/장기점수에 합산하지 않는다**(기존 점수 회귀 0).
+    무배당(0)=최하위, 미수집(None)=`shYield` None(중립·백분위 풀에서 제외). §F7·결정론.
+    """
+    for s in stocks:
+        s["shYield"] = None
+    vals = [(s, s["divYield"]) for s in stocks if s.get("divYield") is not None]
+    if len(vals) < 2:
+        return
+    order = sorted(vals, key=lambda sv: sv[1])
+    n = len(order)
+    for i, (s, _) in enumerate(order):
+        s["shYield"] = round(100 * i / (n - 1), 1)
+
+
 # ── helpers ───────────────────────────────────────────────────────────
 def _f(v) -> float | None:
     """None·NaN·Decimal → float or None."""
@@ -1949,7 +1967,7 @@ def build_data() -> dict:
         # PR-0: 종목별 최신 valuation/analyst (글로벌 max(asof) 사용 시 KR/US 수집일이
         # 달라 한쪽이 통째로 누락되는 버그 — indicators/quant와 동일하게 DISTINCT ON으로 수정).
         cur.execute("""
-            SELECT DISTINCT ON (ticker) ticker, per_f, per_t, pbr, roe, debt_ratio
+            SELECT DISTINCT ON (ticker) ticker, per_f, per_t, pbr, roe, debt_ratio, div_yield
             FROM valuation ORDER BY ticker, asof DESC
         """)
         val_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
@@ -2203,6 +2221,8 @@ def build_data() -> dict:
                 "rank":   [rk, total_stocks],
                 "per":    round(per, 1) if per else None,
                 "pbr":    round(pbr, 2) if pbr else None,
+                # J-1: 배당수익률(%) 원값 + shYield(주주환원 백분위 팩터, _attach_shareholder_yield에서 부착).
+                "divYield": (round(_f(val.get("div_yield")), 2) if _f(val.get("div_yield")) is not None else None),
                 # H-1: 밸류 교차검증 flag(네이버 vs KRX 편차). 의심 종목만, 정상은 None.
                 "valuationFlag": ({"reason": xc.get("reason")} if xc.get("flagged") else None),
                 "roe":    round(roe * 100, 1) if roe is not None else None,  # PR-0: 비율→% 표시(US/KR 모두 ratio 저장)
@@ -2306,6 +2326,7 @@ def build_data() -> dict:
 
         _attach_display_signals(stocks)
         _attach_sector_relative(stocks)   # 섹터-상대 팩터(추가 렌즈, 글로벌 불변)
+        _attach_shareholder_yield(stocks) # 주주환원(배당) 독립 팩터(composite·dual 미반영)
 
         # PR-3: 액션 신호만 카운트
         rules_count = sum(len(s["flagsAction"]) for s in stocks)

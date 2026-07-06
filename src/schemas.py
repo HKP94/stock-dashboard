@@ -108,6 +108,7 @@ class ValuationRow(BaseModel):
     roa: Optional[float] = None
     debt_ratio: Optional[float] = None
     rev_growth: Optional[float] = None
+    div_yield: Optional[float] = None   # 배당수익률(%) — 주주환원 팩터 입력(J-1)
 
 
 class AnalystRow(BaseModel):
