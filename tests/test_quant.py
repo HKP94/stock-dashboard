@@ -29,6 +29,9 @@ from src.compute_quant import (
     _REGIME_WEIGHTS,
     _safe_pct_rank,
     _zscore,
+    _winsorize,
+    _score_momentum,
+    WINSOR_MIN_N,
     compute_regime,
     compute_quant_universe,
     is_filtered,
@@ -510,3 +513,41 @@ class TestFinancialSectorQuality:
         q_default = _score_quality(val_map, fscore_map, flags, fund_map)
         q_nonfin = _score_quality(val_map, fscore_map, flags, fund_map, {"A": False, "B": False})
         assert q_default == q_nonfin        # financial_map 유무가 비금융에 영향 없음
+
+
+# ── 이상치 winsorize(momentum z-score 견고화) ──────────────────────────
+class TestWinsorize:
+    def test_clips_to_5_95_percentile(self):
+        # 정상 12종 + 극단 1종. 극단값이 상한(95pct)으로 클립돼야.
+        vals = {f"N{i}": float(i) for i in range(12)}   # 0..11
+        vals["OUT"] = 1000.0
+        w = _winsorize(vals)
+        import numpy as np
+        hi = np.percentile([float(v) for v in vals.values()], 95)
+        assert w["OUT"] == hi                            # 극단 → 상한 클립
+        assert w["OUT"] < 1000.0
+        assert w["N5"] == 5.0                            # 정상값 불변
+
+    def test_preserves_none(self):
+        vals = {f"N{i}": float(i) for i in range(12)}
+        vals["M"] = None
+        assert _winsorize(vals)["M"] is None
+
+    def test_small_sample_skips_clip(self):
+        # 유효표본 < WINSOR_MIN_N → 원본 그대로(분위수 불안정). N개=MIN_N-2, +OUT = MIN_N-1
+        vals = {f"N{i}": float(i) for i in range(WINSOR_MIN_N - 2)}
+        vals["OUT"] = 1000.0
+        assert len([v for v in vals.values() if v is not None]) < WINSOR_MIN_N
+        assert _winsorize(vals)["OUT"] == 1000.0
+
+    def test_momentum_outlier_does_not_collapse_discrimination(self):
+        # 극단 모멘텀 1종이 있어도 비이상치들의 momentum 순위가 보존되는지(변별력 유지).
+        def raw(m12):
+            return {"m_1m": m12 / 12, "m_3m": m12 / 4, "m_6m": m12 / 2, "m_12m": m12,
+                    "vol_126": 0.3}
+        base = {f"T{i}": raw(0.1 * i) for i in range(10)}   # 0.0..0.9 완만한 스프레드
+        with_out = dict(base); with_out["OUT"] = raw(20.0)  # +2000% 극단
+        s = _score_momentum(with_out, {t: [] for t in with_out})
+        # 비이상치들의 상대 순위 단조 보존(T9 > T5 > T1)
+        assert s["T9"] > s["T5"] > s["T1"]
+        assert s["OUT"] > s["T9"]                           # 극단은 여전히 최상위

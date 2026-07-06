@@ -42,6 +42,12 @@ _REGIME_WEIGHTS: dict[str, dict[str, float]] = {
 # ── 상수 ─────────────────────────────────────────────────────
 FSCORE_FILTER_THRESHOLD: int = 3
 
+# 이상치 견고화: momentum은 z-score를 쓰므로 극단 수익률이 std를 부풀려 비이상치의 변별력을
+# 압축한다. z-score 입력(수익률)을 오늘 크로스섹션 5/95 분위로 winsorize(§F7 룩어헤드 없음).
+# 백분위(v/q/g/s)는 rank-불변이라 대상 아님(PM 결정: momentum z 입력만).
+WINSOR_PCT: tuple[float, float] = (5.0, 95.0)
+WINSOR_MIN_N: int = 10   # 유효표본 < 이 값이면 분위수 불안정 → 클립 생략(원본 유지)
+
 # 금융 섹터(은행·보험·증권): 레버리지가 사업 본질이라 산업재식 부채 페널티·Piotroski가 부적합.
 # watchlist.sector 값이 뒤섞여(insurance/Fiance오타/Financials 등) 있어 토큰 부분일치로 정규화.
 # 'bond' 등 애매값은 제외(불명은 기존 로직 유지 — 비금융 회귀 방지).
@@ -447,6 +453,22 @@ def _zscore(values: dict[str, Optional[float]]) -> dict[str, float]:
     return {k: z.get(k, 0.0) for k in values}
 
 
+def _winsorize(values: dict[str, Optional[float]]) -> dict[str, Optional[float]]:
+    """크로스섹션 이상치 클립: 오늘 유효값의 5/95 분위로 상하한(§F7 — 오늘 분포만, 룩어헤드 없음).
+
+    None/NaN은 그대로 유지(결측은 클립 대상 아님). 유효표본 < WINSOR_MIN_N이면 분위수가
+    불안정하므로 클립을 생략(원본 반환). z-score 입력 오염 방지 전용(백분위 팩터엔 미적용).
+    """
+    valid = [float(v) for v in values.values() if v is not None and np.isfinite(float(v))]
+    if len(valid) < WINSOR_MIN_N:
+        return dict(values)
+    lo_b, hi_b = np.percentile(valid, WINSOR_PCT[0]), np.percentile(valid, WINSOR_PCT[1])
+    return {
+        k: (min(max(float(v), lo_b), hi_b) if v is not None and np.isfinite(float(v)) else None)
+        for k, v in values.items()
+    }
+
+
 # ──────────────────────────────────────────────────────────────
 # 고유변동성
 # ──────────────────────────────────────────────────────────────
@@ -528,10 +550,11 @@ def _score_momentum(
     flags_map: dict[str, list[str]],
 ) -> dict[str, float]:
     """모멘텀 팩터 0~100. 원시 데이터 없는 종목은 None → _safe_pct_rank가 50 반환."""
-    z1m  = _zscore({t: (r["m_1m"]  if r else None) for t, r in raw_map.items()})
-    z3m  = _zscore({t: (r["m_3m"]  if r else None) for t, r in raw_map.items()})
-    z6m  = _zscore({t: (r["m_6m"]  if r else None) for t, r in raw_map.items()})
-    z12m = _zscore({t: (r["m_12m"] if r else None) for t, r in raw_map.items()})
+    # z-score 입력 수익률을 winsorize(이상치가 std를 부풀려 비이상치 변별력을 압축하는 것 방지).
+    z1m  = _zscore(_winsorize({t: (r["m_1m"]  if r else None) for t, r in raw_map.items()}))
+    z3m  = _zscore(_winsorize({t: (r["m_3m"]  if r else None) for t, r in raw_map.items()}))
+    z6m  = _zscore(_winsorize({t: (r["m_6m"]  if r else None) for t, r in raw_map.items()}))
+    z12m = _zscore(_winsorize({t: (r["m_12m"] if r else None) for t, r in raw_map.items()}))
 
     # 원시 데이터 없는 종목은 f_mom=None (→ combined=None → _safe_pct_rank 50)
     f_mom: dict[str, Optional[float]] = {}
