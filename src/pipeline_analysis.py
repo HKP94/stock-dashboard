@@ -7,7 +7,7 @@ pipeline_analysis.py — 분석 파이프라인 실행기 (설계 §4.2, §9 3�
   python -m src.pipeline_analysis --profile daily|refresh
 
 daily   : 지표 → 퀀트 → 포트폴리오 → 백테스트 (run_pipeline 순서 그대로)
-refresh : 지표 → 퀀트만 (포트폴리오·백테스트 제외, 현재 18시 news_refresh와 동일)
+refresh : 지표 → 퀀트 → 시장점수 → 포트폴리오 (18시 KR 당일종가로 총자산 재계산, 백테스트만 제외)
 
 입력 테이블: prices_daily, fundamentals, valuation, analyst, 기존 최신 news_analysis,
             market_daily, index_daily, portfolio_holdings, portfolio_cash
@@ -51,7 +51,8 @@ RUN_KIND = "pipeline_analysis"
 
 # 단계 순서를 짧은 튜플 상수로 노출 (설계 §5)
 DAILY_STEPS = ("compute_indicators", "compute_quant", "market_score", "compute_portfolio", "backtest", "signal_track")
-REFRESH_STEPS = ("compute_indicators", "compute_quant", "market_score")
+# refresh(18시)에도 compute_portfolio 포함 — 당일 KR 종가로 총자산 재계산(스테일 방지). backtest만 제외.
+REFRESH_STEPS = ("compute_indicators", "compute_quant", "market_score", "compute_portfolio")
 
 
 def _load_price_df(ticker: str, conn: psycopg.Connection) -> pd.DataFrame:
@@ -217,10 +218,14 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
                 _step_portfolio(conn, errors, counts)
                 _step_backtest(conn, errors, counts)
                 _step_signal_track(conn, errors, counts)
-            else:  # PROFILE_REFRESH — 포트폴리오·백테스트 제외
+            else:  # PROFILE_REFRESH — 백테스트 제외. 포트폴리오는 포함(18시 KR 당일종가 반영).
                 _step_indicators_refresh(conn, all_tickers, errors, counts)
                 _step_quant(conn, all_tickers, errors, counts)
                 _step_market_score(conn, errors, counts)
+                # 포트폴리오 스냅샷은 반드시 18시에도 재계산한다. 06시 auto_run은 KR 장 시작 전이라
+                # 전일 종가로 평가하고, 18시 news_refresh가 당일 KR 종가를 넣는데 여기서 재계산하지
+                # 않으면 총자산이 항상 ~1거래일 스테일로 남는다(KPH 계좌값 불일치의 근본원인). 경량·결정론.
+                _step_portfolio(conn, errors, counts)
 
             status = finalize_status(errors)
         except Exception as exc:
