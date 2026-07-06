@@ -261,6 +261,10 @@ def fetch_us_valuation(ticker: str, asof: Optional[date] = None) -> Optional[Val
         roa=roa,
         debt_ratio=_safe_float(info.get("debtToEquity")),
         rev_growth=_safe_float(info.get("revenueGrowth")),
+        # 배당수익률(%) — 주주환원 팩터(J-1). info가 있는데 dividendYield 없음 = 무배당 → 0.0
+        # (미수집 None으로 두면 무배당 종목이 팩터에서 제외돼 '낮음'으로 안 잡힘).
+        div_yield=(_safe_float(info.get("dividendYield")) if info.get("dividendYield") is not None
+                   else (0.0 if info else None)),
     )
     logger.info("%s: valuation per_f=%s pbr=%s roe=%s", ticker, row.per_f, row.pbr, row.roe)
     return row

@@ -309,8 +309,8 @@ def upsert_fundamentals(conn: psycopg.Connection, rows: list[FundamentalsRow]) -
 def upsert_valuation(conn: psycopg.Connection, rows: list[ValuationRow]) -> None:
     sql = """
         INSERT INTO valuation
-            (ticker, asof, per_t, per_f, pbr, ev_ebitda, roe, roa, debt_ratio, rev_growth)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (ticker, asof, per_t, per_f, pbr, ev_ebitda, roe, roa, debt_ratio, rev_growth, div_yield)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (ticker, asof) DO UPDATE SET
             per_t      = EXCLUDED.per_t,
             per_f      = EXCLUDED.per_f,
@@ -319,13 +319,15 @@ def upsert_valuation(conn: psycopg.Connection, rows: list[ValuationRow]) -> None
             roe        = EXCLUDED.roe,
             roa        = EXCLUDED.roa,
             debt_ratio = EXCLUDED.debt_ratio,
-            rev_growth = EXCLUDED.rev_growth
+            rev_growth = EXCLUDED.rev_growth,
+            div_yield  = EXCLUDED.div_yield
     """
     with conn.cursor() as cur:
         cur.executemany(
             sql,
             [
-                (r.ticker, r.asof, r.per_t, r.per_f, r.pbr, r.ev_ebitda, r.roe, r.roa, r.debt_ratio, r.rev_growth)
+                (r.ticker, r.asof, r.per_t, r.per_f, r.pbr, r.ev_ebitda, r.roe, r.roa,
+                 r.debt_ratio, r.rev_growth, r.div_yield)
                 for r in rows
             ],
         )

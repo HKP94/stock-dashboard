@@ -575,6 +575,18 @@ def _parse_naver_financials(soup: BeautifulSoup) -> dict:
                     return n
         return None
 
+    def _pick_div(vals: list[str]) -> Optional[float]:
+        """배당 전용: **가장 최근 실적 연간** 값. 그 해가 공란이면 0.0(그해 미지급/축소) —
+        스테일 과거로 폴백하면 배당 중단 종목이 계속 고배당으로 잡힌다(현대해상 2023 6.65%,
+        2024/2025 공란=중단인데 _pick은 2023을 씀). 룩어헤드 없음(최근 실적 연간만)."""
+        if not annual_actual:
+            return None
+        i = annual_actual[-1]
+        if i >= len(vals):
+            return None
+        n = _parse_kr_number(vals[i])
+        return n if n is not None else 0.0
+
     for tr in tbl.select("tbody tr"):
         th = tr.select_one("th")
         if not th:
@@ -587,6 +599,8 @@ def _parse_naver_financials(soup: BeautifulSoup) -> dict:
             out["debt_ratio"] = _pick(vals)
         elif "영업이익률" in label:
             out["op_margin"] = _pick(vals)
+        elif "시가배당률" in label:
+            out["div_yield"] = _pick_div(vals)   # 배당수익률(%) — 최근 실적 연간(공란=0), 주주환원 팩터(J-1)
     return out
 
 
@@ -689,6 +703,7 @@ def fetch_kr_valuation_analyst(
         roa=None,
         debt_ratio=fn.get("debt_ratio"),  # %단위(US debtToEquity와 의미 다르나 분포 랭킹용)
         rev_growth=rev_growth_ratio,
+        div_yield=naver.get("div_yield"),  # 시가배당률(%) — 주주환원 팩터(J-1). US yfinance와 동일 % 단위
     )
 
     target = naver.get("target_price")

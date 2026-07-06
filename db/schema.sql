@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS valuation (
     roa         NUMERIC,
     debt_ratio  NUMERIC,
     rev_growth  NUMERIC,
+    div_yield   NUMERIC,   -- 배당수익률(%) — US=yfinance, KR=네이버 시가배당률. J-1
     PRIMARY KEY (ticker, asof)
 );
 

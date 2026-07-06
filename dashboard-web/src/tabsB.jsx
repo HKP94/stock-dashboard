@@ -209,7 +209,7 @@ export function Screener({ D, nav }) {
     .sort((a, b) => (b.safety ?? 0) - (a.safety ?? 0))
     .slice(0, 9);
 
-  const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : k === "grade" ? gradeScore(s) : k === "longScore" ? (s.longScore ?? -1) : k === "momoScore" ? (s.momoScore ?? -1)
+  const sortVal = (s, k) => k === "comp" ? (s.comp ?? -1) : k === "rsi" ? s.rsi : k === "fscore" ? (s.fscore ?? 0) : k === "grade" ? gradeScore(s) : k === "longScore" ? (s.longScore ?? -1) : k === "momoScore" ? (s.momoScore ?? -1) : k === "shYield" ? (s.shYield ?? -1)
     : (factorView === "sector" && k !== "s" && s.sectorRel ? (s.sectorRel[k] ?? -1) : s.f[k]);  // 섹터내 렌즈면 섹터-상대로 정렬
   const unified = [...D.stocks]
     .filter((s) => gradeFilter === "all" || s.grade === gradeFilter)
@@ -313,11 +313,11 @@ export function Screener({ D, nav }) {
         </div>}>
       {showAll && <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-          <Th label="종목" /><Th k="grade" label="등급" /><Th k="longScore" label="장기점수" /><Th k="momoScore" label="모멘텀점수" /><Th k="comp" label="종합" /><Th label="신호" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
+          <Th label="종목" /><Th k="grade" label="등급" /><Th k="longScore" label="장기점수" /><Th k="momoScore" label="모멘텀점수" /><Th k="comp" label="종합" /><Th label="신호" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="shYield" label="배당" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
         </tr></thead>
         <tbody>
           {unified.length === 0 ? (
-            <tr><td colSpan={13} style={{ padding: "22px 12px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>해당 등급 종목이 없습니다.</td></tr>
+            <tr><td colSpan={14} style={{ padding: "22px 12px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>해당 등급 종목이 없습니다.</td></tr>
           ) : unified.map((s) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
             <td style={{ padding: "9px 10px" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 12.5, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{s.t}·{s.mk}</span></div></td>
             <td style={{ padding: "7px 10px", textAlign: "center" }}>{s.grade ? <GradeBadge grade={s.grade} confidence={s.gradeConfidence} compact /> : <span style={{ fontSize: 10.5, color: C.ink3 }}>—</span>}</td>
@@ -334,6 +334,7 @@ export function Screener({ D, nav }) {
                 <Num size={12.5} weight={600} color={sortKey === k ? gradeCol(val ?? 0) : (fb ? C.ink3 : C.ink2)}>{val ?? "—"}{fb ? "*" : ""}</Num>
               </td>;
             })}
+            <td style={{ padding: "9px 10px", textAlign: "right" }} title={s.divYield != null ? `배당수익률 ${s.divYield}%` : "배당 데이터 없음"}><Num size={12.5} weight={600} color={sortKey === "shYield" ? gradeCol(s.shYield ?? 0) : C.ink2}>{s.shYield ?? "—"}</Num></td>
             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>
             <td style={{ padding: "9px 10px", textAlign: "right" }}><span className="mono" style={{ fontSize: 12, fontWeight: 700, color: s.fscore >= 7 ? C.ok : C.ink2 }}>{s.fscore ?? "—"}</span></td>
           </tr>)}
