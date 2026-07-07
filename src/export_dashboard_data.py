@@ -103,6 +103,81 @@ def _rr(v):
     return round(float(v)) if v is not None else None
 
 
+# ── 모멘텀 추세확인 게이트 + 매수/매도 구간 (§2 레이어 분리: 팩터 불변, 픽에서 결합) ──────
+# 모멘텀 팩터는 12-1 트레일링(유효가중 ~79%가 1개월+ 전 종료)이라 "과거 랠리"에 고점수를
+# 유지해 최근 붕괴를 못 잡는다(효성 모멘텀100·고점-33%). 여기서 단기 기술(sma·60일 드로다운·
+# MACD)로 '지금 추세'를 판정해 픽/조언에만 오버레이한다. 팩터·composite·dual-score 값은 불변.
+# §F7: 오늘 종가·오늘 지표만 사용(룩어헤드 없음). 임계는 상수로 노출(튜닝 가능).
+MOMO_DD_BROKEN = -20.0   # 60일 종가고점 대비 드로다운 ≤ 이 값 = 깊은 붕괴 신호
+MOMO_DD_INTACT = -15.0   # 드로다운 ≥ 이 값(고점 15% 이내) + sma20 위 = 상승 유지(정상 조정 허용)
+MOMO_SWING_WIN = 20      # 스윙 로우(최근 저점) 창(거래일)
+MOMO_HIGH_WIN = 60       # 60일 고점 창
+MOMO_ATR_MULT = 2.0      # ATR 트레일링 스톱 배수
+
+
+def _momentum_trend(close, sma20, sma50, ser, macd_line, macd_signal, macd_hist) -> dict | None:
+    """오늘 시점 추세 상태(intact 상승유지 / pullback 되돌림 / broken 고점후붕괴). 결정론·§F7.
+    데이터 부족(close·sma20·시계열 없음)이면 None."""
+    if close is None or sma20 is None or not ser:
+        return None
+    hi60 = max(ser[-MOMO_HIGH_WIN:])
+    dd60 = round((close / hi60 - 1) * 100, 1) if hi60 else None
+    macd_bear = (macd_hist is not None and macd_hist < 0
+                 and macd_line is not None and macd_signal is not None and macd_line < macd_signal)
+    below_20 = close < sma20
+    below_50 = sma50 is not None and close < sma50
+
+    if below_50 and ((dd60 is not None and dd60 <= MOMO_DD_BROKEN) or macd_bear):
+        state, label = "broken", "고점 후 붕괴"
+    elif (not below_20) and (dd60 is None or dd60 >= MOMO_DD_INTACT):
+        state, label = "intact", "상승 유지"
+    else:
+        state, label = "pullback", "되돌림"
+
+    reason = []
+    if dd60 is not None:
+        reason.append(f"고점比 {dd60:+.0f}%")
+    reason.append("sma20 " + ("아래" if below_20 else "위"))
+    if sma50 is not None:
+        reason.append("sma50 " + ("아래" if below_50 else "위"))
+    if macd_bear:
+        reason.append("MACD 음전환")
+    return {"state": state, "label": label, "dd60": dd60, "reason": " · ".join(reason)}
+
+
+def _momentum_zones(trend, close, sma20, sma50, ser, atr14) -> dict | None:
+    """모멘텀 픽 진입/손절/목표 레벨. intact·pullback=눌림 지지 매수+ATR/스윙 손절+목표,
+    broken=재탈환 전 매수 없음(진입 레벨=재탈환가). 결정론·표시 전용(주문경로 없음)."""
+    if trend is None or close is None:
+        return None
+    r2 = lambda x: round(float(x), 2) if x is not None else None
+    swing_low = min(ser[-MOMO_SWING_WIN:]) if ser else None
+    hi60 = max(ser[-MOMO_HIGH_WIN:]) if ser else None
+
+    if trend["state"] == "broken":
+        # 재탈환 = 현재가 위에 있는 이평(가까운 sma20 우선). 그 위로 회복 전엔 매수 없음.
+        above = [x for x in (sma20, sma50) if x is not None and x > close]
+        reclaim = min(above) if above else sma20
+        return {"state": "broken", "buy": None, "reclaim": r2(reclaim),
+                "note": "sma20/50 재탈환 전 매수 없음"}
+
+    # intact / pullback: 현재가 아래 가장 가까운 이평 지지에서 눌림 매수
+    supports = sorted([x for x in (sma20, sma50) if x is not None and x <= close], reverse=True)
+    buy = supports[0] if supports else close
+    atr_stop = buy - MOMO_ATR_MULT * atr14 if atr14 else None
+    stop_cands = [x for x in (sma50, swing_low, atr_stop) if x is not None and x < buy]
+    stop = max(stop_cands) if stop_cands else (swing_low if swing_low and swing_low < buy else None)
+    # 1차 목표: 직전 60일 고점 회복, 없으면 2R(진입-손절 기준)
+    if hi60 and hi60 > buy:
+        target = hi60
+    elif stop is not None:
+        target = buy + 2 * (buy - stop)
+    else:
+        target = None
+    return {"state": trend["state"], "buy": r2(buy), "stop": r2(stop),
+            "target": r2(target), "note": "눌림 지지 매수 · 이탈 손절"}
+
+
 # ── 섹터-상대 팩터(크로스섹터 왜곡 해소, 추가 렌즈) ────────────────────────
 # 전 유니버스 백분위는 섹터 특성을 왜곡한다(테크 ROE vs 은행 ROE를 같은 자로 잼).
 # 정규화 매크로 섹터 그룹 내 상대 위치를 **글로벌 옆에 병기**(글로벌 값 불변). export 전용.
@@ -2183,6 +2258,12 @@ def build_data() -> dict:
             sma120_series = _sma_series(ser, 120)  # PR-4
             disparity = round((close / sma20 * 100), 1) if close and sma20 else disp
 
+            # 모멘텀 추세확인 게이트 + 매수/매도 구간(픽/조언 레이어 오버레이, 팩터 값 불변)
+            momo_trend = _momentum_trend(
+                close, sma20, sma50, ser,
+                _f(ind.get("macd_line")), _f(ind.get("macd_signal")), _f(ind.get("macd_hist")))
+            momo_zone = _momentum_zones(momo_trend, close, sma20, sma50, ser, _f(ind.get("atr14")))
+
             comp_hist = _spark([comp or 50] * 20, 16)
             mom_hist  = _spark([mom] * 20, 16)
             slope = round(((ser[-1] - ser[-20]) / ser[-20] * 100), 1) if len(ser) >= 20 and ser[-20] else 0.0
@@ -2208,6 +2289,9 @@ def build_data() -> dict:
                 },
                 # 점수 이원화: 장기(가치·퀄리티·성장) / 모멘텀(모멘텀·심리). 재합산 금지(§2).
                 **_dual_scores(mom, value, qual, grow, sent_f),
+                # 모멘텀 추세확인 오버레이(팩터 불변): 픽에서 붕괴주 강등·매수/매도 구간 표출.
+                "momoTrend": momo_trend,
+                "momoZone": momo_zone,
                 # 신규-A1: 시장 민감도(퀀트 축 별도 팩터, composite 미합산). None=미산출.
                 "beta":       _f(q.get("beta")),
                 "marketCorr": _f(q.get("market_corr")),
