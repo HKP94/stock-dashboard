@@ -139,6 +139,8 @@ PRD.md, CLAUDE.md 기준으로 다음을 PR로 만들어줘:
 ## 로컬 자동화 (맥, 한국 IP) — 수급 수집 + 대시보드 상시화
 > KRX가 GitHub Actions IP를 차단해 E-2 수급은 CI로 못 받는다. 로컬 launchd가 이것과 화면 갱신을 맡는다. CI(나머지 전부)와 완전 분리 — 로컬이 죽어도 CI 무관.
 
+**⚠️ 전제 — 리포 위치**: launchd 에이전트는 macOS 프라이버시(TCC) 보호 폴더(`~/Desktop`·`~/Documents`·`~/Downloads`) 아래 파일을 실행/접근할 수 없다("Operation not permitted"·exit 126 → bootstrap은 성공해도 잡이 즉시 죽음). **리포는 비보호 경로(예 `~/atlas`, `~/Developer/…`)에 둬야 한다.** `~/Desktop` 등에 있으면 리포를 옮기거나(권장), 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근에 `/bin/bash`를 추가해야 한다. 설치 스크립트가 이 조건을 감지해 경고·헬스체크한다.
+
 **1회 설치 (KPH):**
 ```
 ./scripts/install_local_automation.sh
