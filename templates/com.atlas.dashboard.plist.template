@@ -17,6 +17,15 @@
     <key>WorkingDirectory</key>
     <string>__REPO__</string>
 
+    <!-- launchd 기본 PATH(/usr/bin:/bin:…)엔 node/npm이 없어 vite 기동이 실패한다
+         (nohup: npm: No such file or directory). node 설치 경로를 PATH에 주입.
+         install 스크립트가 __HOME__ 치환. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
     <!-- 로그인 시 기동. supervisor 스크립트가 포어그라운드 상주. -->
     <key>RunAtLoad</key>
     <true/>
