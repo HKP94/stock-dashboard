@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- ATLAS 대시보드 서버 로그인 자동 기동 (local_api 8765 + vite 5173).
-     RunAtLoad=true로 로그인/설치 시 idempotent 기동. install 스크립트가 경로 치환. -->
+<!-- ATLAS 대시보드 서버 상주 (local_api 8765 + vite 5173).
+     RunAtLoad=true로 로그인/설치 시 기동, KeepAlive=true로 supervisor 스크립트 크래시 시 재기동.
+     dashboard_up.sh가 포어그라운드로 상주하며 다운된 서버를 재기동. install 스크립트가 경로 치환. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -16,8 +17,21 @@
     <key>WorkingDirectory</key>
     <string>__REPO__</string>
 
-    <!-- 로그인 시 1회 기동(포트 가드로 idempotent). 서버는 nohup 백그라운드로 유지. -->
+    <!-- launchd 기본 PATH(/usr/bin:/bin:…)엔 node/npm이 없어 vite 기동이 실패한다
+         (nohup: npm: No such file or directory). node 설치 경로를 PATH에 주입.
+         install 스크립트가 __HOME__ 치환. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- 로그인 시 기동. supervisor 스크립트가 포어그라운드 상주. -->
     <key>RunAtLoad</key>
+    <true/>
+
+    <!-- supervisor(dashboard_up.sh)가 죽으면 재실행 → 재실행 시 포트 점검으로 서버 복구. -->
+    <key>KeepAlive</key>
     <true/>
 
     <key>StandardOutPath</key>

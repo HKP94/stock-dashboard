@@ -1,5 +1,5 @@
 // ATLAS — App shell + router
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import atlasData from './data.js';
 import { C, MonoCaps, Num, RegimeBadge } from './ui.jsx';
 import { Overview, StockDetail, NewsTab } from './tabsA.jsx';
@@ -8,12 +8,32 @@ import { Portfolio } from './tabsC.jsx';
 import { Strategy } from './tabsD.jsx';
 import { WatchlistAdmin } from './tabsE.jsx';
 
-const D = atlasData;
+// 자동 반영: local_api(127.0.0.1:8765)가 서빙하는 data.json을 주기 폴링. cron(06/18시)→local_refresh가
+// 하루 2회 export한 새 data.json이 수동 새로고침 없이 뜨게 한다. 로컬 전용, 실패 시 현재 데이터 유지.
+const DATA_API = "http://127.0.0.1:8765/api/data";
+const POLL_MS = 5 * 60 * 1000;
 
 export default function App() {
+  const [D, setD] = useState(atlasData);
   const [tab, setTab] = useState("overview");
-  const [ticker, setTicker] = useState(D.stocks[0].t);
+  const [ticker, setTicker] = useState(atlasData.stocks[0].t);
   const [newsFilter, setNewsFilter] = useState(null);
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const r = await fetch(DATA_API, { cache: "no-store" });
+        if (!r.ok) return;
+        const fresh = await r.json();
+        // generatedAt이 바뀐 경우에만 스왑(선택 종목·탭 등 UI 상태 유지, 불필요 리렌더 회피).
+        if (fresh?.stocks?.length && fresh.generatedAt && fresh.generatedAt !== D.generatedAt) {
+          setD(fresh);
+        }
+      } catch { /* 서버 미기동/네트워크 실패 → 현재 데이터 유지 */ }
+    };
+    const id = setInterval(poll, POLL_MS);
+    return () => clearInterval(id);
+  }, [D.generatedAt]);
 
   const nav = (tk, t) => {
     if (tk) { setTicker(tk); setTab(t || "detail"); }
@@ -115,7 +135,7 @@ export default function App() {
         <div style={{ maxWidth: 1280, margin: "0 auto", padding: "8px 24px", display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 12 }}>⚠️</span>
           <span style={{ fontSize: 12, color: C.warn }}>
-            데이터가 오래되었을 수 있습니다(생성: {D.generatedAtLabel}). 최신 데이터로 보려면 <b>start_dashboard</b> 스크립트를 다시 실행하세요.
+            데이터가 오래되었을 수 있습니다(생성: {D.generatedAtLabel}). 새 데이터는 자동 반영되며(하루 2회 갱신), 그래도 오래되면 파이프라인 실행을 확인하세요.
           </span>
         </div>
       </div>

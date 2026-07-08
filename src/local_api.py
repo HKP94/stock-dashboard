@@ -31,6 +31,7 @@ from typing import Optional
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
@@ -82,11 +83,22 @@ app = FastAPI(title="ATLAS Local API", docs_url="/docs")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    # localhost·127.0.0.1 둘 다 허용(KPH가 어느 쪽으로 열든 폴링 되게). 여전히 로컬 전용.
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     # PATCH 누락 시 watchlist active 토글 프리플라이트(OPTIONS)가 400으로 막혀 토글 무반응 → PATCH·OPTIONS 포함
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
+
+@app.get("/api/data")
+def get_data():
+    """현재 `data.json` 파일 내용을 그대로 반환 — 열린 대시보드가 주기 폴링해 새 데이터를 자동
+    반영하게 한다(수동 새로고침 불필요). 파일은 local_refresh(하루 2회 export)가 갱신한다.
+    127.0.0.1 전용·읽기 전용(자동수집 데이터 미변경)."""
+    if not _DATA_JSON.exists():
+        return JSONResponse({"error": "data.json 없음"}, status_code=404)
+    return FileResponse(_DATA_JSON, media_type="application/json")
 
 
 # ── Pydantic 모델 ─────────────────────────────────────────────────
