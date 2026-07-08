@@ -93,6 +93,31 @@ const _GRADE_RANK = { "매수": 3, "관망": 2, "축소": 1 };
 const _CONF_RANK = { "상": 3, "중": 2, "하": 1 };
 const gradeScore = (s) => (_GRADE_RANK[s.grade] || 0) * 10 + (_CONF_RANK[s.gradeConfidence] || 0);
 
+// 모멘텀 추세확인 배지: 팩터는 트레일링이라 붕괴를 못 잡음 → 단기 추세 상태를 병기.
+const _TREND_TONE = { intact: C.ok, pullback: C.warn, broken: C.bad };
+function MomoTrendBadge({ trend }) {
+  const tone = _TREND_TONE[trend.state] || C.ink3;
+  return (
+    <span title={trend.reason} style={{ fontSize: 9.5, fontWeight: 700, color: tone, border: `1px solid ${tone}44`, borderRadius: 5, padding: "1px 5px", whiteSpace: "nowrap" }}>
+      {trend.label}
+    </span>
+  );
+}
+
+// 매수/매도 구간: intact/pullback=매수·손절·목표, broken=재탈환 전 매수 없음.
+function MomoZoneLine({ zone, cur }) {
+  const u = cur || "";
+  const n = (x) => (x == null ? "—" : `${u}${x.toLocaleString()}`);
+  if (zone.state === "broken") {
+    return <div style={{ fontSize: 10, color: C.bad, marginTop: 2 }}>매수 보류 · 재탈환 {n(zone.reclaim)} 회복 전 없음</div>;
+  }
+  return (
+    <div className="mono" style={{ fontSize: 10, color: C.ink3, marginTop: 2 }}>
+      매수 {n(zone.buy)} · 손절 {n(zone.stop)} · 목표 {n(zone.target)}
+    </div>
+  );
+}
+
 // 점수 이원화 4상한: 장기(가치·퀄리티·성장) × 모멘텀(모멘텀·심리). 각 점수의 중앙값으로 분면.
 // §2: 두 점수를 하나로 재합산하지 않는다 — 분면 내 정렬도 해당 렌즈 기준(합산 순위 금지).
 function DualLensQuadrant({ stocks, nav }) {
@@ -101,10 +126,12 @@ function DualLensQuadrant({ stocks, nav }) {
   const median = (arr) => { const a = [...arr].sort((x, y) => x - y); const m = Math.floor(a.length / 2); return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
   const mL = median(ds.map((s) => s.longScore));
   const mM = median(ds.map((s) => s.momoScore));
+  // 모멘텀 픽(모멘텀 상위 분면)은 추세확인 게이트 적용: '고점 후 붕괴'는 하단으로 강등.
+  const brk = (s) => (s.momoTrend?.state === "broken" ? 1 : 0);
   const boxes = [
-    { key: "both", title: "핵심", desc: "장기·모멘텀 모두 상위", color: C.ok, items: ds.filter((s) => s.longScore >= mL && s.momoScore >= mM).sort((a, b) => b.longScore - a.longScore) },
+    { key: "both", title: "핵심", desc: "장기·모멘텀 모두 상위", color: C.ok, momoLens: true, items: ds.filter((s) => s.longScore >= mL && s.momoScore >= mM).sort((a, b) => brk(a) - brk(b) || b.longScore - a.longScore) },
     { key: "long", title: "가치·인내", desc: "장기 상위 · 모멘텀 하위", color: C.acc, items: ds.filter((s) => s.longScore >= mL && s.momoScore < mM).sort((a, b) => b.longScore - a.longScore) },
-    { key: "momo", title: "모멘텀·단기", desc: "모멘텀 상위 · 장기 하위", color: C.warn, items: ds.filter((s) => s.longScore < mL && s.momoScore >= mM).sort((a, b) => b.momoScore - a.momoScore) },
+    { key: "momo", title: "모멘텀·단기", desc: "모멘텀 상위 · 장기 하위", color: C.warn, momoLens: true, items: ds.filter((s) => s.longScore < mL && s.momoScore >= mM).sort((a, b) => brk(a) - brk(b) || b.momoScore - a.momoScore) },
     { key: "none", title: "관망", desc: "둘 다 하위", color: C.ink3, items: ds.filter((s) => s.longScore < mL && s.momoScore < mM).sort((a, b) => b.longScore - a.longScore) },
   ];
   return (
@@ -119,10 +146,14 @@ function DualLensQuadrant({ stocks, nav }) {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {b.items.slice(0, 6).map((s) => (
-                <div key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "3px 4px", borderRadius: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: C.ink, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
-                  <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>장기</span><Num size={11.5} weight={700} color={gradeCol(s.longScore)}>{s.longScore}</Num>
-                  <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>모멘</span><Num size={11.5} weight={700} color={gradeCol(s.momoScore)}>{s.momoScore}</Num>
+                <div key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ cursor: "pointer", padding: "3px 4px", borderRadius: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: C.ink, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
+                    {b.momoLens && s.momoTrend ? <MomoTrendBadge trend={s.momoTrend} /> : null}
+                    <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>장기</span><Num size={11.5} weight={700} color={gradeCol(s.longScore)}>{s.longScore}</Num>
+                    <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>모멘</span><Num size={11.5} weight={700} color={gradeCol(s.momoScore)}>{s.momoScore}</Num>
+                  </div>
+                  {b.momoLens && s.momoZone ? <MomoZoneLine zone={s.momoZone} cur={s.cur} /> : null}
                 </div>
               ))}
               {b.items.length === 0 ? <span style={{ fontSize: 11, color: C.ink3 }}>—</span> : null}
