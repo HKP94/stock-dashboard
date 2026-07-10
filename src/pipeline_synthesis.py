@@ -41,7 +41,7 @@ from typing import Optional
 
 import psycopg
 
-from src import db, enrich_gemini, stock_action_advice
+from src import db, detect_moves, enrich_gemini, stock_action_advice
 from src.pipeline_common import (
     PROFILE_DAILY,
     PROFILE_REFRESH,
@@ -64,11 +64,13 @@ DAILY_STEPS = (
     "market_news_digest",
     "macro_summary",
     "action_advice",
+    "detect_moves",
 )
 REFRESH_STEPS = (
     "enrich_news",
     "enrich_market",
     "market_news_digest",
+    "detect_moves",
 )
 
 
@@ -152,6 +154,20 @@ def _step_macro_summary(conn: psycopg.Connection, errors: list, counts: dict) ->
         conn.rollback()
         logger.error("거시 요약 실패: %s", exc, exc_info=True)
         errors.append(make_error("macro_summary", exc))
+
+
+def _step_detect_moves(conn: psycopg.Connection, errors: list, counts: dict) -> None:
+    """신규-G: 급등·급락 감지 + 뉴스 귀인. 뉴스 요약 '후'에 실행(당일 news_analysis 매칭).
+    결정론·새 LLM 0. 실패해도 파이프라인 계속(비치명적)."""
+    logger.info("종합: 급등·급락 감지 + 귀인")
+    try:
+        result = detect_moves.run(conn)
+        counts["move_anomalies"] = result.get("anomalies", 0)
+        counts["move_unexplained"] = result.get("unexplained", 0)
+    except Exception as exc:
+        conn.rollback()
+        logger.error("이상 움직임 감지 실패(비치명적): %s", exc, exc_info=True)
+        errors.append(make_error("detect_moves", exc))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -299,10 +315,12 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
                 _step_market_news_digest(conn, errors, counts)
                 _step_macro_summary(conn, errors, counts)
                 _step_action_advice(conn, errors, counts)
+                _step_detect_moves(conn, errors, counts)      # 신규-G: 뉴스 요약 후 감지·귀인
             else:  # PROFILE_REFRESH — 폴백복구·논거·거시요약·액션제언 제외
                 _step_enrich_news(conn, errors, counts)
                 _step_market_summary(conn, errors, counts)
                 _step_market_news_digest(conn, errors, counts)
+                _step_detect_moves(conn, errors, counts)      # 신규-G: 감지·귀인(refresh도 포함)
 
             status = finalize_status(errors)
         except Exception as exc:

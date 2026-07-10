@@ -207,6 +207,40 @@ function DailyBriefBand({ b, regimes, nav }) {
   );
 }
 
+// 신규-G: 오늘의 이상 움직임(급등·급락 감지 + 귀인). 관찰·서술만. "이유 불명"=리스크로 부각.
+function AnomaliesBand({ items, nav }) {
+  if (!items || items.length === 0) return null;
+  const top = items.slice(0, 6);
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 12, boxShadow: "0 1px 2px rgba(15,23,42,0.04)", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", borderBottom: `1px solid ${C.line}`, background: C.surface2 }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>오늘의 이상 움직임</span>
+        <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>급등·급락 감지 + 귀인 · 관찰용</MonoCaps>
+        <span style={{ marginLeft: "auto", fontSize: 10.5, color: C.ink3 }}>‘이유 불명’ = 설명 뉴스·수급 미포착(정보 선반영 가능성)</span>
+      </div>
+      <div>
+        {top.map((a) => {
+          const up = a.direction === "급등";
+          const unknown = a.class === "이유 불명";
+          const dirColor = up ? C.ok : C.bad;
+          const classColor = unknown ? C.bad : C.ink2;
+          return (
+            <button key={a.t} onClick={() => nav(a.t)} className="row-hover"
+              style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", textAlign: "left", border: "none", borderTop: `1px solid ${C.line}`, background: "none", cursor: "pointer", padding: "8px 14px" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, minWidth: 96, flexShrink: 0 }}>{a.name}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 800, color: dirColor, minWidth: 70, flexShrink: 0 }}>{up ? "▲" : "▼"} {a.ret != null ? `${a.ret > 0 ? "+" : ""}${a.ret}%` : ""}</span>
+              <span style={{ fontSize: 9.5, fontWeight: 700, color: classColor, border: `1px solid ${classColor}`, borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>{a.class}</span>
+              {a.unusual && <span title="이 종목 기준 이례적 변동폭" style={{ fontSize: 9, color: C.warn, border: `1px solid ${C.warn}`, borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>이례적 z{a.z}</span>}
+              {a.idiosyncratic && <span title="지수 대비 자체 이동" style={{ fontSize: 9, color: C.ink3, flexShrink: 0 }}>자체이동</span>}
+              <span style={{ fontSize: 11, color: unknown ? C.bad : C.ink2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{a.reason}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function Overview({ D, nav, goNews }) {
   const [filter, setFilter] = useState("all");
   const [qualityOpen, setQualityOpen] = useState(false);
@@ -247,6 +281,9 @@ export function Overview({ D, nav, goNews }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* PR-1: 오늘의 요약 밴드 (최상단, 지수 스트립 위) */}
       <DailyBriefBand b={D.dailyBrief} regimes={D.regimes} nav={nav} />
+
+      {/* 신규-G: 오늘의 이상 움직임(급등·급락 감지 + 귀인) */}
+      <AnomaliesBand items={D.moveAnomalies} nav={nav} />
 
       {/* 지수 스트립 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 10 }}>
@@ -1771,6 +1808,13 @@ export function StockDetail({ D, ticker, nav }) {
               <Pill tone="neutral">{s.mk === "KR" ? "🇰🇷 한국" : "🇺🇸 미국"}</Pill>
               <Pill tone="neutral">{s.sec}</Pill>
               {s.hold && <Pill tone="acc" active>보유 중</Pill>}
+              {s.move && (
+                <span title={s.move.reason || ""}>
+                  <Pill tone={s.move.class === "이유 불명" ? "warn" : (s.move.direction === "급등" ? "ok" : "bad")} active>
+                    {s.move.direction === "급등" ? "▲" : "▼"} {s.move.ret > 0 ? "+" : ""}{s.move.ret}% · {s.move.class}
+                  </Pill>
+                </span>
+              )}
             </div>
           </div>
         </div>

@@ -1818,7 +1818,44 @@ def _short_line(text: str, n: int = 90) -> str:
     return t[:n]
 
 
-def _build_daily_brief(stocks: list[dict], market: dict) -> dict:
+def _attach_move_anomalies(conn, stocks: list[dict]) -> list[dict]:
+    """신규-G: move_anomalies(종목별 최신) → 종목 카드 배지(stock['move']) + 브리핑용 리스트 반환.
+    관찰·서술만(매매 지시 없음). '이유 불명'(설명 미포착 자체 이동)은 리스크로 부각.
+    스테일 방지: 오늘−RECENCY_DAYS 이내 asof만 표출(과거 이상치 잔존 차단)."""
+    from datetime import date as _date, timedelta as _td
+    from src.detect_moves import Z_MAIN, RECENCY_DAYS
+    cutoff = _date.today() - _td(days=RECENCY_DAYS)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT ON (ticker) ticker, asof, ret_pct, z_score, excess_pct, direction,
+               idiosyncratic, attribution_class, explained, reason
+        FROM move_anomalies ORDER BY ticker, asof DESC
+        """
+    )
+    by_tk: dict[str, dict] = {}
+    for r in cur.fetchall():
+        if r["asof"] < cutoff:
+            continue
+        by_tk[r["ticker"]] = {
+            "asof": str(r["asof"]), "ret": _f(r["ret_pct"]), "z": _f(r["z_score"]),
+            "excess": _f(r["excess_pct"]), "direction": r["direction"],
+            "idiosyncratic": bool(r["idiosyncratic"]), "class": r["attribution_class"],
+            "explained": bool(r["explained"]), "reason": r["reason"],
+            "unusual": bool(r["z_score"] is not None and abs(float(r["z_score"])) >= Z_MAIN),
+        }
+    anomalies: list[dict] = []
+    for s in stocks:
+        mv = by_tk.get(s.get("t"))
+        if mv:
+            s["move"] = mv  # 종목 카드 배지
+            anomalies.append({"t": s["t"], "name": s.get("name"), "mk": s.get("mk"), **mv})
+    # 리스크(이유 불명) 우선 → 자체이동(idiosyncratic) → 절대 규모
+    anomalies.sort(key=lambda a: (a["explained"], not a["idiosyncratic"], -abs(a["ret"] or 0.0)))
+    return anomalies
+
+
+def _build_daily_brief(stocks: list[dict], market: dict, anomalies: Optional[list[dict]] = None) -> dict:
     """오버뷰 최상단 30초 스캔용 합성 요약. 전부 '관찰/정보' 서술(매수매도 단정 금지)."""
     live = [s for s in stocks if s.get("hasData") and s.get("comp") is not None]
 
@@ -1871,6 +1908,7 @@ def _build_daily_brief(stocks: list[dict], market: dict) -> dict:
         "highlights": highlights,
         "cautions": cautions,
         "diverge": diverge,
+        "anomalies": (anomalies or [])[:5],   # 신규-G: 오늘의 이상 움직임(이유 불명 우선)
         "marketLine": market_line,
         "krLine": krline,
         "usLine": usline,
@@ -2436,8 +2474,10 @@ def build_data() -> dict:
         curated_feed.sort(key=lambda x: -(x.get("impact_score") or 0))
         curated_feed = curated_feed[:60]
 
+        # 신규-G: 급등·급락 이상 움직임 부착(종목 배지) + 브리핑용 리스트(이유 불명 우선)
+        move_anomalies = _attach_move_anomalies(conn, stocks)
         # PR-1: 오늘의 요약 밴드(규칙 기반 합성 — 키 없어도 동작, 시장 한 줄은 Gemini 시황 재사용)
-        daily_brief = _build_daily_brief(stocks, market)
+        daily_brief = _build_daily_brief(stocks, market, move_anomalies)
         # PR-2: 시장 매력도(진입 환경) — kr/us에 부착
         _attach_market_attractiveness(market, stocks)
         # Wave 5-B: 시장 매력도 점수·방향 + 종목 베타 경로 관찰
@@ -2492,6 +2532,7 @@ def build_data() -> dict:
             "factorMeta": FACTOR_META,
             "stocks":     stocks,
             "dailyBrief": daily_brief,           # PR-1: 오늘의 요약 밴드
+            "moveAnomalies": move_anomalies,     # 신규-G: 오늘의 이상 움직임 전체(귀인·분류)
             "news":       news_feed,
             "curatedFeed": curated_feed,         # PR-2: 중요 뉴스(영향도순) — 뉴스 탭 정렬옵션
             "portfolio":  portfolio_snapshot,   # PR-2: 전체 포트폴리오 요약

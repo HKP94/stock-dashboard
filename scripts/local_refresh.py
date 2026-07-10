@@ -60,7 +60,7 @@ def main() -> int:
     _setup_logging()
     logger.info("=== local_refresh 시작 ===")
 
-    from src import compute_portfolio, export_dashboard_data
+    from src import compute_portfolio, detect_moves, export_dashboard_data
     from src.db import get_conn
     from src.ingest_investor_flow import run_investor_flow_ingest
     from src.pipeline_common import active_universe, split_kr_us
@@ -88,7 +88,16 @@ def main() -> int:
                 conn.rollback()
                 logger.warning("포트폴리오 재계산 실패(비치명적): %s", pexc)
 
-        # 3) DB → data.json export (investor_flow + 포트폴리오 재계산 후 최신 반영)
+            # 3) 급등·급락 감지 + 귀인(신규-G) — 저녁 신선 KR 수급을 반영해 export 전에 갱신.
+            #    결정론·새 LLM 0. 실패해도 export 계속(비치명적).
+            try:
+                mv = detect_moves.run(conn)
+                logger.info("이상 움직임: %d건(이유불명 %d)", mv.get("anomalies", 0), mv.get("unexplained", 0))
+            except Exception as mexc:
+                conn.rollback()
+                logger.warning("이상 움직임 감지 실패(비치명적): %s", mexc)
+
+        # 4) DB → data.json export (investor_flow + 포트폴리오 + 이상움직임 후 최신 반영)
         logger.info("export: data.json 갱신")
         export_dashboard_data.main()
 

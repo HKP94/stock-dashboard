@@ -20,6 +20,13 @@ import pytest
 import src.pipeline_synthesis as PS
 from tests.test_pipeline_behavior_baseline import _ctx_conn
 
+
+@pytest.fixture(autouse=True)
+def _stub_detect_moves():
+    """신규-G 감지 스텝은 DB 쿼리라 fake conn 테스트에선 스텁(행위 비교 대상 아님)."""
+    with patch.object(PS.detect_moves, "run", lambda _c: {"anomalies": 0, "unexplained": 0}):
+        yield
+
 # build_action_frame가 .get으로 읽는 최소 종목 fixture (숫자는 결정론적으로 산출)
 STOCK_FIXTURE = {"t": "AAPL", "signal": {"label": "매수"}, "price": 210.0, "holding": None, "consensus": None}
 PORTFOLIO_SNAP = {"asset_total": 1_000_000.0}
