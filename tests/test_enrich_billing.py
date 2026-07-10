@@ -35,6 +35,32 @@ def test_generic_429_still_transient():
     assert eg._is_transient(exc) is True
 
 
+def test_free_tier_rate_limit_is_transient_not_billing():
+    # 무료티어 RPM/RPD 초과 429 — 안내문에 'billing' 단어가 있어도 halt 아님(백오프 재시도)
+    exc = RuntimeError("429 RESOURCE_EXHAUSTED. You've exceeded the rate limit. "
+                       "Please check your plan and billing details. Please retry in 12s.")
+    assert eg._is_billing_depleted(exc) is False   # 'billing' 단어에 오분류 안 됨
+    assert eg._is_transient(exc) is True            # 레이트리밋은 재시도 대상
+
+
+def test_rate_limit_retries_then_recovers(monkeypatch):
+    # 레이트리밋 429 1회 후 성공 → halt 없이 재시도로 회복
+    monkeypatch.setattr(eg, "TRANSIENT_BACKOFF_BASE", 0.0)
+    monkeypatch.setattr(eg, "TRANSIENT_BACKOFF_JITTER", 0.0)
+    seq = [RuntimeError("429 RESOURCE_EXHAUSTED rate limit, retry"), '{"ok": true}']
+
+    def _flaky(_c, _m, _p):
+        v = seq.pop(0)
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    with patch.object(eg, "_call_gemini", _flaky):
+        out = eg._call_gemini_with_backoff(None, "m", "p")
+    assert out == '{"ok": true}'
+    assert eg._billing_halt is False
+
+
 def test_billing_fast_fail_no_retry_and_halts():
     calls = {"n": 0}
 
@@ -62,3 +88,36 @@ def test_success_resets_billing_halt():
         out = eg._call_gemini_with_backoff(None, "m", "p")
     assert out == '{"ok": true}'
     assert eg.get_last_call_error() is None
+
+
+def test_rpm_throttle_spaces_calls(monkeypatch):
+    # GEMINI_MIN_INTERVAL_SECONDS 간격만큼 sleep 하는지(실제 대기 대신 sleep 호출 인자 확인)
+    eg.reset_run_budget()
+    monkeypatch.setattr(eg, "GEMINI_MIN_INTERVAL_SECONDS", 4.0)
+    slept = []
+    monkeypatch.setattr(eg.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(eg, "_call_gemini", lambda _c, _m, _p: "{}")
+    # 첫 호출은 스로틀 없음(last_ts=0), 두 번째는 간격 유지 시도
+    eg._call_gemini_with_backoff(None, "m", "p")
+    eg._call_gemini_with_backoff(None, "m", "p")
+    # 두 번째 호출에서 sleep이 호출됐고(간격 미달), 값은 (0,4] 범위
+    assert slept, "RPM 스로틀이 sleep을 호출하지 않음"
+    assert all(0 < s <= 4.0 for s in slept)
+
+
+def test_rpd_budget_counter_increments(monkeypatch):
+    eg.reset_run_budget()
+    monkeypatch.setattr(eg, "GEMINI_MIN_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(eg, "_call_gemini", lambda _c, _m, _p: "{}")
+    for _ in range(3):
+        eg._call_gemini_with_backoff(None, "m", "p")
+    assert eg._api_calls_this_run == 3
+    assert eg._run_budget_exhausted() is False
+    monkeypatch.setattr(eg, "GEMINI_MAX_CALLS_PER_RUN", 3)
+    assert eg._run_budget_exhausted() is True  # 3 >= 3
+
+
+def test_reset_run_budget_clears_counter():
+    eg._api_calls_this_run = 99
+    eg.reset_run_budget()
+    assert eg._api_calls_this_run == 0

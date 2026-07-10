@@ -93,9 +93,20 @@ _circuit_tripped_at: float = 0.0
 # 재시도해도 무의미(429지만 transient 아님). last_error는 runs.errors 영속화용(진단 가시성).
 _billing_halt: bool = False
 _last_call_error: Optional[str] = None
-# billing/credit 소진 식별 마커(429 중에서도 재시도 불가한 하드 실패)
-_BILLING_MARKERS: tuple[str, ...] = ("credits are depleted", "prepayment", "prepay", "billing",
-                                     "insufficient", "balance")
+# 빌링/크레딧 소진 식별 마커 — 무료티어 레이트리밋(RPM/RPD)과 반드시 구분해야 한다.
+# 둘 다 429 RESOURCE_EXHAUSTED지만 빌링은 그 실행 내 재시도로 회복 불가(halt),
+# 레이트리밋은 백오프·다음 주기로 회복 가능(transient). 그래서 마커는 '크레딧 소진' 문구만
+# 엄격히(과거 'billing'/'balance'/'insufficient'는 레이트리밋 안내문 "…manage your billing"을
+# 오분류해 무료티어를 통째 halt시킬 위험 → 제거). 크레딧 소진 메시지: "prepayment credits are depleted".
+_BILLING_MARKERS: tuple[str, ...] = ("credits are depleted", "prepayment credit", "credit balance",
+                                     "out of credit", "purchase more credit")
+# 무료티어 RPM 스로틀 + RPD 예산 — 무료 한도(모델별 RPM/RPD) 내로 유지. 정확 한도는 AI Studio
+# 대시보드에서만 확인 가능(공식 문서 비공개) → env로 조정. 429(레이트리밋)는 transient라 초과해도
+# 백오프가 흡수하지만, 스로틀·예산이 애초에 초과를 줄여 실패·낭비를 최소화한다.
+GEMINI_MIN_INTERVAL_SECONDS: float = float(os.environ.get("GEMINI_MIN_INTERVAL_SECONDS", "0"))
+GEMINI_MAX_CALLS_PER_RUN: int = int(os.environ.get("GEMINI_MAX_CALLS_PER_RUN", "0"))  # 0=무제한
+_last_api_call_ts: float = 0.0
+_api_calls_this_run: int = 0
 _TRANSIENT_MARKERS: tuple[str, ...] = (
     "429", "503", "500", "resource_exhausted", "rate limit", "ratelimit",
     "quota", "unavailable", "overloaded", "deadline", "timeout", "timed out",
@@ -205,12 +216,38 @@ def get_last_call_error() -> Optional[str]:
 
 
 def reset_circuit_breaker() -> None:
-    """서킷 상태 초기화. 새 배치 시작·테스트에서 명시 호출."""
+    """서킷 상태 초기화. 새 배치 시작·테스트에서 명시 호출. 성공 시에도 호출되므로
+    per-run 호출 카운터(RPD 예산)는 여기서 리셋하지 않는다(reset_run_budget으로 분리)."""
     global _consecutive_transient_failures, _circuit_tripped_at, _billing_halt, _last_call_error
     _consecutive_transient_failures = 0
     _circuit_tripped_at = 0.0
     _billing_halt = False
     _last_call_error = None
+
+
+def reset_run_budget() -> None:
+    """per-run 호출 카운터·스로틀 타임스탬프 초기화. 새 파이프라인 실행 시작 시 호출."""
+    global _api_calls_this_run, _last_api_call_ts
+    _api_calls_this_run = 0
+    _last_api_call_ts = 0.0
+
+
+def _run_budget_exhausted() -> bool:
+    """이번 실행의 Gemini 호출 수가 RPD 예산(GEMINI_MAX_CALLS_PER_RUN)을 넘었는지.
+    0이면 무제한. 배치 루프가 새 종목 시작 전 확인해 초과 시 다음 주기로 이월한다."""
+    return GEMINI_MAX_CALLS_PER_RUN > 0 and _api_calls_this_run >= GEMINI_MAX_CALLS_PER_RUN
+
+
+def _throttle() -> None:
+    """RPM 스로틀 — 직전 실제 API 호출과 최소 간격(GEMINI_MIN_INTERVAL_SECONDS) 유지.
+    무료티어 RPM 초과(429)를 애초에 줄인다(0이면 비활성)."""
+    global _last_api_call_ts
+    if GEMINI_MIN_INTERVAL_SECONDS <= 0:
+        return
+    elapsed = time.monotonic() - _last_api_call_ts
+    wait = GEMINI_MIN_INTERVAL_SECONDS - elapsed
+    if _last_api_call_ts > 0 and wait > 0:
+        time.sleep(wait)
 
 
 def _circuit_open() -> bool:
@@ -234,7 +271,7 @@ def _call_gemini_with_backoff(client, model: str, prompt: str) -> str:
     이게 종목별 폴백 사고(production ~60%)를 줄이는 핵심 — 단건 일시오류를 흡수.
     파싱/스키마 실패는 여기서 다루지 않는다(상위 _call_gemini_for_*가 별도 재시도).
     서킷 오픈 시 API를 때리지 않고 즉시 예외 → 상위가 폴백으로 우아하게 degrade(쿼터·시간 보존)."""
-    global _billing_halt, _last_call_error
+    global _billing_halt, _last_call_error, _last_api_call_ts, _api_calls_this_run
     # 빌링 소진은 그 실행 내 회복 불가 → 첫 발생 후 이후 종목은 API를 아예 스킵(시간·호출 보존).
     if _billing_halt:
         raise RuntimeError(f"Gemini billing halt — 크레딧 소진으로 호출 스킵({_last_call_error or 'billing depleted'})")
@@ -245,6 +282,9 @@ def _call_gemini_with_backoff(client, model: str, prompt: str) -> str:
     last: Optional[Exception] = None
     for attempt in range(TRANSIENT_RETRIES):
         try:
+            _throttle()                       # 무료티어 RPM 스로틀(직전 호출과 최소 간격)
+            _last_api_call_ts = time.monotonic()
+            _api_calls_this_run += 1          # RPD 예산 카운트(실제 API 호출만)
             result = _call_gemini(client, model, prompt)
             reset_circuit_breaker()  # 성공 → 연속 카운터·서킷·빌링 halt 리셋
             return result
@@ -916,18 +956,19 @@ def _tickers_needing_enrichment(
     PR-4: watchlist 종목만(=_MARKET_* pseudo-ticker 제외).
     PR-1(진단): 오늘 행이 '폴백'(생성 실패)이면 재시도 대상에 포함 — 낡은 '분석 실패'가 굳지 않게."""
     markers = "(" + " OR ".join(["na.summary_md LIKE %s"] * len(FALLBACK_MARKERS)) + ")"
+    # 무료티어 예산 대비 우선순위: 보유(is_holding) → 활성 관심 → 나머지. 예산 초과로 중단돼도
+    # 중요 종목(보유·관심)이 먼저 요약되고, 후순위는 다음 주기로 이월(RPD 가드와 함께).
     sql = f"""
-        SELECT DISTINCT nr.ticker
-        FROM news_raw nr
-        WHERE nr.fetched_at::date = %s
-        AND nr.ticker IN (SELECT ticker FROM watchlist)
-        AND NOT EXISTS (
+        SELECT nr.ticker
+        FROM (SELECT DISTINCT ticker FROM news_raw WHERE fetched_at::date = %s) nr
+        JOIN watchlist w ON w.ticker = nr.ticker
+        WHERE NOT EXISTS (
             SELECT 1 FROM news_analysis na
             WHERE na.ticker = nr.ticker AND na.asof = %s
             AND na.based_on <> 'fallback_old'
             AND NOT {markers}
         )
-        ORDER BY nr.ticker
+        ORDER BY w.is_holding DESC, w.active DESC, nr.ticker
     """
     params = [asof, asof] + [f"%{m}%" for m in FALLBACK_MARKERS]
     with conn.cursor() as cur:
@@ -1082,16 +1123,18 @@ def enrich_news_batch(
     (enriched_count, errors)
     """
     asof = asof or date.today()
+    reset_run_budget()  # 새 실행 — per-run 호출 카운터·스로틀 초기화
     client = _get_gemini_client()
     model = _get_bulk_model()
     errors: list[dict] = []
     enriched = 0
     started_at = time.monotonic()
 
-    tickers = _tickers_needing_enrichment(conn, asof)
+    tickers = _tickers_needing_enrichment(conn, asof)  # 보유·관심 우선 정렬
     logger.info(
-        "뉴스 요약 대상: %d개 종목 (asof=%s, 최대 Gemini 호출 상한≈%d, 시간 예산=%.0fs)",
+        "뉴스 요약 대상: %d개 종목 (asof=%s, 최대 Gemini 호출 상한≈%d, 시간 예산=%.0fs, RPD 예산=%s, RPM 간격=%.1fs)",
         len(tickers), asof, len(tickers) * 3, GEMINI_BATCH_BUDGET_SECONDS,
+        GEMINI_MAX_CALLS_PER_RUN or "무제한", GEMINI_MIN_INTERVAL_SECONDS,
     )
 
     for ticker in tickers:
@@ -1101,6 +1144,15 @@ def enrich_news_batch(
                 "ticker": ticker,
                 "step": "enrich_news_budget",
                 "error": f"Gemini 뉴스 요약 시간 예산 초과({GEMINI_BATCH_BUDGET_SECONDS:.0f}s) — 나머지 종목은 다음 실행으로 이월",
+                "ts": datetime.utcnow().isoformat(),
+            })
+            break
+        if _run_budget_exhausted():
+            logger.warning("뉴스 요약 RPD 예산 초과로 중단: enriched=%d calls=%d cap=%d", enriched, _api_calls_this_run, GEMINI_MAX_CALLS_PER_RUN)
+            errors.append({
+                "ticker": ticker,
+                "step": "enrich_news_rpd_budget",
+                "error": f"Gemini 호출 예산 초과(RPD {GEMINI_MAX_CALLS_PER_RUN}/run) — 보유·관심 우선 처리 후 나머지는 다음 주기로 이월",
                 "ts": datetime.utcnow().isoformat(),
             })
             break
