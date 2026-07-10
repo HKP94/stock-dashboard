@@ -145,7 +145,7 @@ PRD.md, CLAUDE.md 기준으로 다음을 PR로 만들어줘:
 ```
 ./scripts/install_local_automation.sh
 ```
-- `com.atlas.local-refresh` : 하루 2회(**19:10** KR수급확정후 · **08:00** 06시 CI완료후) `local_refresh.py` = KRX 수급 수집 + `data.json` export. RunAtLoad=false(놓친 회차는 다음 스케줄이 ~10일 백필로 커버).
+- `com.atlas.local-refresh` : 하루 2회(**22:30** CI KR종가 landing 후 · **08:00** 06시 CI완료후) `local_refresh.py` = KRX 수급 수집 → **포트폴리오 재계산** → `data.json` export(이 순서). 저녁 22:30은 CI news_refresh(18시 크론)가 GitHub 지연으로 ~21:00~22:04 완료돼 KR 당일종가를 적재한 '후'라, export가 당일 KR종가·뉴스·포트폴리오를 반영한다(구 19:10은 landing 전이라 전일치 캡처=대시보드 당일 미반영). RunAtLoad=false(놓친 회차는 다음 스케줄이 ~10일 백필로 커버).
 - `com.atlas.dashboard` : 로그인 시 `dashboard_up.sh`로 local_api(8765)+vite(5173) idempotent 기동 → 브라우저 열면 항상 최신, 터미널 타이핑 제로.
 
 **확인·운영:**

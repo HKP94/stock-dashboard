@@ -16,12 +16,14 @@
     <key>WorkingDirectory</key>
     <string>__REPO__</string>
 
-    <!-- 19:10 KST (KR 수급 확정 후) + 08:00 KST (06:00 CI run 완료 후 아침 export) -->
+    <!-- 22:30 KST (CI news_refresh 18시 크론이 GitHub 지연으로 실제 ~21:00~22:04 완료 → KR 당일종가
+         적재 후) : investor_flow + 포트폴리오 재계산 + export.  + 08:00 KST (06:00 CI run 완료 후 아침 export).
+         지연이 22:30을 넘긴 날은 다음날 08:00 export가 자가치유(신선도 감시가 경보). -->
     <key>StartCalendarInterval</key>
     <array>
         <dict>
-            <key>Hour</key><integer>19</integer>
-            <key>Minute</key><integer>10</integer>
+            <key>Hour</key><integer>22</integer>
+            <key>Minute</key><integer>30</integer>
         </dict>
         <dict>
             <key>Hour</key><integer>8</integer>

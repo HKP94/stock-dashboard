@@ -170,6 +170,8 @@ def _new_refresh_writes() -> dict:
         stack.enter_context(patch.object(PA.compute_indicators, "recompute_indicators_to_db", _recompute_marker(writes)))
         stack.enter_context(patch.object(PA.compute_quant, "compute_quant_universe", lambda _t, _c: QUANT_ROWS))
         stack.enter_context(patch.object(PA.db, "upsert_quant_scores", _recorder(writes, "quant_scores")))
+        # 포트폴리오는 refresh에도 포함되나 이 비교(지표·퀀트)엔 무관 → no-op(미기록)로 격리.
+        stack.enter_context(patch.object(PA.compute_portfolio, "compute_portfolio", lambda _c: {"n": 0}))
         stack.enter_context(patch.object(PA.db, "get_conn", lambda: conn))
         stack.enter_context(patch.object(PA, "_step_market_score", lambda *a, **k: None))
         stack.enter_context(patch.object(PA.db, "log_run_start", lambda _c, kind: 1))
@@ -182,9 +184,11 @@ def test_analysis_refresh_snapshot_matches_legacy():
     assert _snapshot(_new_refresh_writes()) == _snapshot(_legacy_refresh_writes())
 
 
-def test_analysis_refresh_skips_portfolio_and_backtest():
+def test_analysis_refresh_runs_portfolio_skips_backtest():
+    # 포트폴리오는 refresh(18시)에도 재계산돼야 총자산이 당일 KR 종가로 최신화된다(스테일 방지).
+    # 백테스트는 refresh에서 계속 제외(무거움).
     conn = _ctx_conn(WATCHLIST_ROWS)
-    portfolio_mock = MagicMock()
+    portfolio_mock = MagicMock(return_value={"n": 1})
     backtest_mock = MagicMock()
     with ExitStack() as stack:
         stack.enter_context(patch.object(PA.compute_indicators, "recompute_indicators_to_db", lambda _c, _t: 0))
@@ -197,9 +201,9 @@ def test_analysis_refresh_skips_portfolio_and_backtest():
         stack.enter_context(patch.object(PA.db, "log_run_start", lambda _c, kind: 1))
         stack.enter_context(patch.object(PA.db, "log_run_finish", lambda _c, run_id, status, errors: None))
         result = PA.run("refresh")
-    portfolio_mock.assert_not_called()
-    backtest_mock.assert_not_called()
-    assert "portfolio" not in result["counts"]
+    portfolio_mock.assert_called_once()          # refresh도 포트폴리오 재계산
+    backtest_mock.assert_not_called()            # 백테스트는 여전히 제외
+    assert "portfolio" in result["counts"]
     assert "backtest" not in result["counts"]
 
 
