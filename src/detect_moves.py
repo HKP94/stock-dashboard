@@ -51,6 +51,7 @@ _INFO_FUND_CATS = frozenset({"애널리스트변경", "제품·기술", "거시"
 CLASS_VALUE = "가치이벤트"
 CLASS_INFO = "정보·펀더멘털"
 CLASS_FLOW = "정서·수급"
+CLASS_PENDING = "뉴스 있음(요약 대기)"  # 원문 뉴스는 있으나 요약 미생성(Gemini 실패) — 이유 불명과 구분
 CLASS_UNKNOWN = "이유 불명"
 
 
@@ -119,8 +120,23 @@ def _load_flow(conn: psycopg.Connection, ticker: str, asof: date) -> Optional[di
     return dict(row) if row else None
 
 
-def _classify(news: Optional[dict], flow: Optional[dict], direction: str) -> dict:
-    """당일 뉴스·수급으로 4축 분류 + 결정론 서술. 관찰만(지시어 없음)."""
+def _load_raw_news(conn: psycopg.Connection, ticker: str, asof: date, limit: int = 3) -> list[dict]:
+    """원문 뉴스 제목(요약 실패 시 폴백 참조용). 이동일 전후 ±1일 기사, 최신순.
+    Gemini 요약이 실패해도 '뉴스가 있었다'는 사실은 news_raw로 확인 가능(요약≠수집)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT title, url, published_at FROM news_raw "
+            "WHERE ticker=%s AND published_at::date BETWEEN %s AND %s "
+            "ORDER BY published_at DESC LIMIT %s",
+            (ticker, asof - timedelta(days=1), asof + timedelta(days=1), limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _classify(news: Optional[dict], flow: Optional[dict], direction: str,
+              raw_titles: Optional[list[dict]] = None) -> dict:
+    """당일 뉴스·수급으로 분류 + 결정론 서술. 관찰만(지시어 없음).
+    요약 실패(Gemini) 시에도 원문 뉴스가 있으면 '이유 불명'이 아니라 '요약 대기'로 구분한다."""
     sources: list[dict] = []
 
     # 1) 고영향 curated 뉴스 → 가치이벤트 / 정보·펀더멘털.
@@ -167,8 +183,23 @@ def _classify(news: Optional[dict], flow: Optional[dict], direction: str) -> dic
             reason = f"뉴스 심리 {senti}({news.get('n_articles')}건) 방향 정합 — 정서 주도로 관찰"
             return {"attribution_class": CLASS_FLOW, "explained": True, "reason": reason, "sources": sources}
 
-    # 4) 설명 뉴스·특이 수급 미포착 → 이유 불명(리스크 신호)
-    reason = "설명 뉴스·특이 수급 미포착 — 정보 선반영 가능성(관찰, 확인 필요)"
+    # 4) 요약이 '실패/부재'인데 원문 뉴스는 있음 → '요약 대기'(이유 불명과 구분).
+    #    "요약 실패 ≠ 뉴스 없음". 단, 요약이 성공(recent)했는데 방향이 안 맞는 경우는 여기가 아니라
+    #    이유 불명(요약은 있으나 그 뉴스로 설명 안 됨) — summary_unavailable일 때만 요약 대기.
+    summary_unavailable = (not news) or news.get("based_on") != "recent"
+    n_art = (news.get("n_articles") or 0) if news else 0
+    titles = raw_titles or []
+    if summary_unavailable and (n_art > 0 or titles):
+        for t in titles[:3]:
+            sources.append({"type": "news_raw", "title": t.get("title"), "url": t.get("url")})
+        head = titles[0].get("title") if titles else None
+        cnt = max(n_art, len(titles))
+        reason = (f"원문 뉴스 {cnt}건 있으나 요약 미생성(자동 요약 일시 중단)"
+                  + (f" — 예: {head}" if head else "") + ". 요약 복구 시 귀인 상세화.")
+        return {"attribution_class": CLASS_PENDING, "explained": True, "reason": reason, "sources": sources}
+
+    # 5) 원문 뉴스도 없음 → 진짜 이유 불명(리스크 신호)
+    reason = "원문 뉴스·특이 수급 미포착 — 정보 선반영 가능성(관찰, 확인 필요)"
     return {"attribution_class": CLASS_UNKNOWN, "explained": False, "reason": reason, "sources": sources}
 
 
@@ -218,7 +249,10 @@ def detect_for_ticker(conn: psycopg.Connection, ticker: str, market: str,
 
     news = _load_news(conn, ticker, move_date)
     flow = _load_flow(conn, ticker, move_date) if market == "KR" else None
-    attrib = _classify(news, flow, direction)
+    # 요약 실패 시에도 원문 뉴스 참조: curated/요약이 비어 있을 때만 news_raw 제목을 로드(불필요 쿼리 회피).
+    need_raw = not (news and news.get("based_on") == "recent" and news.get("curated"))
+    raw_titles = _load_raw_news(conn, ticker, move_date) if need_raw else None
+    attrib = _classify(news, flow, direction, raw_titles)
 
     return {
         "ticker": ticker,

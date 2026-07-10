@@ -89,6 +89,13 @@ CIRCUIT_BREAKER_THRESHOLD: int = int(os.environ.get("GEMINI_CIRCUIT_BREAKER_THRE
 CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = float(os.environ.get("GEMINI_CIRCUIT_BREAKER_COOLDOWN", "300"))
 _consecutive_transient_failures: int = 0
 _circuit_tripped_at: float = 0.0
+# 빌링(선불 크레딧) 소진은 그 실행 내에서 회복 불가 → 첫 발생 시 halt로 이후 종목 API 스킵(시간·호출 보존).
+# 재시도해도 무의미(429지만 transient 아님). last_error는 runs.errors 영속화용(진단 가시성).
+_billing_halt: bool = False
+_last_call_error: Optional[str] = None
+# billing/credit 소진 식별 마커(429 중에서도 재시도 불가한 하드 실패)
+_BILLING_MARKERS: tuple[str, ...] = ("credits are depleted", "prepayment", "prepay", "billing",
+                                     "insufficient", "balance")
 _TRANSIENT_MARKERS: tuple[str, ...] = (
     "429", "503", "500", "resource_exhausted", "rate limit", "ratelimit",
     "quota", "unavailable", "overloaded", "deadline", "timeout", "timed out",
@@ -178,17 +185,32 @@ def _call_gemini(client, model: str, prompt: str) -> str:
     return response.text
 
 
+def _is_billing_depleted(exc: Exception) -> bool:
+    """선불 크레딧 소진/빌링 오류인지 — 429지만 그 실행 내 재시도로 회복 불가(하드 실패)."""
+    msg = str(exc).lower()
+    return any(m in msg for m in _BILLING_MARKERS)
+
+
 def _is_transient(exc: Exception) -> bool:
-    """일시적(재시도 가치 있는) 오류인지 — 429/503/타임아웃/쿼터 등."""
+    """일시적(재시도 가치 있는) 오류인지 — 429/503/타임아웃/쿼터 등. 단, 빌링 소진은 제외(하드 실패)."""
+    if _is_billing_depleted(exc):
+        return False
     msg = str(exc).lower()
     return any(m in msg for m in _TRANSIENT_MARKERS)
 
 
+def get_last_call_error() -> Optional[str]:
+    """마지막 Gemini 호출 실패 메시지(runs.errors 영속화·진단 가시성용)."""
+    return _last_call_error
+
+
 def reset_circuit_breaker() -> None:
     """서킷 상태 초기화. 새 배치 시작·테스트에서 명시 호출."""
-    global _consecutive_transient_failures, _circuit_tripped_at
+    global _consecutive_transient_failures, _circuit_tripped_at, _billing_halt, _last_call_error
     _consecutive_transient_failures = 0
     _circuit_tripped_at = 0.0
+    _billing_halt = False
+    _last_call_error = None
 
 
 def _circuit_open() -> bool:
@@ -212,6 +234,10 @@ def _call_gemini_with_backoff(client, model: str, prompt: str) -> str:
     이게 종목별 폴백 사고(production ~60%)를 줄이는 핵심 — 단건 일시오류를 흡수.
     파싱/스키마 실패는 여기서 다루지 않는다(상위 _call_gemini_for_*가 별도 재시도).
     서킷 오픈 시 API를 때리지 않고 즉시 예외 → 상위가 폴백으로 우아하게 degrade(쿼터·시간 보존)."""
+    global _billing_halt, _last_call_error
+    # 빌링 소진은 그 실행 내 회복 불가 → 첫 발생 후 이후 종목은 API를 아예 스킵(시간·호출 보존).
+    if _billing_halt:
+        raise RuntimeError(f"Gemini billing halt — 크레딧 소진으로 호출 스킵({_last_call_error or 'billing depleted'})")
     if _circuit_open():
         raise RuntimeError(
             f"Gemini 서킷 오픈(연속 일시오류 {_consecutive_transient_failures}회) — API 호출 스킵(폴백 degrade)"
@@ -220,10 +246,15 @@ def _call_gemini_with_backoff(client, model: str, prompt: str) -> str:
     for attempt in range(TRANSIENT_RETRIES):
         try:
             result = _call_gemini(client, model, prompt)
-            reset_circuit_breaker()  # 성공 → 연속 카운터·서킷 리셋
+            reset_circuit_breaker()  # 성공 → 연속 카운터·서킷·빌링 halt 리셋
             return result
         except Exception as exc:
             last = exc
+            _last_call_error = str(exc)[:300]  # 진단 가시성(runs.errors 영속화)
+            if _is_billing_depleted(exc):
+                _billing_halt = True  # 하드 실패 — 재시도 없이 즉시 전파, 이후 종목 스킵
+                logger.error("Gemini 빌링 소진(선불 크레딧) — 이후 호출 halt: %s", str(exc)[:160])
+                raise
             if not _is_transient(exc):
                 raise  # 비일시(파싱/요청오류)는 서킷과 무관 — 즉시 전파, 카운터 불변
             if attempt == TRANSIENT_RETRIES - 1:
@@ -1088,10 +1119,14 @@ def enrich_news_batch(
             # production 실패율(~60%)을 추적할 수 없었다.
             is_fallback = is_fallback_summary(output.summary_md, output.based_on)
             if is_fallback:
+                # PR(요약복구 진단): 실제 API 오류를 runs.errors에 영속화(종전엔 "로그 참조"만 저장돼
+                # 매번 실호출로 재진단해야 했다). 빌링 소진 등 근본원인이 DB에서 바로 보이게.
+                api_err = get_last_call_error()
                 errors.append({
                     "ticker": ticker,
                     "step": "enrich_news_fallback",
-                    "error": "Gemini 요약 생성 실패 — 중립 폴백 저장(로그의 직전 오류 참조)",
+                    "error": "Gemini 요약 생성 실패 — 중립 폴백 저장"
+                             + (f" · API: {api_err}" if api_err else " (로그의 직전 오류 참조)"),
                     "ts": datetime.utcnow().isoformat(),
                 })
 
