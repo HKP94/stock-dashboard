@@ -17,9 +17,14 @@ BILLING_MSG = ("429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': "
 
 
 @pytest.fixture(autouse=True)
-def _reset():
+def _reset(monkeypatch):
+    # 이 모듈은 단일키 백오프/빌링 동작을 검증한다 — 앰비언트 .env의 다중키 풀이
+    # 로테이션을 일으키지 않도록 단일키로 고정(로테이션은 test_enrich_keypool.py에서 검증).
+    monkeypatch.setenv("GEMINI_API_KEYS", "unit-test-key")
+    eg.reset_run_budget()
     eg.reset_circuit_breaker()
     yield
+    eg._key_pool = []
     eg.reset_circuit_breaker()
 
 

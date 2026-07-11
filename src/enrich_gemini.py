@@ -107,6 +107,14 @@ GEMINI_MIN_INTERVAL_SECONDS: float = float(os.environ.get("GEMINI_MIN_INTERVAL_S
 GEMINI_MAX_CALLS_PER_RUN: int = int(os.environ.get("GEMINI_MAX_CALLS_PER_RUN", "0"))  # 0=무제한
 _last_api_call_ts: float = 0.0
 _api_calls_this_run: int = 0
+
+# 무료티어 키 풀 로테이션(요약복구): 여러 무료 키를 풀로 돌려, 한 키가 RPD/레이트리밋 또는
+# 빌링으로 소진되면 다음 키로 넘겨 요약을 이어간다. 계산 로직 불변 — LLM 백엔드(키) 교체일 뿐.
+# 소스: GEMINI_API_KEYS(쉼표 다중) 우선 → GEMINI_API_KEY(단일 하위호환). 진입점 7곳 무변경.
+_key_pool: list[str] = []             # 로드된 키(순서 보존, lazy)
+_active_key_idx: int = 0              # 현재 활성 키 인덱스
+_exhausted_keys: set[int] = set()     # 소진(레이트리밋 지속/빌링) 키 인덱스 — 실행당 누적, run 시작에 리셋
+_clients_by_idx: dict[int, object] = {}  # 키별 client lazy 캐시
 _TRANSIENT_MARKERS: tuple[str, ...] = (
     "429", "503", "500", "resource_exhausted", "rate limit", "ratelimit",
     "quota", "unavailable", "overloaded", "deadline", "timeout", "timed out",
@@ -147,12 +155,68 @@ def _ensure_env() -> None:
 # Gemini 클라이언트
 # ──────────────────────────────────────────────────────────────
 
-def _get_api_key() -> str:
+def _load_api_keys() -> list[str]:
+    """GEMINI_API_KEYS(쉼표 다중) 우선 → GEMINI_API_KEY(단일 하위호환).
+    공백 trim·빈값/중복 제거·순서 보존. 키 값은 로그·에러에 노출 금지(_mask_key로만)."""
     _ensure_env()  # PR-1: .env 로드(로컬)
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
-    return key
+    raw = os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY") or ""
+    keys: list[str] = []
+    for part in raw.split(","):
+        k = part.strip()
+        if k and k not in keys:
+            keys.append(k)
+    return keys
+
+
+def _ensure_pool() -> None:
+    """키 풀 lazy 로드(비어 있으면 env에서). run 시작(reset_run_budget)에 명시 리로드."""
+    global _key_pool
+    if not _key_pool:
+        _key_pool = _load_api_keys()
+
+
+def _mask_key(key: str) -> str:
+    """진단 로그용 마스킹 — 끝 4자리만."""
+    return f"...{key[-4:]}" if len(key) >= 4 else "****"
+
+
+def _active_key() -> str:
+    _ensure_pool()
+    if not _key_pool:
+        raise RuntimeError("GEMINI_API_KEYS/GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
+    return _key_pool[_active_key_idx]
+
+
+def _advance_key() -> bool:
+    """활성 키를 다음 미소진 키로 이동. 성공 True, 남은 키 없으면(전키 소진) False."""
+    global _active_key_idx
+    _ensure_pool()
+    n = len(_key_pool)
+    for step in range(1, n + 1):
+        cand = (_active_key_idx + step) % n
+        if cand not in _exhausted_keys:
+            _active_key_idx = cand
+            return True
+    return False
+
+
+def _client_for_idx(idx: int):
+    """키 인덱스별 google-genai client(lazy 캐시)."""
+    from google import genai  # 지연 임포트 (테스트 환경 미설치 대응)
+    from google.genai import types
+    client = _clients_by_idx.get(idx)
+    if client is None:
+        client = genai.Client(
+            api_key=_key_pool[idx],
+            http_options=types.HttpOptions(timeout=GEMINI_HTTP_TIMEOUT_MS),
+        )
+        _clients_by_idx[idx] = client
+    return client
+
+
+def _get_api_key() -> str:
+    """하위호환: 현재 활성 키 반환."""
+    return _active_key()
 
 
 def _get_bulk_model() -> str:
@@ -173,13 +237,9 @@ def _get_action_advice_model() -> str:
 
 
 def _get_gemini_client():
-    """google-genai 클라이언트 반환. 키는 환경변수에서만."""
-    from google import genai  # 지연 임포트 (테스트 환경 미설치 대응)
-    from google.genai import types
-    return genai.Client(
-        api_key=_get_api_key(),
-        http_options=types.HttpOptions(timeout=GEMINI_HTTP_TIMEOUT_MS),
-    )
+    """현재 활성 키의 google-genai client(키별 lazy 캐시). 키는 풀(env)에서만."""
+    _active_key()  # 풀 보장 + 미설정 검증
+    return _client_for_idx(_active_key_idx)
 
 
 def _call_gemini(client, model: str, prompt: str) -> str:
@@ -226,16 +286,26 @@ def reset_circuit_breaker() -> None:
 
 
 def reset_run_budget() -> None:
-    """per-run 호출 카운터·스로틀 타임스탬프 초기화. 새 파이프라인 실행 시작 시 호출."""
-    global _api_calls_this_run, _last_api_call_ts
+    """per-run 호출 카운터·스로틀 타임스탬프 초기화 + 키 풀 리로드/소진 리셋.
+    새 파이프라인 실행 시작 시 호출. 풀 소진 플래그를 여기서 리셋하는 이유:
+    reset_circuit_breaker는 '성공 1회'마다도 호출되므로(백오프 성공 경로) 거기서 소진을
+    리셋하면 이미 RPD 소진된 키가 매 성공마다 되살아나 핑퐁이 된다 → 풀 리셋은 run 시작 전용."""
+    global _api_calls_this_run, _last_api_call_ts, _key_pool, _active_key_idx
     _api_calls_this_run = 0
     _last_api_call_ts = 0.0
+    _key_pool = _load_api_keys()   # env 재반영(새 키 추가/교체 픽업)
+    _active_key_idx = 0
+    _exhausted_keys.clear()
+    _clients_by_idx.clear()
 
 
 def _run_budget_exhausted() -> bool:
-    """이번 실행의 Gemini 호출 수가 RPD 예산(GEMINI_MAX_CALLS_PER_RUN)을 넘었는지.
-    0이면 무제한. 배치 루프가 새 종목 시작 전 확인해 초과 시 다음 주기로 이월한다."""
-    return GEMINI_MAX_CALLS_PER_RUN > 0 and _api_calls_this_run >= GEMINI_MAX_CALLS_PER_RUN
+    """이번 실행의 Gemini 호출 수가 RPD 예산을 넘었는지. 0이면 무제한.
+    RPD(무료티어)는 키(프로젝트)별 한도이므로 키 N개면 실질 한도도 N배다 → 예산을
+    키 수만큼 스케일해 풀 전체 처리량을 활용한다(소진은 429 로테이션이 실시간 처리하고,
+    이 예산은 429 전에 미리 멈추는 소프트 캡일 뿐)."""
+    limit = GEMINI_MAX_CALLS_PER_RUN * max(1, len(_key_pool))
+    return GEMINI_MAX_CALLS_PER_RUN > 0 and _api_calls_this_run >= limit
 
 
 def _throttle() -> None:
@@ -270,42 +340,66 @@ def _call_gemini_with_backoff(client, model: str, prompt: str) -> str:
     429/503/타임아웃 등 '일시오류'만 재시도(최대 TRANSIENT_RETRIES). 그 외(잘못된 요청 등)는 즉시 전파.
     이게 종목별 폴백 사고(production ~60%)를 줄이는 핵심 — 단건 일시오류를 흡수.
     파싱/스키마 실패는 여기서 다루지 않는다(상위 _call_gemini_for_*가 별도 재시도).
-    서킷 오픈 시 API를 때리지 않고 즉시 예외 → 상위가 폴백으로 우아하게 degrade(쿼터·시간 보존)."""
+    서킷 오픈 시 API를 때리지 않고 즉시 예외 → 상위가 폴백으로 우아하게 degrade(쿼터·시간 보존).
+    키 풀(GEMINI_API_KEYS)이 다중이면, 활성 키가 RPD/레이트리밋 지속 or 빌링으로 소진될 때
+    그 키를 소진 마킹하고 다음 미소진 키로 advance(client 스왑)해 그 호출을 새 키로 재시도한다.
+    모든 키가 소진됐을 때만 기존 halt(빌링)/서킷(레이트리밋) degrade로 떨어진다."""
     global _billing_halt, _last_call_error, _last_api_call_ts, _api_calls_this_run
-    # 빌링 소진은 그 실행 내 회복 불가 → 첫 발생 후 이후 종목은 API를 아예 스킵(시간·호출 보존).
+    # 빌링 소진(전키)은 그 실행 내 회복 불가 → 첫 발생 후 이후 종목은 API를 아예 스킵(시간·호출 보존).
     if _billing_halt:
         raise RuntimeError(f"Gemini billing halt — 크레딧 소진으로 호출 스킵({_last_call_error or 'billing depleted'})")
     if _circuit_open():
         raise RuntimeError(
             f"Gemini 서킷 오픈(연속 일시오류 {_consecutive_transient_failures}회) — API 호출 스킵(폴백 degrade)"
         )
-    last: Optional[Exception] = None
-    for attempt in range(TRANSIENT_RETRIES):
-        try:
-            _throttle()                       # 무료티어 RPM 스로틀(직전 호출과 최소 간격)
-            _last_api_call_ts = time.monotonic()
-            _api_calls_this_run += 1          # RPD 예산 카운트(실제 API 호출만)
-            result = _call_gemini(client, model, prompt)
-            reset_circuit_breaker()  # 성공 → 연속 카운터·서킷·빌링 halt 리셋
-            return result
-        except Exception as exc:
-            last = exc
-            _last_call_error = str(exc)[:300]  # 진단 가시성(runs.errors 영속화)
-            if _is_billing_depleted(exc):
-                _billing_halt = True  # 하드 실패 — 재시도 없이 즉시 전파, 이후 종목 스킵
-                logger.error("Gemini 빌링 소진(선불 크레딧) — 이후 호출 halt: %s", str(exc)[:160])
-                raise
-            if not _is_transient(exc):
-                raise  # 비일시(파싱/요청오류)는 서킷과 무관 — 즉시 전파, 카운터 불변
-            if attempt == TRANSIENT_RETRIES - 1:
-                _record_transient_failure()  # 재시도 소진 → 서킷 카운트
-                raise
-            wait = TRANSIENT_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, TRANSIENT_BACKOFF_JITTER)
-            logger.warning("Gemini 일시오류(%s) — %.1fs 후 재시도 %d/%d",
-                           str(exc)[:80], wait, attempt + 2, TRANSIENT_RETRIES)
-            time.sleep(wait)
-    assert last is not None
-    raise last
+    _ensure_pool()
+    # 다중 키면 활성 키 client를 쓴다(진입점이 넘긴 client는 로테이션 후 스테일일 수 있음).
+    # 단일/미설정 풀은 넘어온 client를 그대로(레거시·테스트 경로 불변 — client 강제 생성 안 함).
+    active = _get_gemini_client() if len(_key_pool) >= 2 else client
+    while True:  # 키 로테이션 루프 (전키 소진 시 탈출)
+        last: Optional[Exception] = None
+        for attempt in range(TRANSIENT_RETRIES):
+            try:
+                _throttle()                       # 무료티어 RPM 스로틀(직전 호출과 최소 간격)
+                _last_api_call_ts = time.monotonic()
+                _api_calls_this_run += 1          # RPD 예산 카운트(실제 API 호출만)
+                result = _call_gemini(active, model, prompt)
+                reset_circuit_breaker()  # 성공 → 연속 카운터·서킷·빌링 halt 리셋
+                return result
+            except Exception as exc:
+                last = exc
+                _last_call_error = str(exc)[:300]  # 진단 가시성(runs.errors 영속화)
+                is_billing = _is_billing_depleted(exc)
+                if is_billing:
+                    break  # 빌링은 재시도 무의미 — 이 키 소진 처리로
+                if not _is_transient(exc):
+                    raise  # 비일시(파싱/요청오류)는 서킷·로테이션과 무관 — 즉시 전파, 카운터 불변
+                if attempt == TRANSIENT_RETRIES - 1:
+                    break  # 레이트리밋 재시도 소진 — 이 키 소진 처리로
+                wait = TRANSIENT_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, TRANSIENT_BACKOFF_JITTER)
+                logger.warning("Gemini 일시오류(%s) — %.1fs 후 재시도 %d/%d",
+                               str(exc)[:80], wait, attempt + 2, TRANSIENT_RETRIES)
+                time.sleep(wait)
+        # 현재 키 소진(빌링 or 레이트리밋 지속) → 다음 미소진 키로 로테이션 시도(다중 키일 때만).
+        assert last is not None
+        if len(_key_pool) >= 2:
+            idx = _active_key_idx
+            _exhausted_keys.add(idx)
+            reason = "billing" if is_billing else "rate"
+            # last_error에 어느 키가 왜 죽었는지 남긴다(키 값은 마스킹 — 끝 4자리만).
+            _last_call_error = f"key {_mask_key(_key_pool[idx])} ({reason}) 소진: {str(last)[:200]}"
+            if _advance_key():
+                active = _get_gemini_client()
+                logger.warning("Gemini 키 로테이션 → %s (이전 키 %s 소진)",
+                               _mask_key(_active_key()), reason)
+                continue  # 새 키로 이 호출 재시도
+        # 전키 소진(또는 단일/미설정 키) → 기존 degrade
+        if is_billing:
+            _billing_halt = True  # 이후 종목 API 스킵
+            logger.error("Gemini 빌링 소진(선불 크레딧, 전키) — 이후 호출 halt: %s", str(last)[:160])
+        else:
+            _record_transient_failure()  # 레이트리밋 재시도 소진 → 서킷 카운트
+        raise last
 
 
 def _within_budget(started_at: float, budget_seconds: float = GEMINI_BATCH_BUDGET_SECONDS) -> bool:

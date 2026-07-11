@@ -37,7 +37,20 @@ from src.enrich_gemini import (
     _within_budget,
     is_fallback_summary,
     reset_circuit_breaker,
+    reset_run_budget,
 )
+
+
+@pytest.fixture(autouse=True)
+def _single_key_pool(monkeypatch):
+    """앰비언트 .env가 다중 Gemini 키를 담고 있어도, 이 모듈의 백오프/서킷 테스트가
+    키 로테이션 없이 단일키 동작을 검증하도록 풀을 단일키로 고정한다
+    (로테이션은 test_enrich_keypool.py 전담)."""
+    monkeypatch.setenv("GEMINI_API_KEYS", "unit-test-key")
+    reset_run_budget()
+    yield
+    EG._key_pool = []
+    reset_circuit_breaker()
 
 # ──────────────────────────────────────────────────────────────
 # 픽스처 (유효한 JSON 페이로드)
@@ -323,7 +336,9 @@ class TestActionAdviceModel:
 
 class TestGeminiClientTimeout:
     def test_client_uses_http_timeout_option(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
         monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        reset_run_budget()  # 풀·client 캐시 리로드(모킹된 키 반영)
         with patch("google.genai.Client") as mock_client:
             _get_gemini_client()
             kwargs = mock_client.call_args.kwargs

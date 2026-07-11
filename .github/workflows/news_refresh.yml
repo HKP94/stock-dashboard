@@ -34,6 +34,7 @@ jobs:
       DB_NAME:            postgres
       KRX_ID:             ${{ secrets.KRX_ID }}
       KRX_PW:             ${{ secrets.KRX_PW }}
+      GEMINI_API_KEYS:    ${{ secrets.GEMINI_API_KEYS }}
       GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
       GEMINI_BULK_MODEL:  gemini-2.5-flash-lite
       GEMINI_SYNTH_MODEL: gemini-2.5-flash
@@ -68,6 +69,7 @@ jobs:
           DB_USER:            postgres.dpegnpmzgozvcvbqmnlt
           DB_PASSWORD:        ${{ secrets.DB_PASSWORD }}
           DB_NAME:            postgres
+          GEMINI_API_KEYS:    ${{ secrets.GEMINI_API_KEYS }}
           GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
           GEMINI_BULK_MODEL:  gemini-2.5-flash-lite
           GEMINI_SYNTH_MODEL: gemini-2.5-flash
