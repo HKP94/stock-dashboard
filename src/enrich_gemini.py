@@ -6,9 +6,11 @@ enrich_gemini.py — Gemini 호출 래퍼 (뉴스 요약 + 시황 종합)
   2. enrich_market_summary  : market_daily + 감성 집계 → Gemini 시황 → summary_md 업데이트
 
 환경변수:
-  GEMINI_API_KEY
-  GEMINI_BULK_MODEL   기본값 "gemini-2.5-flash-lite"  종목별 뉴스 요약 (대량·저렴)
-  GEMINI_SYNTH_MODEL  기본값 "gemini-2.5-flash"       시황 종합 1회 (상위 티어, 2.5-flash 계열)
+  GEMINI_API_KEYS     쉼표 구분 다중 키(무료티어 풀 로테이션). 없으면 GEMINI_API_KEY(단일)
+  GEMINI_API_KEY      단일 키(하위호환)
+  GEMINI_BULK_MODEL   기본값 "gemini-flash-lite-latest"  종목별 뉴스 요약 (대량·저렴)
+  GEMINI_SYNTH_MODEL  기본값 "gemini-flash-latest"       시황 종합 1회 (상위 티어)
+  ※ 핀 버전(gemini-2.5-*)은 신규 무료키에서 회수돼 404 → '-latest' 별칭만 사용
 
 프롬프트 템플릿: prompt/GEMINI_PROMPT.md §A (뉴스), §B (시황)
 
@@ -60,13 +62,26 @@ from src.schemas import (
 logger = logging.getLogger(__name__)
 
 # ── 상수 ─────────────────────────────────────────────────────────
-GEMINI_BULK_MODEL_DEFAULT: str = "gemini-2.5-flash-lite"
-# 시황 종합(1회/일)·상위 티어. 2.5-flash 계열로 통일(실호출 검증 2026-06-17). 무효 모델명이면 전량 실패.
-GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-2.5-flash"
-GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT: str = os.environ.get("GEMINI_MANUAL_RESEARCH_MODEL", "gemini-2.5-pro")
+# 모델명은 '-latest' 별칭을 쓴다(핀 버전 금지). 근거 = 9키 전수 실호출 검증(2026-07-12):
+#   핀 버전 gemini-2.5-*는 신규 무료키에서 회수돼 404 NOT_FOUND("no longer available to new users")
+#     - gemini-2.5-flash-lite: OK 2/9, 404 5   ← 벌크 뉴스요약이 통째로 죽던 근본원인
+#     - gemini-2.5-flash:      OK 4/9, 404 4   ← synth·액션제언도 절반이 죽고 있었음
+#   '-latest' 별칭은 전 키에서 404 0:
+#     - gemini-flash-lite-latest / gemini-flash-latest: OK 8/9, 404 0 (남은 1키는 429=일시)
+# 404는 _is_transient=False라 재시도·키 로테이션 없이 즉시 폴백 → 모델명 교체가 유일 해법.
+# 트레이드오프: 별칭은 뜨는 포인터라 Google이 세대를 올릴 수 있다(핀 버전이 회수되는 것보다 낫다).
+# 모델 변경 시 반드시 전 키 실호출 검증(CLAUDE.md §5 — 무효 모델명이면 호출 전량 실패).
+GEMINI_BULK_MODEL_DEFAULT: str = "gemini-flash-lite-latest"
+# 시황 종합(1회/일)·상위 티어. lite 아닌 flash 별칭.
+GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-flash-latest"
+# 수동리서치 분해(local_api 온디맨드). PM 결정 2026-07-12: 무료 일관성 위해 pro→flash-latest 강등
+# (품질 약간↓ 수용). 근거: gemini-2.5-pro는 무료티어 쿼터가 없어 9키 전부 429 → 무료키만으론 이
+# 경로가 통째로 실패한다. pro 유료키 별도 배선은 기각. pro 복귀는 GEMINI_MANUAL_RESEARCH_MODEL
+# env 한 값으로(아래 _get_manual_research_model이 env 우선 — 상수는 코드 기본값만 담는다).
+GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT: str = "gemini-flash-latest"
 # 액션제언(매일 ~38종목) 모델. 비용 안정화 기간엔 flash 계열만(무료티어 자격). pro 복귀는
-# 파이프라인 안정 확인 후 PM 승인 하에 ACTION_ADVICE_MODEL=gemini-2.5-pro 한 값으로. (CLAUDE.md §5)
-ACTION_ADVICE_MODEL_DEFAULT: str = "gemini-2.5-flash"
+# 파이프라인 안정 확인 후 PM 승인 하에 ACTION_ADVICE_MODEL 한 값으로. (CLAUDE.md §5)
+ACTION_ADVICE_MODEL_DEFAULT: str = "gemini-flash-latest"
 MAX_NEWS_PER_TICKER: int = 15
 BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)

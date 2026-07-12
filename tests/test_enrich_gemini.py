@@ -334,6 +334,36 @@ class TestActionAdviceModel:
         assert _get_action_advice_model() == "gemini-2.5-pro"
 
 
+class TestCronModelsAreLatestAliases:
+    """회귀 가드: 모델 기본값을 핀 버전(gemini-2.5-*)으로 되돌리지 못하게 한다.
+    핀 버전은 신규 무료키에서 회수돼 404 → 뉴스요약·시황이 통째로 폴백됐다(9키 실측:
+    2.5-flash-lite 404 5/9, 2.5-flash 404 4/9). '-latest' 별칭만 전 키에서 살아 있다.
+    MANUAL(수동리서치)은 pro가 무료 쿼터 없어 9키 전부 429 → flash-latest 강등(PM 2026-07-12)."""
+
+    def test_model_defaults_use_latest_alias_not_pinned_version(self):
+        for name, model in [
+            ("BULK", EG.GEMINI_BULK_MODEL_DEFAULT),
+            ("SYNTH", EG.GEMINI_SYNTH_MODEL_DEFAULT),
+            ("ACTION_ADVICE", EG.ACTION_ADVICE_MODEL_DEFAULT),
+            ("MANUAL_RESEARCH", EG.GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT),
+        ]:
+            assert model.endswith("-latest"), f"{name}={model} — 핀 버전 금지, '-latest' 별칭만"
+            assert "2.5" not in model, f"{name}={model} — 신규 무료키에서 404 회수된 세대"
+
+    def test_manual_research_no_pro_on_free_tier(self):
+        # pro는 무료티어 쿼터가 없어 9키 전부 429 — 기본값으로 되돌리면 온디맨드 경로가 죽는다
+        assert "pro" not in EG.GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT
+
+    def test_manual_research_env_override_still_works(self, monkeypatch):
+        # 상수는 코드 기본값만 담고, env 오버라이드는 게터가 처리한다(pro 복귀 = env 한 값)
+        monkeypatch.setenv("GEMINI_MANUAL_RESEARCH_MODEL", "gemini-2.5-pro")
+        assert EG._get_manual_research_model() == "gemini-2.5-pro"
+
+    def test_bulk_stays_lite_tier(self):
+        # 벌크는 종목별 대량 호출 — 저렴·고RPD 유지(무료티어 RPD 압박 방지)
+        assert "lite" in EG.GEMINI_BULK_MODEL_DEFAULT
+
+
 class TestGeminiClientTimeout:
     def test_client_uses_http_timeout_option(self, monkeypatch):
         monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
