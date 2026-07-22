@@ -359,9 +359,38 @@ class TestCronModelsAreLatestAliases:
         monkeypatch.setenv("GEMINI_MANUAL_RESEARCH_MODEL", "gemini-2.5-pro")
         assert EG._get_manual_research_model() == "gemini-2.5-pro"
 
-    def test_bulk_stays_lite_tier(self):
-        # 벌크는 종목별 대량 호출 — 저렴·고RPD 유지(무료티어 RPD 압박 방지)
-        assert "lite" in EG.GEMINI_BULK_MODEL_DEFAULT
+    def test_all_cron_models_stay_lite_tier(self):
+        """전 크론 경로가 lite 티어여야 한다(PM 결정 2026-07-22).
+
+        '-latest'가 뜨는 포인터라 flash 별칭이 gemini-3.5-flash로 이동했고, 그 세대의
+        무료 RPD가 모델·프로젝트당 20/일이라 SYNTH·ACTION이 연속 폴백했다.
+        되돌리면 같은 RPD20에 재유입되므로 lite 강제.
+        """
+        for name, model in [
+            ("BULK", EG.GEMINI_BULK_MODEL_DEFAULT),
+            ("SYNTH", EG.GEMINI_SYNTH_MODEL_DEFAULT),
+            ("ACTION_ADVICE", EG.ACTION_ADVICE_MODEL_DEFAULT),
+            ("MANUAL_RESEARCH", EG.GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT),
+        ]:
+            assert "lite" in model, f"{name}={model} — flash 별칭은 RPD20 위험, lite 유지"
+
+    def test_workflow_env_matches_code_default(self):
+        """워크플로 env 하드코딩과 코드 기본값이 어긋나면 CI만 옛 모델을 쓴다(§8).
+
+        Secrets/코드만 고치고 .yml을 빼먹어 CI가 조용히 다른 모델을 쓰던 사고가 있었다.
+        """
+        import re
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        for wf in ("auto_run.yml", "news_refresh.yml"):
+            text = (root / ".github" / "workflows" / wf).read_text()
+            for env_key, expected in (
+                ("GEMINI_BULK_MODEL", EG.GEMINI_BULK_MODEL_DEFAULT),
+                ("GEMINI_SYNTH_MODEL", EG.GEMINI_SYNTH_MODEL_DEFAULT),
+            ):
+                found = set(re.findall(rf"{env_key}:\s*(\S+)", text))
+                assert found, f"{wf}: {env_key} 배선 없음"
+                assert found == {expected}, f"{wf}: {env_key}={found} != 코드 기본값 {expected}"
 
 
 class TestGeminiClientTimeout:

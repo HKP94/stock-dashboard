@@ -72,16 +72,24 @@ logger = logging.getLogger(__name__)
 # 트레이드오프: 별칭은 뜨는 포인터라 Google이 세대를 올릴 수 있다(핀 버전이 회수되는 것보다 낫다).
 # 모델 변경 시 반드시 전 키 실호출 검증(CLAUDE.md §5 — 무효 모델명이면 호출 전량 실패).
 GEMINI_BULK_MODEL_DEFAULT: str = "gemini-flash-lite-latest"
-# 시황 종합(1회/일)·상위 티어. lite 아닌 flash 별칭.
-GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-flash-latest"
+# 시황 종합(1회/일). **PM 결정 2026-07-22: flash-latest → lite 강등.**
+# 근거: '-latest'가 뜨는 포인터라 Google이 세대를 올렸고(2026-07 실측: flash-latest가
+# gemini-3.5-flash로 이동), 그 세대의 무료 RPD가 **모델·프로젝트당 20/일**로 급감해
+# 07-21·22 SYNTH가 연속 폴백했다(429 RESOURCE_EXHAUSTED, quotaValue: 20).
+# 별칭 이동은 하루 만에 또 일어난다(07-22 재실측: flash-latest → gemini-3.6-flash) —
+# 즉 SYNTH를 flash 별칭에 두는 한 RPD가 예고 없이 바뀐다. lite 티어로 통일해 안정화한다.
+# ※lite도 별칭이라 같은 위험이 남는다(3.5-flash-lite). RPD가 또 문제면 핀 버전+유료 소액이 최종답.
+GEMINI_SYNTH_MODEL_DEFAULT: str = "gemini-flash-lite-latest"
 # 수동리서치 분해(local_api 온디맨드). PM 결정 2026-07-12: 무료 일관성 위해 pro→flash-latest 강등
 # (품질 약간↓ 수용). 근거: gemini-2.5-pro는 무료티어 쿼터가 없어 9키 전부 429 → 무료키만으론 이
 # 경로가 통째로 실패한다. pro 유료키 별도 배선은 기각. pro 복귀는 GEMINI_MANUAL_RESEARCH_MODEL
 # env 한 값으로(아래 _get_manual_research_model이 env 우선 — 상수는 코드 기본값만 담는다).
-GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT: str = "gemini-flash-latest"
+# 2026-07-22: 같은 뿌리(flash 별칭 RPD20)라 lite로 통일. 온디맨드라 급하진 않으나 일관성 유지.
+GEMINI_MANUAL_RESEARCH_MODEL_DEFAULT: str = "gemini-flash-lite-latest"
 # 액션제언(매일 ~38종목) 모델. 비용 안정화 기간엔 flash 계열만(무료티어 자격). pro 복귀는
 # 파이프라인 안정 확인 후 PM 승인 하에 ACTION_ADVICE_MODEL 한 값으로. (CLAUDE.md §5)
-ACTION_ADVICE_MODEL_DEFAULT: str = "gemini-flash-latest"
+# 2026-07-22: 매일 ~38종목 호출이라 RPD20에 가장 먼저 걸린다 → lite로 강등(PM 결정).
+ACTION_ADVICE_MODEL_DEFAULT: str = "gemini-flash-lite-latest"
 MAX_NEWS_PER_TICKER: int = 15
 BODY_CAP: int = 200        # 뉴스 본문 최대 글자 (토큰 절약)
 API_SLEEP: float = 1.5     # API 호출 간 sleep (레이트리밋 방지)

@@ -35,7 +35,7 @@ jobs:
       GEMINI_API_KEYS:    ${{ secrets.GEMINI_API_KEYS }}
       GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
       GEMINI_BULK_MODEL:  gemini-flash-lite-latest
-      GEMINI_SYNTH_MODEL: gemini-flash-latest
+      GEMINI_SYNTH_MODEL: gemini-flash-lite-latest
       GEMINI_HTTP_TIMEOUT_MS: "45000"
       GEMINI_BATCH_BUDGET_SECONDS: "1800"
 
@@ -71,7 +71,7 @@ jobs:
           GEMINI_API_KEYS:    ${{ secrets.GEMINI_API_KEYS }}
           GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
           GEMINI_BULK_MODEL:  gemini-flash-lite-latest
-          GEMINI_SYNTH_MODEL: gemini-flash-latest
+          GEMINI_SYNTH_MODEL: gemini-flash-lite-latest
           GEMINI_HTTP_TIMEOUT_MS: "45000"
           GEMINI_BATCH_BUDGET_SECONDS: "1800"
         run: python -m src.run_pipeline
