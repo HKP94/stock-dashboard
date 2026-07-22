@@ -274,7 +274,7 @@ def _load_price_df_from_db(ticker: str, conn) -> pd.DataFrame:
     """prices_daily → DatetimeIndex DataFrame(close, volume)."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT date, close, volume FROM prices_daily WHERE ticker = %s ORDER BY date ASC",
+            "SELECT date, high, low, close, volume FROM prices_daily WHERE ticker = %s ORDER BY date ASC",
             (ticker,),
         )
         rows = cur.fetchall()

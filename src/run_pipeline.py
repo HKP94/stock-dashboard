@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 def _load_price_df(ticker: str, conn: psycopg.Connection) -> pd.DataFrame:
     """prices_daily 전체 → DatetimeIndex DataFrame (compute_indicators 입력용)."""
     sql = """
-        SELECT date, close, volume
+        SELECT date, high, low, close, volume
         FROM prices_daily
         WHERE ticker = %s
         ORDER BY date ASC

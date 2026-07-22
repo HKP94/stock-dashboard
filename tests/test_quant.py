@@ -365,12 +365,17 @@ class TestComputeQuantUniverse:
         score = {r.ticker: r.quality for r in rows}
         assert score["HQ"] > score["MQ"] > score["LQ"]
 
-    def test_fscore_filter_sets_composite_none(self):
-        """F-Score ≤ 3인 종목은 composite=None."""
+    def test_fscore_filter_marks_fallback_but_keeps_composite(self):
+        """F-Score ≤ 3인 종목도 composite를 채우되 fallback으로 표식한다(PR-B).
+
+        종전엔 composite=None이라 20종목이 랭킹에서 통째로 사라졌다(정렬 불가).
+        필터 '통과'와 구분되어야 하므로 _F_FILTERED + fallback 둘 다 붙는다.
+        """
         rows = _run_universe(["STRONG"], fscore=FSCORE_FILTER_THRESHOLD)
         row = rows[0]
-        assert row.composite is None
+        assert row.composite is not None, "정렬 가능하도록 채워야 한다"
         assert any(_F_FILTERED in f for f in row.flags)
+        assert any("fallback" in f for f in row.flags), "필터 통과와 구분되는 표식 필수"
 
     def test_high_fscore_has_composite(self):
         rows = _run_universe(["STRONG"], fscore=7)

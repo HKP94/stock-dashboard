@@ -879,7 +879,7 @@ def _spark(series: list[float], n: int = 16) -> list[float]:
 
 
 # PR-3: 플래그 분류 패턴
-_DATA_QUALITY_RE = re.compile(r"데이터 부족|사전필터 제외|발행주식수 데이터 없음|데이터 없음")
+_DATA_QUALITY_RE = re.compile(r"데이터 부족|사전필터 제외|발행주식수|데이터 없음")
 
 def _split_flags(flags: list[str]) -> tuple[list[str], list[str]]:
     """flags → (action_signals, data_quality_items)"""

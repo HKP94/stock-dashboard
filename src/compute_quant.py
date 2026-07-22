@@ -70,8 +70,13 @@ VIX_SPIKE_MULT: float = 1.15
 KRW_SPIKE_MULT: float = 1.03
 
 _F_MISSING = "데이터 부족"
-_F_NO_SHARES = "발행주식수 데이터 없음"
+# ⚠️ 종목별 데이터 결손이 아니라 **Piotroski signal 7(주식발행 여부) 미구현** 표식이다.
+# 발행주식수는 스키마 어디에도 수집되지 않는다(fundamentals에 컬럼 자체가 없음) → 전 종목 무조건 부착.
+# signal 8(gross_margin)도 미수집이라 **F-Score 실질 만점은 9가 아니라 7**이다(claude.md §스크리너).
+_F_NO_SHARES = "발행주식수 미수집(signal 7)"
 _F_FILTERED = "사전필터 제외"
+# 사전필터에 걸렸지만 팩터 가중평균으로 composite를 채웠다는 표식(정렬 가능화, 필터 통과 아님).
+_F_FALLBACK = "fallback"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -804,17 +809,19 @@ def compute_quant_universe(
         grow = grow_scores.get(ticker, 50.0)
         sent = sent_scores.get(ticker, 50.0)
 
+        composite = (
+            weights["momentum"]  * mom
+            + weights["value"]   * val
+            + weights["quality"] * qual
+            + weights["growth"]  * grow
+            + weights["sentiment"] * sent
+        )
         if filtered:
-            composite = None
+            # 사전필터 통과 못 한 종목도 composite를 채운다(정렬 가능화). 다만 '통과했다'는
+            # 뜻이 아니므로 _F_FALLBACK으로 표식해 화면·조회가 구분할 수 있게 한다.
+            # ※§2 준수: 3축(퀀트·컨센서스·내 판단) 합산이 아니라 퀀트 축 내부 팩터 가중평균이다.
             flags_map[ticker].append(_F_FILTERED)
-        else:
-            composite = (
-                weights["momentum"]  * mom
-                + weights["value"]   * val
-                + weights["quality"] * qual
-                + weights["growth"]  * grow
-                + weights["sentiment"] * sent
-            )
+            flags_map[ticker].append(_F_FALLBACK)
 
         # rules.py 알림 플래그
         latest_price = prices_252[ticker]

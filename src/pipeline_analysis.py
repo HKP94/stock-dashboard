@@ -59,7 +59,7 @@ REFRESH_STEPS = ("compute_indicators", "compute_quant", "market_score", "compute
 def _load_price_df(ticker: str, conn: psycopg.Connection) -> pd.DataFrame:
     """prices_daily 전체 → DatetimeIndex DataFrame (run_pipeline._load_price_df와 동일)."""
     sql = """
-        SELECT date, close, volume
+        SELECT date, high, low, close, volume
         FROM prices_daily
         WHERE ticker = %s
         ORDER BY date ASC
