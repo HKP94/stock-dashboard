@@ -352,6 +352,70 @@ def _resolve_pending(
     return updated
 
 
+def backfill_bench(conn: psycopg.Connection, signal_type: str = SIGNAL_TYPE_A2) -> dict:
+    """
+    index_daily 결손으로 bench_*가 NULL로 남은 행에 벤치마크 가격을 채운다.
+
+    §F7: **등급·진입가·청산가는 건드리지 않는다.** 이미 확정된 entry_date/exit_date의
+    지수 종가를 채울 뿐이라 그 시점에 알 수 있던 정보만 쓴다(소급 라벨링 아님).
+    exit_date가 없는 미결 행은 bench_entry만 채우고 청산은 _resolve_pending에 맡긴다.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT t.id, t.ticker, t.grade, t.n_days,
+                   t.entry_date, t.entry_price, t.exit_date, t.exit_price, w.market
+            FROM signal_grade_track t
+            JOIN watchlist w ON w.ticker = t.ticker
+            WHERE t.signal_type = %s
+              AND t.entry_date IS NOT NULL
+              AND t.bench_entry IS NULL
+            ORDER BY t.entry_date
+        """, (signal_type,))
+        rows = [dict(r) for r in cur.fetchall()]
+
+    updated, errors = 0, []
+    bench_cache: dict[tuple[str, date], pd.DataFrame] = {}
+    for r in rows:
+        try:
+            bench_t = benchmark_for(r["ticker"], r["market"])
+            key = (bench_t, r["entry_date"])
+            if key not in bench_cache:
+                bench_cache[key] = _load_bench(conn, bench_t, r["entry_date"])
+            bench_entry, bench_exit = _bench_prices_at(bench_cache[key], r["entry_date"], r["exit_date"])
+            if bench_entry is None:
+                continue  # 지수 이력이 아직 그 날짜를 못 덮음 — 다음 실행에서 재시도
+
+            rets = {"bench_return": None, "excess_return": None, "hit_excess": None}
+            if bench_exit is not None and r["exit_price"] and r["entry_price"]:
+                rets = compute_returns(
+                    float(r["entry_price"]), float(r["exit_price"]),
+                    bench_entry, bench_exit, r["grade"],
+                )
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE signal_grade_track SET
+                        bench_entry   = %s, bench_exit = %s,
+                        bench_return  = COALESCE(%s, bench_return),
+                        excess_return = COALESCE(%s, excess_return),
+                        hit_excess    = COALESCE(%s, hit_excess),
+                        computed_at   = NOW()
+                    WHERE id = %s
+                """, (
+                    bench_entry, bench_exit,
+                    rets["bench_return"], rets["excess_return"], rets["hit_excess"],
+                    r["id"],
+                ))
+            conn.commit()
+            updated += 1
+        except Exception as exc:
+            conn.rollback()
+            logger.warning("signal_track bench 백필 실패 id=%s: %s", r["id"], exc)
+            errors.append({"stage": f"signal_track:bench:{r['id']}", "error": str(exc)})
+
+    logger.info("signal_track bench 백필: 대상=%d 갱신=%d 오류=%d", len(rows), updated, len(errors))
+    return {"candidates": len(rows), "updated": updated, "errors": errors}
+
+
 def compute_signal_track(
     conn: psycopg.Connection,
     signal_type: str = SIGNAL_TYPE_A2,
@@ -366,11 +430,17 @@ def compute_signal_track(
     errors: list[dict] = []
     n_inserted = _insert_new(conn, signal_type, n_days_list, errors)
     n_updated = _resolve_pending(conn, signal_type, errors)
+    # index_daily가 뒤늦게 채워진 구간의 bench 결손 자가치유(등급·가격 불변).
+    bench = backfill_bench(conn, signal_type)
+    errors.extend(bench["errors"])
     logger.info(
         "signal_track(%s): 신규=%d, 갱신=%d, 오류=%d",
         signal_type, n_inserted, n_updated, len(errors),
     )
-    return {"inserted": n_inserted, "updated": n_updated, "errors": errors}
+    return {
+        "inserted": n_inserted, "updated": n_updated,
+        "bench_backfilled": bench["updated"], "errors": errors,
+    }
 
 
 # ── 요약 (export용) ───────────────────────────────────────────
@@ -459,7 +529,10 @@ def main(argv: list[str] | None = None) -> int:
     with db.get_conn() as conn:
         result = compute_signal_track(conn, signal_type=args.signal)
 
-    print(f"signal_track: 신규={result['inserted']}, 갱신={result['updated']}, 오류={len(result['errors'])}")
+    print(
+        f"signal_track: 신규={result['inserted']}, 갱신={result['updated']}, "
+        f"bench백필={result['bench_backfilled']}, 오류={len(result['errors'])}"
+    )
     if result["errors"]:
         for e in result["errors"]:
             print(f"  오류: {e}")

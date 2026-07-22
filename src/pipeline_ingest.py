@@ -30,7 +30,8 @@ from typing import Optional
 import psycopg
 
 from src import db
-from src import ingest_drivers, ingest_investor_flow, ingest_kr, ingest_macro, ingest_market, ingest_market_news, ingest_news, ingest_us
+from src import (ingest_drivers, ingest_index_history, ingest_investor_flow, ingest_kr, ingest_macro,
+                 ingest_market, ingest_market_news, ingest_news, ingest_us)
 from src.pipeline_common import (
     PROFILE_DAILY,
     PROFILE_REFRESH,
@@ -40,6 +41,7 @@ from src.pipeline_common import (
     make_error,
     split_kr_us,
 )
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ RUN_KIND = "pipeline_ingest"
 # 단계 순서를 짧은 튜플 상수로 노출 (설계 §5)
 DAILY_STEPS = (
     "market",
+    "index_history",        # PR-A: index_daily 증분 — 미배선이라 매일 스테일이던 근본원인
     "macro",
     "driver_prices",
     "ingest_kr",
@@ -71,16 +74,28 @@ def _ingest_market(conn: psycopg.Connection, errors: list, counts: dict) -> None
     logger.info("수집: 시장 지표")
     try:
         result = ingest_market.run_market_ingest()
-        market_row = result.get("market")
-        if market_row:
+        for market_row in result.get("markets", []):
             db.upsert_market_daily(conn, market_row)
-            conn.commit()
             counts["market_daily"] = counts.get("market_daily", 0) + 1
+        conn.commit()
         errors.extend(result.get("errors", []))
     except Exception as exc:
         conn.rollback()
         logger.error("시장 수집 실패: %s", exc, exc_info=True)
         errors.append(make_error("market", exc))
+
+
+def _ingest_index_history(conn: psycopg.Connection, errors: list, counts: dict) -> None:
+    """벤치마크 지수 증분 수집(최근 1개월). 5년 백필은 여전히 수동 CLI."""
+    logger.info("수집: 벤치마크 지수(index_daily)")
+    try:
+        result = ingest_index_history.run_index_backfill(conn, period="1mo")
+        counts["index_daily"] = counts.get("index_daily", 0) + result.get("rows", 0)
+        errors.extend(result.get("errors", []))
+    except Exception as exc:
+        conn.rollback()
+        logger.error("지수 이력 수집 실패: %s", exc, exc_info=True)
+        errors.append(make_error("index_history", exc))
 
 
 def _ingest_macro(conn: psycopg.Connection, errors: list, counts: dict) -> None:
@@ -249,7 +264,7 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
     """수집 파이프라인 실행. 반환: {status, errors, counts}."""
     if profile not in VALID_PROFILES:
         raise ValueError(f"unknown profile: {profile!r} (allowed: {VALID_PROFILES})")
-    asof = asof or date.today()
+    asof = asof or today_kst()
     errors: list[dict] = []
     counts: dict = {}
     status = "success"
@@ -264,6 +279,7 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
 
             if profile == PROFILE_DAILY:
                 _ingest_market(conn, errors, counts)
+                _ingest_index_history(conn, errors, counts)
                 _ingest_macro(conn, errors, counts)
                 _ingest_driver_prices(conn, errors, counts)
                 _ingest_kr(conn, kr_tickers, errors, counts)

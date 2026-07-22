@@ -775,13 +775,15 @@ def upsert_market_daily(conn: psycopg.Connection, row: MarketDailyRow) -> None:
              summary_md, summary_kr_md, summary_us_md, payload)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
         ON CONFLICT (asof) DO UPDATE SET
-            kospi         = EXCLUDED.kospi,
-            kosdaq        = EXCLUDED.kosdaq,
-            sp500         = EXCLUDED.sp500,
-            nasdaq        = EXCLUDED.nasdaq,
-            vix           = EXCLUDED.vix,
-            usdkrw        = EXCLUDED.usdkrw,
-            ust10y        = EXCLUDED.ust10y,
+            -- PR-A: 숫자도 COALESCE — 배드틱 가드/소스 실패로 None이 온 재실행이
+            -- 이미 저장된 정상값을 지우지 않게 한다(정상값은 항상 non-null이라 정정은 그대로 통과).
+            kospi         = COALESCE(EXCLUDED.kospi,  market_daily.kospi),
+            kosdaq        = COALESCE(EXCLUDED.kosdaq, market_daily.kosdaq),
+            sp500         = COALESCE(EXCLUDED.sp500,  market_daily.sp500),
+            nasdaq        = COALESCE(EXCLUDED.nasdaq, market_daily.nasdaq),
+            vix           = COALESCE(EXCLUDED.vix,    market_daily.vix),
+            usdkrw        = COALESCE(EXCLUDED.usdkrw, market_daily.usdkrw),
+            ust10y        = COALESCE(EXCLUDED.ust10y, market_daily.ust10y),
             summary_md    = COALESCE(EXCLUDED.summary_md,    market_daily.summary_md),
             summary_kr_md = COALESCE(EXCLUDED.summary_kr_md, market_daily.summary_kr_md),
             summary_us_md = COALESCE(EXCLUDED.summary_us_md, market_daily.summary_us_md),

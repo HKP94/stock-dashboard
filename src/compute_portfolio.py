@@ -20,6 +20,7 @@ from typing import Optional
 import psycopg
 
 from src.db import get_conn
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) -> 
     Returns summary dict for logging.
     자동 주문 없음.
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     asof_ts = datetime.combine(asof, datetime.min.time()).replace(tzinfo=timezone.utc)
 
     holdings = _load_holdings(conn)

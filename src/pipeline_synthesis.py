@@ -50,6 +50,7 @@ from src.pipeline_common import (
     make_error,
 )
 from src.schemas import StockActionAdviceRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +230,7 @@ def _step_action_advice(conn: psycopg.Connection, errors: list, counts: dict) ->
         stocks_by_ticker = {stock["t"]: stock for stock in data.get("stocks", [])}
         regime = data.get("market", {}).get("overall", "neutral")
         portfolio_snapshot = data.get("portfolio", {}) or {}
-        today = date.today()
+        today = today_kst()
         processed = 0
         for ticker in targets:
             if not enrich_gemini._within_budget(started_at, enrich_gemini.GEMINI_BATCH_BUDGET_SECONDS):
@@ -297,7 +298,7 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
     """종합 파이프라인 실행. 반환: {status, errors, counts}."""
     if profile not in VALID_PROFILES:
         raise ValueError(f"unknown profile: {profile!r} (allowed: {VALID_PROFILES})")
-    asof = asof or date.today()
+    asof = asof or today_kst()
     errors: list[dict] = []
     counts: dict = {}
     status = "success"

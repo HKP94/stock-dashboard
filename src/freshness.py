@@ -43,6 +43,7 @@ KRX_HOLIDAYS: frozenset[date] = frozenset({
     date(2026, 3, 1), date(2026, 3, 2),                   # 삼일절(+대체)
     date(2026, 5, 5), date(2026, 5, 24), date(2026, 5, 25),  # 어린이날·부처님오신날(+대체)
     date(2026, 6, 6),                                      # 현충일
+    date(2026, 7, 17),                                     # 제헌절 (KRX 휴장 — 지수·개별종목 봉 부재로 실측 확정)
     date(2026, 8, 15), date(2026, 8, 17),                 # 광복절(+대체)
     date(2026, 9, 24), date(2026, 9, 25), date(2026, 9, 26),  # 추석 연휴
     date(2026, 10, 3), date(2026, 10, 5), date(2026, 10, 9),  # 개천절(+대체)·한글날
@@ -51,12 +52,26 @@ KRX_HOLIDAYS: frozenset[date] = frozenset({
 _HOLIDAYS = {"KR": KRX_HOLIDAYS, "US": NYSE_HOLIDAYS}
 
 
-def _is_trading_day(d: date, market: str) -> bool:
+def today_kst() -> date:
+    """**시스템 기준 오늘 = KST 날짜.**
+
+    `date.today()`는 프로세스 로컬시간이라 CI(UTC)에서 KST 전날을 준다. cron이
+    `0 21 * * *`(=06:00 KST)라 아침 실행은 전날, 저녁 실행(18:00 KST=09:00 UTC)은
+    당일로 asof가 엇갈렸고, 그 결과 **아침 수집분이 전날 저녁 행을 덮어써** 전 테이블이
+    KST 기준 하루씩 밀렸다. asof(=실행일 스냅샷)는 전부 이 함수를 쓴다.
+    """
+    return datetime.now(KST).date()
+
+
+def is_trading_day(d: date, market: str) -> bool:
     return d.weekday() < 5 and d not in _HOLIDAYS.get(market, frozenset())
 
 
+_is_trading_day = is_trading_day  # 하위호환 별칭
+
+
 def _last_trading_day_on_or_before(d: date, market: str) -> date:
-    while not _is_trading_day(d, market):
+    while not is_trading_day(d, market):
         d -= timedelta(days=1)
     return d
 
@@ -67,7 +82,7 @@ def _trading_days_between(after: date, upto: date, market: str) -> int:
         return 0
     n, d = 0, after + timedelta(days=1)
     while d <= upto:
-        if _is_trading_day(d, market):
+        if is_trading_day(d, market):
             n += 1
         d += timedelta(days=1)
     return n
@@ -79,7 +94,7 @@ def expected_latest(market: str, now_kst: Optional[datetime] = None) -> date:
     today = now_kst.date()
     if market == "KR":
         # 수집 확정(~18:00) 후 & 오늘 거래일이면 오늘, 아니면 직전 거래일.
-        if _is_trading_day(today, "KR") and now_kst.hour >= 18:
+        if is_trading_day(today, "KR") and now_kst.hour >= 18:
             return today
         return _last_trading_day_on_or_before(today - timedelta(days=1), "KR")
     # US: 미장 종가는 KST 다음날 새벽에 확정 → 어제(KST) 이하 마지막 미 거래일.
@@ -136,6 +151,54 @@ def _local_refresh_state(now_utc: Optional[datetime] = None) -> Optional[dict]:
     return out
 
 
+# market_daily 지수 컬럼 ↔ index_daily 정본 매핑(PR-A 불변식).
+_INDEX_PAIRS: tuple[tuple[str, str], ...] = (
+    ("^KS11", "kospi"), ("^KQ11", "kosdaq"), ("^GSPC", "sp500"), ("^IXIC", "nasdaq"),
+)
+INDEX_MATCH_TOLERANCE = 0.005
+
+
+def check_index_consistency(conn: psycopg.Connection, since: Optional[date] = None) -> dict:
+    """`market_daily` 지수 컬럼이 `index_daily` 정본과 일치하는지 검사(읽기 전용).
+
+    두 테이블은 같은 취득 함수·같은 체결일 키를 쓰므로 **모든 거래일에 diff=0.00이어야
+    한다**. 어긋나면 수집 경로가 갈렸다는 뜻 — 하루 밀림 사고의 조기 경보다.
+    최신일 누락(한쪽에만 행 존재)도 불일치로 잡는다.
+    """
+    since = since or (datetime.now(KST).date() - timedelta(days=30))
+    items: list[dict] = []
+    for index_code, col in _INDEX_PAIRS:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                WITH ix AS (
+                    SELECT asof, close FROM index_daily
+                    WHERE index_code = %s AND asof >= %s
+                )
+                SELECT COALESCE(m.asof, ix.asof) AS asof, m.{col} AS market_val, ix.close AS index_val
+                FROM market_daily m
+                FULL OUTER JOIN ix ON ix.asof = m.asof
+                WHERE COALESCE(m.asof, ix.asof) >= %s
+                  AND (
+                      (m.{col} IS NULL) <> (ix.close IS NULL)
+                      OR abs(m.{col} - ix.close) > %s
+                  )
+                ORDER BY 1
+            """, (index_code, since, since, INDEX_MATCH_TOLERANCE))
+            bad = [dict(r) for r in cur.fetchall()]
+        for b in bad:
+            items.append({
+                "indexCode": index_code, "column": col,
+                "asof": b["asof"].isoformat() if b["asof"] else None,
+                "marketVal": float(b["market_val"]) if b["market_val"] is not None else None,
+                "indexVal": float(b["index_val"]) if b["index_val"] is not None else None,
+            })
+            logger.warning(
+                "지수 정합 위반: %s[%s] market_daily=%s index_daily=%s — 수집 경로가 갈렸다",
+                index_code, b["asof"], b["market_val"], b["index_val"],
+            )
+    return {"consistent": not items, "mismatches": items, "since": since.isoformat()}
+
+
 def build_freshness(conn: psycopg.Connection, now_kst: Optional[datetime] = None) -> dict:
     """테이블×시장 신선도 판정 → data.json freshness 섹션. 스테일은 WARNING 로그."""
     now_kst = now_kst or datetime.now(KST)
@@ -166,11 +229,13 @@ def build_freshness(conn: psycopg.Connection, now_kst: Optional[datetime] = None
                 )
 
     any_stale = any(it["status"] in ("stale", "missing") for it in items)
+    index_check = check_index_consistency(conn)
     return {
         "checkedAt": now_kst.strftime("%Y-%m-%dT%H:%M"),
         "anyStale": any_stale,
         "items": items,
         "localRefresh": _local_refresh_state(),
+        "indexConsistency": index_check,
     }
 
 

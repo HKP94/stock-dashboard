@@ -27,6 +27,7 @@ from typing import Optional
 import psycopg
 
 from src.compute_quant import _market_benchmark
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +273,7 @@ def detect_for_ticker(conn: psycopg.Connection, ticker: str, market: str,
 
 def detect_move_anomalies(conn: psycopg.Connection, asof: Optional[date] = None) -> list[dict]:
     """활성 유니버스 전체 감지(asof 세션 기준). 종목 단위 격리."""
-    asof = asof or date.today()
+    asof = asof or today_kst()
     with conn.cursor() as cur:
         cur.execute("SELECT ticker, market FROM watchlist WHERE active=TRUE ORDER BY ticker")
         universe = [(r["ticker"], r["market"]) for r in cur.fetchall()]

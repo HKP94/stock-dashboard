@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.display_signals import compute_display_signals
+from src.freshness import today_kst
 from src.compute_quant import _market_benchmark  # 신규-A1: 종목 벤치마크 라벨용
 
 # 신규-A1: 베타 벤치마크 코드 → 표시 라벨
@@ -705,7 +706,7 @@ def _build_macro_payload(rows: list[dict], summary_row: dict | None) -> dict:
 
 def _load_macro(conn) -> dict:
     cur = conn.cursor()
-    cutoff = (date.today() - timedelta(days=400)).isoformat()
+    cutoff = (today_kst() - timedelta(days=400)).isoformat()
     cur.execute(
         """
         SELECT indicator_code, indicator_name, region, asof, value, unit, source
@@ -797,7 +798,7 @@ def _load_driver_cards(conn, tickers: list[str]) -> dict[str, list[dict]]:
         codes_by_source.setdefault(row["driver_source"], set()).add(row["driver_code"])
 
     price_rows: dict[str, list[dict]] = {}
-    cutoff = (date.today() - timedelta(days=200)).isoformat()
+    cutoff = (today_kst() - timedelta(days=200)).isoformat()
 
     if codes_by_source["shared_macro"]:
         cur.execute(
@@ -850,7 +851,7 @@ def _build_price_series(ticker: str, conn) -> tuple[list[float], list[float | No
     Returns: (close_series, volume_series)
     """
     cur = conn.cursor()
-    cutoff = (date.today() - timedelta(days=200)).isoformat()
+    cutoff = (today_kst() - timedelta(days=200)).isoformat()
     cur.execute(
         "SELECT date, close, volume FROM prices_daily WHERE ticker=%s AND date>=%s AND close IS NOT NULL ORDER BY date ASC LIMIT 130",
         (ticker, cutoff),
@@ -1611,7 +1612,7 @@ def _group_ticker_context_rows(
     today: date | None = None,
     max_days: int = 30,
 ) -> dict[str, list[dict]]:
-    today = today or date.today()
+    today = today or today_kst()
     cutoff = today - timedelta(days=max_days)
     grouped: dict[str, list[dict]] = {}
 
@@ -1824,7 +1825,7 @@ def _attach_move_anomalies(conn, stocks: list[dict]) -> list[dict]:
     스테일 방지: 오늘−RECENCY_DAYS 이내 asof만 표출(과거 이상치 잔존 차단)."""
     from datetime import date as _date, timedelta as _td
     from src.detect_moves import Z_MAIN, RECENCY_DAYS
-    cutoff = _date.today() - _td(days=RECENCY_DAYS)
+    cutoff = today_kst() - _td(days=RECENCY_DAYS)
     cur = conn.cursor()
     cur.execute(
         """
@@ -2021,7 +2022,7 @@ def build_data() -> dict:
         market = _build_market(conn, regime_info)
 
         # today의 indicators/quant/valuation/analyst/news
-        asof = date.today()
+        asof = today_kst()
         # 가장 최신 데이터 날짜 탐색 (주말·공휴일 보정)
         for delta in range(7):
             check = (asof - timedelta(days=delta)).isoformat()

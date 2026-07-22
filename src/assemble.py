@@ -32,6 +32,7 @@ from src.schemas import (
     StockDailyRecord,
     ValuationView,
 )
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -472,7 +473,7 @@ def assemble_one(
     watchlist에 없거나 비활성이면 None 반환.
     Hermes Q&A 응답·스모크 테스트용.
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     wl = _q_watchlist_one(ticker, conn)
     if not wl:
         logger.debug("%s: watchlist 없음 또는 비활성 — skip", ticker)
@@ -504,7 +505,7 @@ def assemble_daily(
 
     반환값의 신호는 표시 전용이며 주문 실행 경로가 없습니다.
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     watchlist = _q_watchlist(conn)
     tickers = [w["ticker"] for w in watchlist]
     logger.info("assemble_daily: asof=%s 유니버스 %d종목 (bulk)", asof, len(tickers))

@@ -19,6 +19,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from src.db import get_conn, upsert_valuation_xcheck
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ def fetch_krx_fundamentals(
     from pykrx import stock  # 지연 임포트(pykrx 미설치·CI 스킵 대비)
 
     codes = {_krx_code(t) for t in kr_tickers}
-    d = date.today()
+    d = today_kst()
     for _ in range(max_lookback):
         ds = d.strftime("%Y%m%d")
         try:

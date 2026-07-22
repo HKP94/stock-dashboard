@@ -43,6 +43,7 @@ from tenacity import (
 from src.analyst_common import normalize_rating_label_score
 from src.external_timeout import ExternalCallTimeout, run_with_timeout
 from src.schemas import AnalystRow, FundamentalsRow, PriceDailyRow, ValuationRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -427,7 +428,7 @@ def fetch_kr_fundamentals(ticker: str) -> list[FundamentalsRow]:
     _disable_dart_spinner()  # P0: 비-데몬 스피너 스레드 누수 원천 차단(어떤 DART 호출보다 먼저)
     dart.set_api_key(api_key=_get_dart_api_key())
     code = _clean_ticker(ticker)
-    bgn_de = (date.today() - timedelta(days=365 * FS_BGN_YEARS)).strftime("%Y%m%d")
+    bgn_de = (today_kst() - timedelta(days=365 * FS_BGN_YEARS)).strftime("%Y%m%d")
 
     # 기업 검색
     # dart-fss 버전에 따라 find_by_stock_code가 단일 Corp 또는 list[Corp]를 반환한다.
@@ -654,7 +655,7 @@ def fetch_kr_valuation_analyst(
     KR 종목 밸류에이션 + 컨센서스 수집(네이버 + FnGuide). 계좌 불필요·무료.
     반환: (ValuationRow, AnalystRow). 페이지 실패 시 해당 항목 None.
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     code = _clean_ticker(ticker)
 
     naver = _fetch_naver_main(code)

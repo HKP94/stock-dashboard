@@ -70,6 +70,7 @@ from src import pipeline_analysis, pipeline_ingest, pipeline_synthesis
 from src.schemas import StockDailyRecord
 from src.schemas import StockActionAdviceRow
 from src.stock_action_advice import build_action_frame, finalize_concentration_note, grade_fallback_rationale
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ def _step_action_advice(conn: psycopg.Connection, errors: list) -> None:
         stocks_by_ticker = {stock["t"]: stock for stock in data.get("stocks", [])}
         regime = data.get("market", {}).get("overall", "neutral")
         portfolio_snapshot = data.get("portfolio", {}) or {}
-        today = date.today()
+        today = today_kst()
         for ticker in targets:
             if not _within_budget(started_at, GEMINI_BATCH_BUDGET_SECONDS):
                 errors.append({
@@ -220,11 +221,11 @@ def _step_market(conn: psycopg.Connection, errors: list) -> None:
     logger.info("Step 1: 시장 지표 수집")
     try:
         result = run_market_ingest()
-        market_row = result.get("market")
-        if market_row:
+        rows = result.get("markets", [])
+        for market_row in rows:
             upsert_market_daily(conn, market_row)
-            conn.commit()
-            logger.info("Step 1 완료: market_daily upsert 1건 (commit)")
+        conn.commit()
+        logger.info("Step 1 완료: market_daily upsert %d건 (commit)", len(rows))
         errors.extend(result.get("errors", []))
     except Exception as exc:
         conn.rollback()  # abort된 트랜잭션 회복 → 다음 단계 보호
@@ -525,7 +526,7 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
     #           않는다. 중복본은 설계 §9 8단계(dead code 제거)까지 유지한다.
     자동 주문 없음.
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     logger.info("=== run_pipeline(호환 래퍼) 시작 asof=%s ===", asof)
 
     pipeline_ingest.run("daily", asof)

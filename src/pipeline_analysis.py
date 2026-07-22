@@ -44,6 +44,7 @@ from src.pipeline_common import (
     make_error,
     split_kr_us,
 )
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +199,7 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
     """분석 파이프라인 실행. 반환: {status, errors, counts}."""
     if profile not in VALID_PROFILES:
         raise ValueError(f"unknown profile: {profile!r} (allowed: {VALID_PROFILES})")
-    asof = asof or date.today()
+    asof = asof or today_kst()
     errors: list[dict] = []
     counts: dict = {}
     status = "success"

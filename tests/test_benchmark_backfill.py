@@ -58,15 +58,13 @@ def test_upsert_index_daily_uses_index_code_and_asof():
     assert conn.cur.executemany_params == [("^IXIC", date(2026, 6, 19), 19999.1, "yfinance")]
 
 
-def test_fetch_index_history_maps_yfinance_rows():
+def test_fetch_index_history_maps_source_rows():
     from src import ingest_index_history as idx
 
-    hist = pd.DataFrame(
-        {"Close": [3000.0, 3010.5]},
-        index=pd.to_datetime(["2026-06-18", "2026-06-19"]),
-    )
+    # PR-A: 소스가 (체결일, 종가) 시계열을 주고 그대로 index_daily 행이 된다.
+    series = [(date(2026, 6, 18), 3000.0), (date(2026, 6, 19), 3010.5)]
 
-    with patch.object(idx, "_yf_history", return_value=hist):
+    with patch.object(idx, "index_series", return_value=series):
         rows = idx.fetch_index_history("^KS11")
 
     assert [r.index_code for r in rows] == ["^KS11", "^KS11"]

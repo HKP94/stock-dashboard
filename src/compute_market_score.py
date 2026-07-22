@@ -23,6 +23,7 @@ import psycopg
 
 from src.compute_quant import _fetch_index_closes
 from src.schemas import MarketScoreRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ def compute_region_score(
     macro: dict,
     conn: psycopg.Connection,
 ) -> MarketScoreRow:
-    asof = date.today()
+    asof = today_kst()
     subs = {
         "trend": _trend_subscore(bench_df),
         "vol": _vol_subscore(vix),
@@ -219,7 +220,7 @@ def compute_region_score(
 
 def compute_market_scores(conn: psycopg.Connection, asof: Optional[date] = None) -> list[MarketScoreRow]:
     """KR·US 시장 매력도 점수 산출(결정론). index_daily·macro_indicators·정배열율 저장 데이터 사용."""
-    asof = asof or date.today()
+    asof = asof or today_kst()
     macro = _load_macro_latest_prev(conn, asof)
     vix_pair = macro.get("VIX")
     vix = vix_pair[0] if vix_pair else None

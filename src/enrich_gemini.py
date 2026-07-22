@@ -58,6 +58,7 @@ from src.schemas import (
     StockActionAdviceNarrativeOutput,
     TickerContextRow,
 )
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -1124,8 +1125,13 @@ def _get_market_daily_row(
     conn: psycopg.Connection,
     asof: date,
 ) -> Optional[dict]:
-    """오늘 market_daily 레코드. 없으면 None."""
-    sql = "SELECT * FROM market_daily WHERE asof = %s"
+    """asof 이하 **가장 최근** market_daily 레코드. 없으면 None.
+
+    market_daily.asof는 실행일이 아니라 소스 체결일이라(PR-A) 실행 시점에 오늘 행이
+    아직 없을 수 있다(예 06:00 KST — 당일 KR 종가 전). 정확 일치로 조회하면 시황이
+    통째로 스킵되므로 마지막 거래일 행에 붙인다.
+    """
+    sql = "SELECT * FROM market_daily WHERE asof <= %s ORDER BY asof DESC LIMIT 1"
     with conn.cursor() as cur:
         cur.execute(sql, (asof,))
         row = cur.fetchone()
@@ -1239,7 +1245,7 @@ def enrich_news_batch(
     -------
     (enriched_count, errors)
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     reset_run_budget()  # 새 실행 — per-run 호출 카운터·스로틀 초기화
     client = _get_gemini_client()
     model = _get_bulk_model()
@@ -1532,7 +1538,7 @@ def reenrich_stale_fallbacks(
     -------
     (fixed_count, errors)
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     client = _get_gemini_client()
     model = _get_bulk_model()
     errors: list[dict] = []
@@ -1593,7 +1599,7 @@ def extract_analyst_views_batch(
     asof: Optional[date] = None,
 ) -> tuple[int, list[dict]]:
     """최근 애널리스트/증권사 인용 뉴스에서 bull/bear 논거를 추출해 analyst_views에 저장."""
-    asof = asof or date.today()
+    asof = asof or today_kst()
     client = _get_gemini_client()
     model = _get_bulk_model()
     errors: list[dict] = []
@@ -1661,7 +1667,7 @@ def enrich_market_summary(
     -------
     True: 1개 이상 시장 저장 성공 | False: 스킵(데이터 없음) 또는 전부 실패
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
 
     market_row = _get_market_daily_row(conn, asof)
     if not market_row:
@@ -1735,7 +1741,8 @@ def enrich_market_summary(
                 summary_md    = COALESCE(%s, summary_md)
             WHERE asof = %s
             """,
-            (summary_kr, summary_us, combined or None, asof),
+            # 읽은 그 행에 쓴다 — asof는 요청일이지만 행은 마지막 거래일일 수 있다.
+            (summary_kr, summary_us, combined or None, market_row["asof"]),
         )
     logger.info(
         "시황 종합 저장 완료 (KR=%s US=%s)",
@@ -1748,7 +1755,7 @@ def summarize_market_news_digest(
     conn: psycopg.Connection,
     asof: Optional[date] = None,
 ) -> bool:
-    asof = asof or date.today()
+    asof = asof or today_kst()
     grouped_news = _get_market_news_digest_rows(conn)
     if not any(grouped_news.values()):
         logger.warning("market_news 없음 — 시장 뉴스 요약 스킵")
@@ -1779,7 +1786,7 @@ def summarize_macro_environment(
     conn: psycopg.Connection,
     asof: Optional[date] = None,
 ) -> bool:
-    asof = asof or date.today()
+    asof = asof or today_kst()
     snapshot = _get_macro_indicator_snapshot(conn, asof)
     if not snapshot.get("indicators"):
         logger.warning("macro_indicators 없음 — 거시 요약 스킵")

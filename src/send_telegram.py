@@ -27,6 +27,7 @@ import psycopg
 from src.assemble import assemble_daily
 from src.db import get_conn
 from src.schemas import StockDailyRecord
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,7 @@ def format_brief(
     HERMES_PROMPT §2 템플릿을 채워 텔레그램 메시지 문자열 반환.
     4096자 초과 시 뒤부터 자름.
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     wd = _WEEKDAYS[asof.weekday()]
     header = f"📊 ATLAS 아침 브리핑 · {asof.strftime('%Y-%m-%d')} ({wd})\n"
 
@@ -247,7 +248,7 @@ def run_send(conn: psycopg.Connection, asof: Optional[date] = None) -> bool:
         logger.info("텔레그램 보류(비활성) — TELEGRAM_ENABLED 미설정. 발송 스킵.")
         return True
 
-    asof = asof or date.today()
+    asof = asof or today_kst()
     records = assemble_daily(conn, asof=asof)
     market = _q_market_today(conn, asof)
 

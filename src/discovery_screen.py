@@ -21,6 +21,7 @@ from src.db import get_conn, upsert_discovery_screen
 # 장기점수 가중치·블렌드는 Phase B(#82)의 canonical 단일 소스에서 import(로컬 복사 제거).
 # ※ discovery 모멘텀은 가격 프록시(뉴스 sentiment 없음)라 MOMO_SCORE_WEIGHTS는 쓰지 않는다.
 from src.export_dashboard_data import LONG_SCORE_WEIGHTS, _blend
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +232,7 @@ def score_market(rows: list[dict]) -> None:
 
 def run_discovery_screen(conn, markets: tuple[str, ...] = ("US", "KR"), asof: Optional[date] = None) -> dict:
     """유니버스 소싱 → 벌크 지표 → 시장 내부 스코어 → discovery_screen upsert. 요약 반환."""
-    asof = asof or date.today()
+    asof = asof or today_kst()
     # watchlist 플래그용
     with conn.cursor() as cur:
         cur.execute("SELECT ticker FROM watchlist")

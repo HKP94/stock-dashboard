@@ -28,6 +28,7 @@ from tenacity import (
 from src.analyst_common import normalize_rating_label_score
 from src.external_timeout import run_with_timeout
 from src.schemas import AnalystRow, FundamentalsRow, PriceDailyRow, ValuationRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,7 @@ def _yf_info(ticker: str) -> dict:
 def fetch_us_valuation(ticker: str, asof: Optional[date] = None) -> Optional[ValuationRow]:
     """yfinance info로 US 종목 밸류에이션 지표 수집."""
     info = _yf_info(ticker)
-    asof = asof or date.today()
+    asof = asof or today_kst()
 
     roe = _safe_float(info.get("returnOnEquity"))
     roa = _safe_float(info.get("returnOnAssets"))
@@ -277,7 +278,7 @@ def fetch_us_valuation(ticker: str, asof: Optional[date] = None) -> Optional[Val
 def fetch_us_analyst(ticker: str, asof: Optional[date] = None) -> Optional[AnalystRow]:
     """yfinance info로 US 종목 애널리스트 컨센서스 수집."""
     info = _yf_info(ticker)  # ValuationRow와 같은 호출이라 캐시 이점은 없지만 단순성 우선
-    asof = asof or date.today()
+    asof = asof or today_kst()
 
     curr = _safe_float(info.get("currentPrice"))
     target = _safe_float(info.get("targetMeanPrice"))
@@ -321,7 +322,7 @@ def run_us_ingest(tickers: list[str]) -> dict:
     analysts: dict[str, Optional[AnalystRow]] = {}
     errors: list[dict] = []
 
-    today = date.today()
+    today = today_kst()
 
     for ticker in tickers:
         try:

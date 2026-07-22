@@ -38,6 +38,7 @@ from src.db import (
 )
 from src.compute_quant import compute_quant_universe
 from src.schemas import PriceDailyRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def detect_gap_tickers(
         """)
         rows = [dict(r) for r in cur.fetchall()]
 
-    today = date.today()
+    today = today_kst()
     min_required = _required_rows(min_rows, required_years)
     gaps: list[dict] = []
     for r in rows:

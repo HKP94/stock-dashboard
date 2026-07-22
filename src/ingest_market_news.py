@@ -26,6 +26,7 @@ from bs4 import BeautifulSoup
 
 from src.ingest_news import _fetch_rss, _google_news_url, _parse_rfc822
 from src.schemas import MarketNewsRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ def _fetch_fred_rows(today: Optional[date] = None) -> list[MarketNewsRow]:
     key = os.environ.get("FRED_API_KEY")
     if not key:
         return []
-    today = today or date.today()
+    today = today or today_kst()
     rows: list[MarketNewsRow] = []
     for series_id, label in FRED_SERIES.items():
         request_url = (

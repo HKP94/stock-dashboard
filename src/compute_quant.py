@@ -28,6 +28,7 @@ from src.db import get_conn, log_run_finish, log_run_start, upsert_quant_scores
 from src.external_timeout import run_with_timeout
 from src.rules import check_rules
 from src.schemas import QuantScoresRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 YFINANCE_TIMEOUT_SECONDS: float = 20.0
@@ -715,7 +716,7 @@ def compute_quant_universe(
 
     반환값은 표시 전용이며 주문 실행 경로가 없습니다.
     """
-    asof = asof or date.today()
+    asof = asof or today_kst()
     if not tickers:
         return []
 

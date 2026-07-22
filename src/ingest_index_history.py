@@ -10,16 +10,12 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import date, datetime
-from typing import Optional
+from datetime import datetime
 
-import numpy as np
 import pandas as pd
-import yfinance as yf
-from tenacity import before_sleep_log, retry, stop_after_attempt, wait_exponential
 
 from src.db import get_conn, upsert_index_daily
-from src.external_timeout import run_with_timeout
+from src.ingest_market import NAVER_INDEX_SYMBOLS, index_series
 from src.schemas import IndexDailyRow
 
 logger = logging.getLogger(__name__)
@@ -27,46 +23,23 @@ logger = logging.getLogger(__name__)
 BENCHMARK_INDEXES: tuple[str, ...] = ("^KS11", "^KQ11", "^GSPC", "^IXIC")
 DEFAULT_PERIOD = "5y"
 MAX_EXPECTED_BUSINESS_GAP = 5
-YFINANCE_TIMEOUT_SECONDS = 20.0
 
-
-def _safe_float(val) -> Optional[float]:
-    if val is None:
-        return None
-    try:
-        f = float(val)
-        return None if np.isnan(f) else f
-    except (TypeError, ValueError):
-        return None
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    before_sleep=before_sleep_log(logger, logging.WARNING),
-    reraise=True,
-)
-def _yf_history(index_code: str, period: str) -> pd.DataFrame:
-    return run_with_timeout(YFINANCE_TIMEOUT_SECONDS, lambda: yf.Ticker(index_code).history(period=period))
+# 네이버 지수 API는 페이지당 60거래일 — 기간별 대략 페이지 수(5y는 KR 이력 상한에 걸릴 수 있음).
+_NAVER_PAGES = {"1mo": 1, "3mo": 2, "6mo": 3, "1y": 5, "2y": 9, "5y": 22}
 
 
 def fetch_index_history(index_code: str, period: str = DEFAULT_PERIOD) -> list[IndexDailyRow]:
-    df = _yf_history(index_code, period)
-    if df.empty:
+    """지수 일봉 이력. KR=네이버(체결일 정확·CI 안전), US=yfinance."""
+    is_naver = index_code in NAVER_INDEX_SYMBOLS
+    pages = _NAVER_PAGES.get(period, 1) if is_naver else 1
+    series = index_series(index_code, period=period, pages=pages)
+    if not series:
         logger.warning("%s: index history empty", index_code)
         return []
-
-    rows: list[IndexDailyRow] = []
-    seen: set[date] = set()
-    for idx, row in df.iterrows():
-        asof = idx.date() if hasattr(idx, "date") else date.fromisoformat(str(idx)[:10])
-        if asof in seen:
-            continue
-        close = _safe_float(row.get("Close"))
-        if close is None:
-            continue
-        seen.add(asof)
-        rows.append(IndexDailyRow(index_code=index_code, asof=asof, close=close))
+    # source는 실제 취득 소스를 적는다 — KR을 네이버로 바꾸고도 'yfinance'로 남으면
+    # 나중에 출처를 추적할 수 없다(PM 검수에서 실제로 오판을 유발).
+    source = "naver" if is_naver else "yfinance"
+    rows = [IndexDailyRow(index_code=index_code, asof=d, close=c, source=source) for d, c in series]
     logger.info("%s: index history %d rows", index_code, len(rows))
     return rows
 

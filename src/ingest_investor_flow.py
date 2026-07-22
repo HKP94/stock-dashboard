@@ -21,6 +21,7 @@ from typing import Optional
 
 from src.ingest_kr import KRX_HTTP_TIMEOUT_S, _bounded, _clean_ticker
 from src.schemas import InvestorFlowRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ def fetch_investor_flow(
     from pykrx import stock as pykrx_stock
 
     code = _clean_ticker(ticker)
-    today = date.today()
+    today = today_kst()
     fromdate = (today - timedelta(days=lookback_days)).strftime("%Y%m%d")
     todate = today.strftime("%Y%m%d")
 

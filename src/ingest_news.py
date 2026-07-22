@@ -37,6 +37,7 @@ from tenacity import (
 
 from src.external_timeout import run_with_timeout
 from src.schemas import NewsRawRow
+from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ def _parse_naver_date(text: str) -> Optional[datetime]:
     # 'HH:MM' 형식 → 오늘 날짜로 보완
     if len(s) == 5 and s[2] == ":":
         try:
-            today = date.today().strftime("%Y.%m.%d")
+            today = today_kst().strftime("%Y.%m.%d")
             return datetime.strptime(f"{today} {s}", "%Y.%m.%d %H:%M")
         except ValueError:
             pass
@@ -516,7 +517,7 @@ def fetch_finnhub_news(ticker: str, max_items: int = GOOGLE_MAX_ITEMS) -> list[N
     if not key:
         return []
     from datetime import timedelta
-    today = date.today()
+    today = today_kst()
     frm = (today - timedelta(days=14)).isoformat()
     url = (
         f"https://finnhub.io/api/v1/company-news?symbol={ticker}"

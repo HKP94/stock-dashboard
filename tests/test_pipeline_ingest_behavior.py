@@ -45,7 +45,8 @@ WATCHLIST_ROWS = [
 ]
 
 # 외부 수집 함수 fixture (legacy/new 공용)
-MARKET_RESULT = {"market": {"asof": "2026-06-21", "kospi": 2700.0}, "errors": []}
+# PR-A: 수집기는 체결일별 행 목록을 돌려준다(단일 행 → markets 리스트).
+MARKET_RESULT = {"markets": [{"asof": "2026-06-21", "kospi": 2700.0}], "errors": []}
 MACRO_RESULT = {"rows": [{"indicator": "vix", "value": 14.2}], "errors": []}
 DRIVER_RESULT = {"rows": [{"ticker": "AAPL", "driver": "usd", "value": 1.0}], "errors": []}
 KR_RESULT = {
