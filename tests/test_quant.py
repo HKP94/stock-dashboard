@@ -556,3 +556,30 @@ class TestWinsorize:
         # 비이상치들의 상대 순위 단조 보존(T9 > T5 > T1)
         assert s["T9"] > s["T5"] > s["T1"]
         assert s["OUT"] > s["T9"]                           # 극단은 여전히 최상위
+
+
+class TestFscoreThresholdScale:
+    """PR-B 후속: F-Score 사전필터 임계는 **실질 척도**에 맞아야 한다.
+
+    이 구현은 signal 7(주식발행)·8(매출총이익률) 미수집이라 만점이 9가 아닌 7이다.
+    Piotroski 관례값 3(9점 기준)을 그대로 쓰면 전 종목이 최대 2점 손해 보고 과도 제외된다.
+    """
+
+    def test_threshold_matches_effective_max_scale(self):
+        from src.compute_quant import FSCORE_FILTER_THRESHOLD
+        from src.export_dashboard_data import FSCORE_MAX_EFF
+
+        assert FSCORE_MAX_EFF == 7, "미수집 신호가 바뀌면 임계도 재환산해야 한다"
+        # 9점 척도 관례 3 → 7점 척도 비례 환산 3*7/9 ≈ 2.33 → 정수 2
+        assert FSCORE_FILTER_THRESHOLD == round(3 * FSCORE_MAX_EFF / 9), (
+            "임계가 실질 만점과 어긋난다(9점 임계를 7점 척도에 적용하면 과도 제외)"
+        )
+
+    def test_fscore_3_passes_prefilter(self):
+        """fscore=3은 7점 척도에서 중간값 이상 — 탈락시키면 안 된다."""
+        rows = _run_universe(["STRONG"], fscore=3)
+        assert not any("fallback" in f for f in rows[0].flags)
+
+    def test_fscore_2_still_filtered(self):
+        rows = _run_universe(["STRONG"], fscore=2)
+        assert any("fallback" in f for f in rows[0].flags)
