@@ -33,6 +33,8 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 │   ├── ingest_market.py    # 지수/VIX/환율/금리 → market_daily
 │   ├── ingest_index_history.py  # KOSPI/S&P500/NASDAQ 5년 이력 → index_daily (true backtest 비교용)
 │   ├── ingest_portfolio.py # KIS 잔고(또는 선택 옵션) → portfolio*
+│   ├── kb_client.py        # KB증권 Open API 최소 클라이언트(조회 전용·주문 API 화이트리스트 차단)
+│   ├── collect_kb_portfolio.py # KB 잔고 3콜 → portfolio_holdings/cash 전량 스왑(--dry-run)
 │   ├── compute_indicators.py  # SMA/RSI/추세기울기/정배열 (기존 main.py 로직 이식)
 │   ├── compute_quant.py    # 팩터 스코어링 (PRD §F4)
 │   ├── strategies.py       # true/retrospective 전략 레지스트리 (Wave 3)
@@ -124,6 +126,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
 - **US 뉴스 소스**: yfinance.news + **Yahoo Finance RSS**(`feeds.finance.yahoo.com`, 429 시 무재시도 스킵) + **Finnhub**(`FINNHUB_API_KEY` 있을 때만) + Google News RSS(영문 정식명+티커 복수쿼리). KR은 네이버 HTML + Google News RSS. 전부 url_hash dedupe·종목격리.
 - **시장 뉴스 소스**: MarketWatch RSS(US), 한국경제 RSS(KR), 매일경제 공개 RSS(file.mk 경로, KR), Google News RSS 시장 쿼리(KR/US/Global), FRED API(`FRED_API_KEY` 있을 때만)를 사용한다. 소스별 실패는 로그만 남기고 전체 실행은 계속한다.
 - **텔레그램은 보류(비활성)**. `TELEGRAM_ENABLED=false`(기본)면 `send_telegram.run_send`가 no-op 성공. 살리려면 PRD §F5 메모 참고(플래그 true + 워크플로 step 주석 해제).
+- **KB증권 Open API = 조회 전용·로컬 전용·전량 스왑(F1 잔고 자동화)**: `kb_client.py`는 **화이트리스트(`ALLOWED_APIS`)에 있는 조회 API만** 호출한다 — 주문·정정·취소 계열(SSAM*/SKAM*/SPAO*)은 `KBOrderAPIBlocked`로 물리 차단하며 **화이트리스트에 절대 추가하지 않는다**(회귀 테스트 `tests/test_kb_portfolio.py::TestOrderAPIBlocked`). 키(`KB_APP_KEY`/`KB_APP_SECRET`)는 **로컬 `.env`만** — GitHub Secrets·CI 워크플로에 올리지 않는다(그래서 배선도 `scripts/local_refresh.py`에만 있고 auto_run/news_refresh에는 없다). ★**명세 엑셀(`~/atlas/kb-api/KB_OpenAPI_명세_전체77.xlsx`)의 INPUT/OUTPUT 표는 `dataBody` 안쪽만 기술한다** — 실제 전문은 `{"dataHeader":{...},"dataBody":{...}}` 봉투이고(평면 body는 500 `E021`), 조회 API의 dataHeader에는 **ipAddr·macAddr가 필수**, 응답 `dataHeader.processFlag`가 `A`(정상, **조회 0건 포함**)/`B`(업무오류)다. **KOSPI/KOSDAQ 판별은 추가 호출 없이** 잔고 응답의 `is_dtl_typ_cd`(11=상장주식→`.KS`, 12=코스닥주식→`.KQ`, 10=코넥스)로 한다(watchlist·기존보유 매핑이 우선). `collect_kb_portfolio`는 **KB 응답을 진실원본**으로 보고 `portfolio_holdings`를 전량 스왑한다(KB에 없는 행 제거=매도 반영) — 단 **보유 0건이면 삭제·upsert를 전면 스킵**하고 WARNING(API 장애 시 DB 전멸 방지), **티커 미해결이 있으면 삭제만 스킵**(못 읽은 보유를 매도로 오인 방지). 소수점 보유(`hld_q_p6`)는 정수분과 합산하되 평가금액÷현재가로 교차검증한다(계좌에 따라 p6가 전체수량인 경우의 이중계상 방지). 실적용 전 반드시 `python -m src.collect_kb_portfolio --dry-run`으로 diff 확인.
 - **포트폴리오 총자산 = 보유종목 평가액 + 현금**(둘 다 KRW 환산). 현금=`portfolio_cash`(통화별), `compute_portfolio`가 `cash_total`/`asset_total`을 snapshot payload에 저장.
 - **총자산 표시는 단일 경로**: 오버뷰·포트폴리오 모두 `portfolio_snapshot.payload.asset_total`을 공용 `portfolioAssetTotal`로 표시한다. 구형 export만 `total_eval + cash_total` 폴백을 허용한다.
 - **관심종목 active 토글**: 제외는 하드딜리트가 아니라 `watchlist.active=false`(데이터 보존). export/quant/recompute는 **active=TRUE만** 대상. 신규 추가는 `backfill_single`로 그 종목만 가격+지표+퀀트 백필(local_api 백그라운드).
