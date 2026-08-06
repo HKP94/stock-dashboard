@@ -793,6 +793,12 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [ ] **④ 크론 감시**: GitHub cron 상습 지연·미실행 탐지(news_refresh +2~5h 지연 관측).
 - [ ] **수집 53분 흡수**: 06시 수집 병목(KRX 재로그인/yfinance/DART) 진단·완화.
 
+### KB증권 Open API 트랙
+- [⏸] **1단계 잔고 자동화** (브랜치 `feat/kb-portfolio-sync`, commit 9c1866e, **머지 보류**): `kb_client` + `collect_kb_portfolio`(SSQM2952·SPQM2226·SSQM0004 → `portfolio_holdings`/`portfolio_cash` 전량 스왑, `--dry-run`). **보류 사유**: 오픈베타 제약으로 실투자 계좌를 앱키에 연결할 수 없어 검증 게이트 ①~③ 통과 불가. 계좌 연결이 풀리면 dry-run부터 즉시 재개(브랜치 보존).
+- [x] **2단계 수급 파일럿** (2026-08-07): IVU10430(종목별 투자자 매매동향, **계좌 무관**) 정합 검증. 5종목×5거래일 KB vs pykrx vs 실DB 3자 대조 → **75/75셀 일치**(관례차 보정 후). 관례차 2건 확정: 단위 백만원(×1e6), 외국인 = `fgnr + ntv_fgnr`. 12분류 상세 실충전 확인. DB 쓰기·스키마 변경 없음(검증 전용).
+- [ ] **2단계 CI 호출 시험**: `.github/workflows/kb_api_probe.yml`(수동 dispatch). 도달성 시험은 키 불필요, 인증 1콜은 KPH의 Secret 등록 후. **전제**: 실계좌 연결 시점에 키 로테이트 또는 시세용/계좌용 앱 분리.
+- [ ] **통합 판단**: 파일럿 결과 기반 pykrx 대체/병행 결정 후 별도 PR.
+
 ### 판단 기록 쓰기 경로 (신규, MCP 대화 결론 영속화)
 - [ ] **판단 기록 쓰기 설계·구현**: Claude 웹 대화 결론을 `stock_notes`/`stock_note_history`/`manual_research_*`에 남겨 새 세션이 DB로 컨텍스트 승계. **형식·3축 매핑 선행 설계** 후 구현. 자동 수집 테이블은 읽기 전용(§0 MCP 경계).
 
@@ -813,6 +819,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 
 ---
 *변경 이력:*
+- *v6.9 (2026-08-07) KB증권 Open API 2단계 수급 파일럿(IVU10430) — 검증 전용, DB 쓰기·스키마 변경 없음: `src/kb_client.py`(1단계에서 가져옴, `ALLOWED_APIS`에 `ivu10430` 추가 — 조회 전용·주문가드 불변, rate limit 관찰용 `LAST_RESPONSE` 헤더 캡처) + `scripts/kb_supply_pilot.py`(3자 대조 리포트) + `.github/workflows/kb_api_probe.yml`(수동 dispatch 전용, cron 없음). **정합 결과: 5종목(삼성전자·현대해상·SK하이닉스·효성중공업·미코)×5거래일×3투자자 = 75셀 전부 일치**(허용 잔차 ±100만원=백만원 반올림). ★관례차 2건 확정 — ① 단위: KB=백만원 vs pykrx/investor_flow=원(×1e6), ② 외국인 정의: KB `fgnr` ≠ pykrx `외국인합계`이며 `fgnr + ntv_fgnr`(내외국인)이라야 일치(대형주에서 fgnr 단독은 수십억~수백억 어긋남). 확정치(`mtrl_clsf='0'`)만 사용, 추정치 제외. 12분류 상세는 실충전 확인(삼성·하이닉스 11/12, 효성 10/12, 현대해상 9/12, 미코 5/12 — 소형주일수록 희소) 및 기관합계 = 상세 7항목 합 검증 통과. rate limit: 5콜+토큰1콜에서 429·차단 0건, 응답 0.09~1.27s, **한도 정보 응답 헤더 없음**. CI 호출 가능성은 워크플로 제공(키 없는 도달성 시험 + Secret 등록 시 인증 1콜) — 실행은 Secret 등록·main 랜딩 후. 단위테스트 +24(주문가드·봉투·관례차 회귀). 1단계(잔고)는 계좌 연결 불가로 보류, 본 브랜치는 그와 독립(base main) — Claude Code.*
 - *v6.8 (2026-06-29) 신규-F 신호 적중률 추적 구현: A2 등급(매수/관망/축소)의 §F7 전향 자기검증 틀. 결정론 계산(네트워크·LLM 없음). signal_grade_track 테이블(signal_type/ticker/asof/n_days UNIQUE, pending 플래그), compute_signal_track.py(resolve_entry_exit: asof 다음 거래일 진입·N 거래일 후 청산, compute_returns: raw/bench/excess+hit, hit_excess: 초과수익 기준·NEUTRAL_BAND=10%, spearman_ic: scipy Spearman IC+p_value, compute_accuracy_summary: export용 요약), db.upsert_signal_grade_track, pipeline_analysis daily 마지막 단계 편입(비치명적), export signalAccuracy(n>=30이면 notnull·미달이면 null·데이터 축적 대기). 단위테스트 +31(639 passed). 통계적 겸손: n<10 참고불가·n<30 추세만·n>=30 기본. E1/E2/5-B 확장은 signal_type 컬럼으로 동일 틀 재사용 — Claude Code.*
 - *v6.7 (2026-06-28) 신규-A2 매력도 3축 종합 등급 구현: 3축(퀀트·컨센서스·내 판단) 위에 명확한 등급(매수/관망/축소) 결론 레이어. derive_grade가 결정론으로 축을 강/중/약 레벨화(임계=AxesCard._level 동일) 후 방향 정렬 패턴에서 등급+신뢰도+근거 도출 — 단일 점수 합산 금지(방향 투표). 시장점수(5-B)·베타(A1)는 퀀트 축 경로로만·비대칭(약세+고베타 보수화/강세 미상향). stock_action_advice grade/grade_confidence/grade_basis ADD COLUMN(라이브 멱등)·schema·db upsert·양 파이프라인 row·export 반영. LLM 등급 해설 가드(생성 금지)+결정론 폴백. 종목상세 등급=상위 결론 헤드라인+통합 카드, 횡단면 display_signals는 퀀트 축 내부로 강등(중복 제거). 스크리너 등급 컬럼+매수만 필터+등급순 정렬. GradeBadge 신규. 부수: export up(상승여력) 분수→퍼센트 버그 수정(컨센서스 축 구조적 '낮음' 근본원인). 단위테스트 +17(549 passed)·npm 22·build OK. 스모크: 매수 8/관망 38/축소 2, 충돌→관망·정렬→매수 검증 — Claude Code.*
 - *v6.6 (2026-06-26) 신규-A2 매력도 3축 종합 등급 설계(문서만): 매력도 3축(퀀트·컨센서스·내 판단)을 통합 카드로 묶어 명확한 등급(매수/관망/축소·결정론·★핵심)+3축 종합 해설(LLM)+3축 괴리 식별(결정론)을 산출하는 설계 문서. KPH 강조 "매매 기준 되는 명확한 추천". 단일 통합점수 금지 — 등급은 축 방향(강/중/약) 정렬 패턴(방향 투표, 값 합산 아님)에서 규칙 테이블로 도출, 임계는 기존 AxesCard._level 재사용. 시장점수(5-B)·베타(A1)는 퀀트 축 경로로만(약세장+고베타 보수화·비대칭, 다른 축 불변·composite 미합산). 저장은 stock_action_advice 컬럼 확장(grade/grade_confidence/grade_basis, 신규 테이블 없음). LLM 등급 근거 해설만(숫자·등급 생성 금지). 발굴=스크리너 등급 정렬·필터. §F7 진짜 계산, 등급=종합 단계 편입. 구현은 승인 후 별도. 코드 변경 없음 — Claude Code.*

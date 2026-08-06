@@ -1,0 +1,61 @@
+name: KB API CI 호출 가능성 시험 (수동, 파일럿)
+
+# [KB API 2단계] 목적: KB Open API가 GitHub Actions 러너에서 호출되는지 확인한다.
+#
+# 배경: KRX는 CI(미국 데이터센터 IP)를 지오/방화벽 차단해 investor_flow 수집이 로컬 launchd에
+# 묶여 있다(CLAUDE.md §KRX 로그인은 CI에서 차단됨). KB는 자체 서버라 무관하다는 가설을 시험한다.
+#
+# ★ cron 없음 — workflow_dispatch 수동 1회 전용. DB에 쓰지 않는다(조회·리포트만).
+# ★ 주문 API는 kb_client 화이트리스트가 물리 차단 — 이 워크플로도 조회만 한다.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # §8 Secrets 등록 ≠ CI 전달 — job env에 명시 배선해야 os.getenv가 읽는다.
+    env:
+      KB_APP_KEY:    ${{ secrets.KB_APP_KEY }}
+      KB_APP_SECRET: ${{ secrets.KB_APP_SECRET }}
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.12 세팅
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 의존성 설치 (경량 — requirements 전체 불필요)
+        run: pip install requests
+
+      - name: 러너 출구 IP 기록 (차단 진단용)
+        run: curl -s --max-time 10 https://api.ipify.org || echo "(IP 조회 실패)"
+
+      - name: Secret 배선 확인 (§8, 값 노출 없이 길이만)
+        run: |
+          python - <<'PY'
+          import os
+          for name in ("KB_APP_KEY", "KB_APP_SECRET"):
+              v = os.environ.get(name, "")
+              print(f"{name}: {'설정됨(len=%d)' % len(v) if v else '미설정 — KPH가 GitHub Secret 등록 필요'}")
+          PY
+
+      # 1) 키 없이도 판별되는 핵심 시험 — 연결 실패면 KRX와 동일한 IP 차단.
+      - name: 1) 네트워크 도달성 (키 불필요)
+        run: python scripts/kb_supply_pilot.py --reachability
+
+      # 2) Secret이 등록된 경우에만 실제 수급 API 1콜.
+      - name: 2) IVU10430 인증 1콜 (Secret 등록 시에만)
+        if: env.KB_APP_KEY != ''
+        run: python scripts/kb_supply_pilot.py --kb-only
+
+      - name: Secret 미등록 안내
+        if: env.KB_APP_KEY == ''
+        run: |
+          echo "KB_APP_KEY Secret 미등록 → 인증 1콜은 건너뜀(도달성 시험 결과만 유효)."
+          echo "등록: gh secret set KB_APP_KEY / gh secret set KB_APP_SECRET"
