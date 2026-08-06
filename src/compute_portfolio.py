@@ -19,7 +19,7 @@ from typing import Optional
 
 import psycopg
 
-from src.db import get_conn
+from src.db import get_conn, latest_usdkrw
 from src.freshness import today_kst
 
 logger = logging.getLogger(__name__)
@@ -50,13 +50,8 @@ def _load_holdings(conn: psycopg.Connection) -> list[dict]:
 
 
 def _get_usdkrw(conn: psycopg.Connection) -> Optional[float]:
-    """market_daily 최신 USD/KRW 환율. 없으면 None."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT usdkrw FROM market_daily WHERE usdkrw IS NOT NULL ORDER BY asof DESC LIMIT 1"
-        )
-        row = cur.fetchone()
-    return float(row["usdkrw"]) if row else None
+    """USD/KRW 환율. R6: 표시(export)와 동일 소스를 쓰도록 db.latest_usdkrw로 단일화."""
+    return latest_usdkrw(conn)
 
 
 def _load_cash(conn: psycopg.Connection) -> dict[str, float]:

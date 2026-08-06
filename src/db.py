@@ -18,7 +18,7 @@ import logging
 import os
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Generator
+from typing import Generator, Optional
 
 import psycopg
 from psycopg.rows import dict_row
@@ -764,6 +764,24 @@ def upsert_portfolio_snapshot(conn: psycopg.Connection, row: PortfolioSnapshotRo
             (row.asof, row.total_value, row.total_cost, row.total_pnl, row.cash, _to_json(row.payload)),
         )
     logger.debug("upsert_portfolio_snapshot: asof=%s", row.asof)
+
+
+def latest_usdkrw(conn: psycopg.Connection) -> Optional[float]:
+    """
+    USD/KRW 환율의 **단일 소스** — market_daily의 최신 non-null asof 값.
+
+    R6: 표시(export)와 계산(compute_portfolio)이 서로 다른 방식으로 환율을 읽으면 화면 환율과
+    포트폴리오 원화 평가가 어긋난다. `market_daily`는 시장별 부분 휴장 행이 남고 숫자도 COALESCE
+    upsert라 **최신 행의 usdkrw가 NULL일 수 있으므로**(실측 6행), 반드시 `usdkrw IS NOT NULL`
+    조건으로 최신을 골라야 한다 — 최신 '행'의 컬럼을 그대로 읽으면 조용히 '—'가 되거나
+    계산에서 USD 포지션이 통째로 빠진다.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT usdkrw FROM market_daily WHERE usdkrw IS NOT NULL ORDER BY asof DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+    return float(row["usdkrw"]) if row else None
 
 
 def upsert_market_daily(conn: psycopg.Connection, row: MarketDailyRow) -> None:

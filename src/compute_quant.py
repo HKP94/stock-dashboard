@@ -176,9 +176,19 @@ def _kosdaq_codes() -> set[str]:
 
 
 def _market_benchmark(ticker: str, market: str) -> str:
-    """종목의 벤치마크 지수 코드. US→^GSPC, KR→^KQ11(코스닥)·^KS11(코스피 기본)."""
+    """
+    종목의 벤치마크 지수 코드. US→^GSPC, KR→^KQ11(코스닥)·^KS11(코스피 기본).
+
+    R4: **`.KQ` 접미사를 1차 판정 근거로 삼는다** — 티커 접미사가 실제 상장시장을 뜻한다는
+    관례(CLAUDE.md)와 벤치마크 판정을 한 소스로 묶기 위함. `_KOSDAQ_DEFAULT` allowlist는
+    과거에 `.KS`로 잘못 저장된 코스닥 종목(미코·덕산네오룩스·뷰노)을 위한 하위호환으로 유지한다
+    — 신규 코스닥 종목마다 allowlist를 손대야 했던 드리프트(뉴프렉스·파두가 코스피 벤치마크로
+    베타 계산될 뻔한 경로)를 접미사 판정이 구조적으로 막는다.
+    """
     if market == "US":
         return "^GSPC"
+    if ticker.upper().endswith(".KQ"):
+        return "^KQ11"
     code = ticker.split(".")[0]
     return "^KQ11" if code in _kosdaq_codes() else "^KS11"
 

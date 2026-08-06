@@ -29,6 +29,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from src.db import latest_usdkrw
 from src.display_signals import compute_display_signals
 from src.freshness import today_kst
 from src.compute_quant import _market_benchmark  # 신규-A1: 종목 벤치마크 라벨용
@@ -487,7 +488,7 @@ def _detect_regime(conn) -> dict:
     kospi     = _f(latest["kospi"])
     sp500     = _f(latest["sp500"])
     vix       = _f(latest["vix"])
-    usdkrw    = _f(latest["usdkrw"])
+    usdkrw    = latest_usdkrw(conn)  # R6: 최신 non-null asof — 표시·계산 단일 소스
 
     # 이동평균(200일≈취득 가능 최대값)
     kospi_vals = [_f(r["kospi"]) for r in rows if _f(r["kospi"]) is not None]
@@ -569,7 +570,9 @@ def _build_market(conn, regime_info: dict) -> dict:
 
     ko  = _f(latest["kospi"]);  kq = _f(latest["kosdaq"])
     sp  = _f(latest["sp500"]);  nq = _f(latest["nasdaq"])
-    vx  = _f(latest["vix"]);    kw = _f(latest["usdkrw"]);  t10 = _f(latest["ust10y"])
+    # R6: 환율만 '최신 non-null asof'(db.latest_usdkrw) — 최신 행의 usdkrw가 NULL이면
+    # 화면이 조용히 '—'가 되고 포폴 계산(compute_portfolio)과도 어긋난다. 나머지 지수는 최신 행 그대로.
+    vx  = _f(latest["vix"]);    kw = latest_usdkrw(conn);   t10 = _f(latest["ust10y"])
     summary_md    = latest["summary_md"] or ""
     summary_kr_md = latest["summary_kr_md"] or ""
     summary_us_md = latest["summary_us_md"] or ""
