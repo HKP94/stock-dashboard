@@ -1200,6 +1200,25 @@ def _build_strategy_constituents(conn) -> dict:
                               "items": _top("composite", None)}
     return out
 # ── Phase C: 발굴 스크린(관심종목 밖) 로드 ────────────────────────────────
+def _load_recent_earnings(conn, days: int = 14) -> list[dict]:
+    """R7: 최근 발표 결과(컨센 대비 서프라이즈). 표시·판단 참고용 — 점수 소급 반영 금지."""
+    from src.freshness import today_kst
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT ticker, fiscal_period, scheduled_date, consensus_eps, actual_eps, surprise_pct
+          FROM earnings_calendar
+         WHERE reported AND actual_eps IS NOT NULL AND scheduled_date >= %s
+         ORDER BY scheduled_date DESC, ticker
+        """,
+        (today_kst() - timedelta(days=days),),
+    )
+    return [
+        {**dict(r), "scheduled_date": r["scheduled_date"].isoformat()}
+        for r in cur.fetchall()
+    ]
+
+
 def _load_discovery(conn, top_n: int = 12) -> dict | None:
     """discovery_screen 최신 asof → 시장별 장기·모멘텀 상위 N(in_watchlist=false만)."""
     cur = conn.cursor()
@@ -2509,6 +2528,20 @@ def build_data() -> dict:
         except Exception as _exc:
             logger.warning("freshness 요약 실패(비치명적): %s", _exc)
 
+        # R7: 향후 2주 실적 일정(+최근 발표 결과). 표시·조회 전용 — §F7 점수 소급 반영 금지.
+        earnings = None
+        try:
+            from src.ingest_earnings import upcoming_earnings
+            earnings = {
+                "upcoming": [
+                    {**r, "scheduled_date": r["scheduled_date"].isoformat()}
+                    for r in upcoming_earnings(conn)
+                ],
+                "recent": _load_recent_earnings(conn),
+            }
+        except Exception as _exc:
+            logger.warning("실적 캘린더 요약 실패(비치명적): %s", _exc)
+
         # Phase C: 발굴 스크린(관심종목 밖). 없으면 None(비치명적).
         discovery = None
         try:
@@ -2546,6 +2579,7 @@ def build_data() -> dict:
             "signalAccuracy": signal_accuracy,   # 신규-F: n>=30 이전엔 null
             "freshness":  freshness,             # 데이터 신뢰성 ①: 테이블×시장 신선도(배너용)
             "discovery":  discovery,             # Phase C: 관심종목 밖 발굴 스크린(장기·모멘텀 상위)
+            "earnings":   earnings,              # R7: 향후 2주 실적 일정 + 최근 발표 결과(표시 전용)
             "research":   {
                 "files": {}, "notes": {},
                 "tags": ["매수후보", "관망", "리스크주의", "장기보유", "분할매수", "비중축소"],

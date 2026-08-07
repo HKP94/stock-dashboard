@@ -766,6 +766,43 @@ def upsert_portfolio_snapshot(conn: psycopg.Connection, row: PortfolioSnapshotRo
     logger.debug("upsert_portfolio_snapshot: asof=%s", row.asof)
 
 
+def upsert_earnings_calendar(conn: psycopg.Connection, rows: list[dict]) -> None:
+    """
+    R7: earnings_calendar upsert (ticker, fiscal_period).
+
+    실적 결과(actual_eps·surprise_pct)와 컨센서스는 **COALESCE로 기존값 보존** — 소스가
+    한쪽만 주는 경우(DART는 컨센 없음, earnings_dates는 컨센 매출 없음)에 이미 채워둔 값을
+    NULL로 덮어쓰지 않게 한다. reported는 한 번 true면 되돌리지 않는다(OR).
+    """
+    sql = """
+        INSERT INTO earnings_calendar
+            (ticker, fiscal_period, scheduled_date, confirmed, reported,
+             consensus_eps, consensus_rev, actual_eps, surprise_pct, source, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+        ON CONFLICT (ticker, fiscal_period) DO UPDATE SET
+            -- 이미 발표(실제 접수일)된 행을 '예상 기한' 추정치로 되돌리지 않는다(KR 추정행 주의).
+            scheduled_date = CASE
+                WHEN earnings_calendar.reported AND NOT EXCLUDED.reported
+                THEN earnings_calendar.scheduled_date ELSE EXCLUDED.scheduled_date END,
+            confirmed      = EXCLUDED.confirmed OR earnings_calendar.confirmed,
+            reported       = EXCLUDED.reported OR earnings_calendar.reported,
+            consensus_eps  = COALESCE(EXCLUDED.consensus_eps, earnings_calendar.consensus_eps),
+            consensus_rev  = COALESCE(EXCLUDED.consensus_rev, earnings_calendar.consensus_rev),
+            actual_eps     = COALESCE(EXCLUDED.actual_eps,    earnings_calendar.actual_eps),
+            surprise_pct   = COALESCE(EXCLUDED.surprise_pct,  earnings_calendar.surprise_pct),
+            source         = EXCLUDED.source,
+            updated_at     = now()
+    """
+    with conn.cursor() as cur:
+        cur.executemany(sql, [
+            (r["ticker"], r["fiscal_period"], r["scheduled_date"], r["confirmed"], r["reported"],
+             r.get("consensus_eps"), r.get("consensus_rev"), r.get("actual_eps"),
+             r.get("surprise_pct"), r["source"])
+            for r in rows
+        ])
+    logger.debug("upsert_earnings_calendar: %d rows", len(rows))
+
+
 def latest_usdkrw(conn: psycopg.Connection) -> Optional[float]:
     """
     USD/KRW 환율의 **단일 소스** — market_daily의 최신 non-null asof 값.

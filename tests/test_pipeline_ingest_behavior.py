@@ -26,6 +26,9 @@ from tests.test_pipeline_behavior_baseline import (
     _normalize_snapshot,
 )
 
+EARNINGS_RESULT = {"counts": {"us": 0, "kr": 0, "kr_expected": 0, "tickers": 0},
+                   "refetch": [], "errors": []}
+
 # 비교 대상 9개 수집 테이블 (설계 §8)
 INGEST_TABLES = [
     "market_daily",
@@ -154,6 +157,9 @@ def _new_ingest_writes(profile: str) -> dict:
         stack.enter_context(patch.object(PI.ingest_us, "run_us_ingest", lambda _t: US_RESULT))
         stack.enter_context(patch.object(PI.ingest_news, "run_news_ingest", lambda _t, company_names: NEWS_RESULT))
         stack.enter_context(patch.object(PI.ingest_market_news, "run_market_news_ingest", lambda: MARKET_NEWS_RESULT))
+        # R7 실적 캘린더는 legacy에 없는 신규 단계 → 이 베이스라인 비교 대상 밖으로 격리.
+        # (미패치 시 실제 yfinance/DART를 때리고 refetch가 fundamentals를 써서 스냅샷이 오염된다)
+        stack.enter_context(patch.object(PI.ingest_earnings, "run_earnings_ingest", lambda _c, _w: EARNINGS_RESULT))
         stack.enter_context(patch.object(PI.ingest_kr, "fetch_kr_prices", lambda _t: KR_PRICE_ROWS))
         stack.enter_context(patch.object(PI.ingest_us, "fetch_us_prices", lambda _t: US_PRICE_ROWS))
         stack.enter_context(patch.object(PI.db, "get_conn", lambda: conn))
@@ -186,6 +192,9 @@ def _run_daily_capturing_counts() -> dict:
         stack.enter_context(patch.object(PI.ingest_us, "run_us_ingest", lambda _t: US_RESULT))
         stack.enter_context(patch.object(PI.ingest_news, "run_news_ingest", lambda _t, company_names: NEWS_RESULT))
         stack.enter_context(patch.object(PI.ingest_market_news, "run_market_news_ingest", lambda: MARKET_NEWS_RESULT))
+        # R7 실적 캘린더는 legacy에 없는 신규 단계 → 이 베이스라인 비교 대상 밖으로 격리.
+        # (미패치 시 실제 yfinance/DART를 때리고 refetch가 fundamentals를 써서 스냅샷이 오염된다)
+        stack.enter_context(patch.object(PI.ingest_earnings, "run_earnings_ingest", lambda _c, _w: EARNINGS_RESULT))
         stack.enter_context(patch.object(PI.db, "get_conn", lambda: conn))
         stack.enter_context(patch.object(PI.db, "log_run_start", lambda _c, kind: 1))
         stack.enter_context(patch.object(PI.db, "log_run_finish", lambda _c, run_id, status, errors: None))
@@ -270,6 +279,9 @@ def test_run_kind_is_pipeline_ingest():
         stack.enter_context(patch.object(PI.ingest_us, "run_us_ingest", lambda _t: US_RESULT))
         stack.enter_context(patch.object(PI.ingest_news, "run_news_ingest", lambda _t, company_names: NEWS_RESULT))
         stack.enter_context(patch.object(PI.ingest_market_news, "run_market_news_ingest", lambda: MARKET_NEWS_RESULT))
+        # R7 실적 캘린더는 legacy에 없는 신규 단계 → 이 베이스라인 비교 대상 밖으로 격리.
+        # (미패치 시 실제 yfinance/DART를 때리고 refetch가 fundamentals를 써서 스냅샷이 오염된다)
+        stack.enter_context(patch.object(PI.ingest_earnings, "run_earnings_ingest", lambda _c, _w: EARNINGS_RESULT))
         stack.enter_context(patch.object(PI.db, "get_conn", lambda: conn))
         stack.enter_context(patch.object(PI.db, "log_run_start", lambda _c, kind: captured.setdefault("kind", kind) or 1))
         stack.enter_context(patch.object(PI.db, "log_run_finish", lambda _c, run_id, status, errors: captured.setdefault("status", status)))
@@ -291,6 +303,9 @@ def test_partial_status_exit_code_0():
         stack.enter_context(patch.object(PI.ingest_us, "run_us_ingest", lambda _t: US_RESULT))
         stack.enter_context(patch.object(PI.ingest_news, "run_news_ingest", lambda _t, company_names: NEWS_RESULT))
         stack.enter_context(patch.object(PI.ingest_market_news, "run_market_news_ingest", lambda: MARKET_NEWS_RESULT))
+        # R7 실적 캘린더는 legacy에 없는 신규 단계 → 이 베이스라인 비교 대상 밖으로 격리.
+        # (미패치 시 실제 yfinance/DART를 때리고 refetch가 fundamentals를 써서 스냅샷이 오염된다)
+        stack.enter_context(patch.object(PI.ingest_earnings, "run_earnings_ingest", lambda _c, _w: EARNINGS_RESULT))
         stack.enter_context(patch.object(PI.db, "get_conn", lambda: conn))
         stack.enter_context(patch.object(PI.db, "log_run_start", lambda _c, kind: 1))
         stack.enter_context(patch.object(PI.db, "log_run_finish", lambda _c, run_id, status, errors: None))

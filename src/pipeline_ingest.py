@@ -31,7 +31,8 @@ import psycopg
 
 from src import db
 from src import (ingest_drivers, ingest_index_history, ingest_investor_flow, ingest_kr, ingest_macro,
-                 ingest_market, ingest_market_news, ingest_news, ingest_us)
+                 ingest_earnings, ingest_market, ingest_market_news, ingest_news,
+                 ingest_us)
 from src.pipeline_common import (
     PROFILE_DAILY,
     PROFILE_REFRESH,
@@ -58,6 +59,7 @@ DAILY_STEPS = (
     "ingest_news",
     "ingest_market_news",
     "investor_flow",        # E-2: KR 투자자 수급 (KR만)
+    "earnings",             # R7: 실적 캘린더 + 발표 경과분 fundamentals 재수집
 )
 REFRESH_STEPS = (
     "price_refresh",
@@ -156,6 +158,40 @@ def _ingest_us(conn: psycopg.Connection, us_tickers: list[str], errors: list, co
         conn.rollback()
         logger.error("US 수집 실패: %s", exc, exc_info=True)
         errors.append(make_error("ingest_us", exc))
+
+
+def _ingest_earnings(conn: psycopg.Connection, watchlist: list[dict], errors: list, counts: dict) -> None:
+    """
+    R7: 실적 캘린더 갱신 + **발표 경과분만** fundamentals 재수집(T+1 트리거).
+
+    전체 재수집 금지 — `tickers_needing_refetch`가 "발표는 끝났는데 그 분기가 아직
+    fundamentals에 없는" 종목만 준다. 소스(yfinance) 지연으로 이번에 못 받으면 다음
+    실행에서 다시 후보가 되므로 자연히 재시도된다.
+    """
+    logger.info("수집: 실적 캘린더")
+    try:
+        result = ingest_earnings.run_earnings_ingest(conn, watchlist)
+        counts["earnings_calendar"] = result["counts"]["us"] + result["counts"]["kr"]
+        errors.extend(result.get("errors", []))
+    except Exception as exc:
+        conn.rollback()
+        logger.error("실적 캘린더 실패: %s", exc, exc_info=True)
+        errors.append(make_error("earnings_calendar", exc))
+        return
+
+    refetch = [t for t in result.get("refetch", []) if not t.endswith((".KS", ".KQ", ".KR"))]
+    if not refetch:
+        return
+    logger.info("실적 T+1 재수집: %d종목 %s", len(refetch), refetch)
+    try:
+        us_result = ingest_us.run_us_ingest(refetch)
+        _store_security_ingest(conn, us_result, counts)
+        conn.commit()
+        errors.extend(us_result.get("errors", []))
+    except Exception as exc:
+        conn.rollback()
+        logger.error("실적 T+1 재수집 실패: %s", exc, exc_info=True)
+        errors.append(make_error("earnings_refetch", exc))
 
 
 def _store_security_ingest(conn: psycopg.Connection, result: dict, counts: dict) -> None:
@@ -287,6 +323,7 @@ def run(profile: str, asof: Optional[date] = None) -> dict:
                 _ingest_news(conn, all_tickers, errors, counts)
                 _ingest_market_news(conn, errors, counts)
                 _ingest_investor_flow(conn, kr_tickers, errors, counts)  # E-2
+                _ingest_earnings(conn, watchlist, errors, counts)         # R7
             else:  # PROFILE_REFRESH
                 _ingest_refresh_prices(conn, watchlist, errors, counts)
                 _ingest_news(conn, all_tickers, errors, counts)
