@@ -865,12 +865,6 @@ def _build_price_series(ticker: str, conn) -> tuple[list[float], list[float | No
     return closes, volumes
 
 
-def _sma(series: list[float], w: int) -> float | None:
-    if len(series) < w:
-        return None
-    return round(sum(series[-w:]) / w, 2)
-
-
 def _spark(series: list[float], n: int = 16) -> list[float]:
     """시리즈의 마지막 n개 값을 0~100 범위 스케일로 정규화해 스파크라인용으로 반환."""
     if not series:
@@ -2095,7 +2089,7 @@ def build_data() -> dict:
         # indicators/quant/price를 '종목별 최신'으로 조회한다(특정 날짜 고정 X).
         cur.execute("""
             SELECT DISTINCT ON (ticker)
-                ticker, date, rsi14, disparity20, is_aligned,
+                ticker, date, sma20, sma50, sma200, rsi14, disparity20, is_aligned,
                 macd_line, macd_signal, macd_hist, bb_upper, bb_lower, bb_pct,
                 stoch_k, stoch_d, vol_ratio20, atr14,
                 trading_signal, trading_signal_score
@@ -2341,10 +2335,14 @@ def build_data() -> dict:
                 if any(k in f for k in ("성장", "매출", "Growth")): factor_fallback["g"] = True
                 if any(k in f for k in ("감성", "뉴스", "Sentiment")): factor_fallback["s"] = True
 
-            # PR-4: SMA 시계열 계산
-            sma20  = _sma(ser, 20)
-            sma50  = _sma(ser, 50)   # SMA60 대신 sma50 컬럼명 유지
-            sma200 = _sma(ser, 200)
+            # SMA는 **저장값(indicators_daily)을 읽는다** — 재계산 금지.
+            # 과거엔 `_sma(ser, N)`으로 재계산했는데 `ser`가 `LIMIT 130`행이라
+            # `sma200`이 **구조적으로 항상 None**이었다(화면 "SMA" 칸이 영구히 '—').
+            # DB에는 값이 멀쩡히 있었다 — atr14 사고(§8-1 "계산 코드가 있다 ≠ 값이 저장된다")와
+            # 동형이며, 지표의 정본은 언제나 indicators_daily다.
+            sma20  = _f(ind.get("sma20"))
+            sma50  = _f(ind.get("sma50"))
+            sma200 = _f(ind.get("sma200"))
 
             def _sma_series(s: list[float], w: int) -> list[float | None]:
                 return [
