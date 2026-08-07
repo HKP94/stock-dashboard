@@ -11,11 +11,15 @@ KR/US 관심종목을 **수집 → 지표·퀀트 → Gemini 요약 → 대시�
 
 | 구분 | 누가 | 언제 | 무엇을 |
 |---|---|---|---|
-| **DB 최신화** | GitHub Actions (자동) | 매일 06:00·18:00 KST | 가격·재무·뉴스 수집 + 지표·퀀트 + Gemini 요약 → **Supabase DB** |
-| **화면 보기** | 집 PC (수동) | 볼 때마다 | `./start_dashboard.sh` 한 번 → DB에서 `data.json` 최신화 + 대시보드 자동 오픈 |
+| **DB 최신화(전체)** | GitHub Actions (자동) | 06:00 · 18:00 KST | 가격·재무·뉴스·실적캘린더 수집 + 지표·퀀트 + Gemini 요약 → **Supabase DB** |
+| **당일 수급** | 집 PC launchd (자동) | **18:30 KST** | KR 투자자 수급만 적재(KRX가 CI를 차단하므로 로컬 담당). export 안 함 |
+| **화면·총자산** | 집 PC launchd (자동) | **22:30 · 08:00 KST** | 포트폴리오 재계산 → `data.json` export |
+| **화면 보기** | 집 PC (수동/상시) | 볼 때마다 | 브라우저만 열면 됨(대시보드 상주). 수동은 `./start_dashboard.sh` |
 
-- **DB는 클라우드(Supabase)에 있고 CI가 매일 자동으로 채운다.** 집 PC는 켜둘 필요 없다.
-- **대시보드는 집 PC에서만** 본다(외부 접근·상시 서버 불필요). 볼 때 스크립트 한 번 실행하면 그 시점 최신 DB로 화면이 뜬다.
+- **DB는 클라우드(Supabase)에 있고 CI가 매일 자동으로 채운다.**
+- **KRX 의존 수집(수급·발굴 스크린)은 집 PC 전용** — KRX가 CI(미국 IP)를 차단한다. 그래서 집 PC의 launchd 자동화 설치가 필요하다(아래 §1-b).
+- **대시보드는 집 PC에서만** 본다(외부 접근·상시 서버 불필요).
+- 슬롯별 담당·금지사항은 `CLAUDE.md` §10(스케줄 책임 경계) 참조.
 
 ---
 
@@ -93,6 +97,8 @@ tail -f ~/atlas_logs/launchd_supply_early.err                # 실행 로그
 | `DB_PASSWORD` | Supabase Postgres 비밀번호 | ✅ |
 | `DART_API_KEY` | KR 재무(DART) | ✅(KR) |
 | `GEMINI_API_KEY` | **뉴스·시황 Gemini 요약** | ✅(요약) |
+| `KB_APP_KEY` / `KB_APP_SECRET` | KB Open API(수급 IVU10430) — CI 호출 가능 실증됨 | 선택(로컬 `.env`가 主) |
+| `KRX_ID` / `KRX_PW` | pykrx 로그인 — **CI에서는 KRX가 차단하므로 무용**(로컬 전용) | ✗(로컬만) |
 
 - **`GEMINI_API_KEY` 가 없으면** CI의 enrich 단계가 실패하고 요약이 **중립 폴백**으로 채워진다(화면엔 규칙기반 한 줄로 표시되어 "분석 실패"가 노출되진 않음). 풍부한 요약을 원하면 반드시 등록.
 - Gemini 키는 **일일 쿼터**가 있다. 파이프라인(06시·18시)이 유일 소비자가 되도록, 로컬에서 ad-hoc 호출로 쿼터를 태우지 말 것.
