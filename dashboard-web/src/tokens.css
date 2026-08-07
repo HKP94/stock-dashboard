@@ -1,0 +1,144 @@
+/* ============================================================
+   ATLAS 디자인 토큰 — UI 리디자인 Phase 0
+   ------------------------------------------------------------
+   ★Phase 0은 **정의만** 한다. 기존 화면은 아직 이 토큰을 쓰지 않으며
+     레이아웃·데이터·계산은 무변경이다(회귀 0). 적용은 Phase 1+.
+
+   기준 테마 = 다크(:root). 라이트는 [data-theme="light"]로 덮는다.
+   Phase 1에서 스위치만 붙이면 되도록 스코프를 미리 잡아둔 것이다.
+
+   근거·전환 계획: docs/design/ui-tokens.md
+   ============================================================ */
+
+:root {
+  /* ── 배경 3단 ───────────────────────────────────────────── */
+  --bg-app: #0F1420;        /* 앱 캔버스 — 가장 어두운 층 */
+  --bg-card: #1A1F2E;       /* 카드·패널 */
+  --bg-input: #232939;      /* 입력·호버·선택 행 */
+  --bg-elevated: #2A3145;   /* 팝오버·툴팁 등 카드 위 */
+
+  /* ── 보더·그림자 ────────────────────────────────────────── */
+  --border: #2A3145;
+  --border-strong: #3A4358;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.44);
+
+  /* ── 텍스트 3단 ─────────────────────────────────────────── */
+  --text-1: #E8ECF4;        /* 본문·주요 수치 */
+  --text-2: #9BA6BC;        /* 보조 설명 */
+  --text-3: #6B7689;        /* 캡션·비활성 */
+
+  /* ── ★등락색 (한국 관례: 상승=빨강 / 하락=파랑) ──────────
+     ⚠️ 현행 화면은 정반대(상승=녹색 #15803D / 하락=빨강 #B91C1C, 미국 관례)다.
+        토큰만 먼저 정의하고 **전환은 Phase 1에서 일괄** 수행한다.
+        부분 적용 금지 — 화면마다 색 의미가 다르면 오독 사고다. */
+  --price-up: #FF4D4F;
+  --price-up-bg: rgba(255, 77, 79, 0.12);
+  --price-down: #3B82F6;
+  --price-down-bg: rgba(59, 130, 246, 0.12);
+  --price-flat: var(--text-3);
+
+  /* ── 상태색 (등락과 **분리**) ──────────────────────────────
+     현행은 C.ok/C.bad 두 색이 '등락'과 '심리·신호 상태'를 겸했다(실측: 등락 19줄
+     + 상태 12줄). 등락을 한국 관례로 바꾸면 "긍정 심리"까지 빨강이 되어버리므로
+     축을 갈라 둔다. Phase 1 전환은 사용처를 두 축 중 하나로 분류하는 작업이다. */
+  --state-positive: #22C55E;   /* 긍정·강세·양호 */
+  --state-positive-bg: rgba(34, 197, 94, 0.12);
+  --state-warn: #F59E0B;       /* 주의·관망 */
+  --state-warn-bg: rgba(245, 158, 11, 0.12);
+  --state-negative: #F43F5E;   /* 부정·약세·경고 */
+  --state-negative-bg: rgba(244, 63, 94, 0.12);
+  --state-neutral: var(--text-2);
+
+  /* ── 액센트(1색) ────────────────────────────────────────── */
+  --accent: #4C8DFF;
+  --accent-hover: #3B7BEE;
+  --accent-tint: rgba(76, 141, 255, 0.14);
+  --accent-ring: rgba(76, 141, 255, 0.28);
+
+  /* ── 타이포 스케일 ──────────────────────────────────────── */
+  --font-sans: "Pretendard Variable", -apple-system, BlinkMacSystemFont,
+               "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-display: 34px;   /* 지수·총자산 대형 숫자 */
+  --fs-h1: 22px;
+  --fs-h2: 18px;
+  --fs-h3: 15px;
+  --fs-body: 13px;
+  --fs-sm: 12px;
+  --fs-caption: 11px;
+  --fs-micro: 10px;     /* MonoCaps 라벨 */
+
+  --lh-tight: 1.2;
+  --lh-normal: 1.5;
+
+  --fw-normal: 500;
+  --fw-medium: 600;
+  --fw-bold: 700;
+  --fw-black: 800;
+
+  /* ── 간격 (4px 배수) ────────────────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* ── 라운드 ─────────────────────────────────────────────── */
+  --radius-sm: 8px;
+  --radius-md: 12px;    /* 카드 기본 */
+  --radius-lg: 16px;    /* 큰 패널 */
+  --radius-pill: 999px;
+
+  /* ── 카드 패딩 규격 ─────────────────────────────────────── */
+  --card-pad: var(--sp-4) var(--sp-5);      /* 16px 20px — 본문 카드 */
+  --card-pad-tight: var(--sp-3) var(--sp-4); /* 12px 16px — 밀집 목록 */
+  --card-head-pad: var(--sp-3) var(--sp-5);
+}
+
+/* ── 라이트 테마 (Phase 1에서 스위치만 붙이면 동작) ─────────── */
+:root[data-theme="light"] {
+  --bg-app: #FAFBFC;
+  --bg-card: #FFFFFF;
+  --bg-input: #F4F6F8;
+  --bg-elevated: #FFFFFF;
+
+  --border: #ECEEF1;
+  --border-strong: #C7CCD3;
+  --shadow-sm: 0 1px 2px rgba(15, 20, 25, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 20, 25, 0.08);
+  --shadow-lg: 0 12px 32px rgba(15, 20, 25, 0.10);
+
+  --text-1: #0F1419;
+  --text-2: #4A5568;
+  --text-3: #94A3B8;
+
+  --price-up: #E03131;
+  --price-up-bg: rgba(224, 49, 49, 0.08);
+  --price-down: #1C6FD6;
+  --price-down-bg: rgba(28, 111, 214, 0.08);
+
+  --state-positive: #15803D;
+  --state-positive-bg: #F0FDF4;
+  --state-warn: #B45309;
+  --state-warn-bg: #FFFBEB;
+  --state-negative: #B91C1C;
+  --state-negative-bg: #FEF2F2;
+
+  --accent: #2A5BFF;
+  --accent-hover: #1A48EA;
+  --accent-tint: rgba(42, 91, 255, 0.08);
+  --accent-ring: rgba(42, 91, 255, 0.18);
+}
+
+/* 숫자는 항상 tabular — 표·시계열에서 자릿수가 흔들리지 않게 */
+.tnum,
+.token-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "lnum";
+}
