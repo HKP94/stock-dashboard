@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 INVESTOR_SIGNAL_THRESHOLD: float = float(os.getenv("INVESTOR_SIGNAL_THRESHOLD", "0"))
 INVESTOR_LOOKBACK_DAYS: int = int(os.getenv("INVESTOR_LOOKBACK_DAYS", "10"))  # 캘린더 기준
 
+# 수급 소스 스위치: kb | pykrx | auto(기본).
+# auto = KB(IVU10430) 우선 → 실패/0건이면 pykrx 폴백.
+# KB는 계좌 무관 조회 API라 CI에서도 호출되지만(도달성 실측 완료) 오픈베타이고 한도가
+# 비공개라, KRX 원천(pykrx)을 폴백으로 남겨 단일 실패점을 만들지 않는다.
+INVESTOR_FLOW_SOURCE: str = os.getenv("INVESTOR_FLOW_SOURCE", "auto").strip().lower()
+
 
 # ── 신호 계산 (결정론, LLM 없음) ─────────────────────────────────
 
@@ -98,75 +104,27 @@ def _ensure_krx_session() -> bool:
 
 # ── 수집 ──────────────────────────────────────────────────────────
 
-def fetch_investor_flow(
-    ticker: str,
-    lookback_days: int = INVESTOR_LOOKBACK_DAYS,
-) -> list[InvestorFlowRow]:
-    """KR 종목 일별 투자자 순매수 수집 → InvestorFlowRow 리스트.
-
-    - pykrx.get_market_trading_value_by_date(on='순매수') 사용
-    - 각 날짜 행에 3거래일 합계 기반 신호를 계산해서 함께 저장
-    - 빈 DF나 타임아웃 시 빈 리스트 반환 (호출부 격리)
+def _build_rows(ticker: str, daily: dict[date, tuple[float, float, float]]) -> list[InvestorFlowRow]:
     """
-    from pykrx import stock as pykrx_stock
+    일자별 (외국인, 기관, 개인) 순매수(**원 단위**) → InvestorFlowRow 리스트.
 
-    code = _clean_ticker(ticker)
-    today = today_kst()
-    fromdate = (today - timedelta(days=lookback_days)).strftime("%Y%m%d")
-    todate = today.strftime("%Y%m%d")
-
-    df = _bounded(
-        f"pykrx.investor_flow:{code}",
-        lambda: pykrx_stock.get_market_trading_value_by_date(
-            fromdate, todate, code, on="순매수"
-        ),
-        KRX_HTTP_TIMEOUT_S,
-    )
-
-    if df is None or df.empty:
-        logger.warning("%s: investor_flow 빈 응답", ticker)
-        return []
-
-    dates_sorted = sorted(df.index)
+    소스(pykrx/KB) 무관 공통 경로 — 3거래일 합계·신호 산출은 여기 한 곳에만 있어야
+    소스를 바꿔도 하류(detect_moves·export·신규-F)가 동일하게 동작한다.
+    0은 기존 계약대로 None으로 저장한다(하류 무변경).
+    """
+    dates_sorted = sorted(daily)
     rows: list[InvestorFlowRow] = []
-
     for i, dt in enumerate(dates_sorted):
-        row_data = df.loc[dt]
-
-        def _col(name: str) -> float:
-            try:
-                v = row_data.get(name, 0)
-                return float(v) if v is not None else 0.0
-            except (TypeError, ValueError):
-                return 0.0
-
-        f_net = _col("외국인합계")
-        ins_net = _col("기관합계")
-        ind_net = _col("개인")
-
-        # 3거래일 합계 (이 날 포함 최근 3일)
-        window = dates_sorted[max(0, i - 2): i + 1]
-
-        def _window_sum(col: str) -> float:
-            total = 0.0
-            for d in window:
-                try:
-                    v = df.loc[d].get(col, 0)
-                    total += float(v) if v is not None else 0.0
-                except (TypeError, ValueError):
-                    pass
-            return total
-
-        f_3d = _window_sum("외국인합계")
-        ins_3d = _window_sum("기관합계")
+        f_net, ins_net, ind_net = daily[dt]
+        window = dates_sorted[max(0, i - 2): i + 1]  # 이 날 포함 최근 3거래일
+        f_3d = sum(daily[d][0] for d in window)
+        ins_3d = sum(daily[d][1] for d in window)
 
         foreign_sig = _derive_investor_signal(f_3d)
         institution_sig = _derive_investor_signal(ins_3d)
-        combined_sig = _derive_combined_signal(foreign_sig, institution_sig)
-
         rows.append(InvestorFlowRow(
             ticker=ticker,
-            date=dt.date(),
+            date=dt,
             foreign_net=f_net or None,
             institution_net=ins_net or None,
             individual_net=ind_net or None,
@@ -174,10 +132,111 @@ def fetch_investor_flow(
             institution_3d_sum=ins_3d,
             foreign_signal=foreign_sig,
             institution_signal=institution_sig,
-            combined_signal=combined_sig,
+            combined_signal=_derive_combined_signal(foreign_sig, institution_sig),
         ))
+    return rows
 
-    logger.info("%s: investor_flow %d rows", ticker, len(rows))
+
+def _fetch_pykrx(code: str, fromdate: str, todate: str) -> dict[date, tuple[float, float, float]]:
+    """pykrx 경로(KRX 원천·원 단위). 로컬/한국 IP 전용 — CI에서는 KRX가 차단한다."""
+    from pykrx import stock as pykrx_stock
+
+    # KRX 로그인은 **이 경로가 실제로 쓰일 때만** 한다(세션 유효하면 재사용).
+    # KB가 전 종목을 처리하면 KRX 왕복이 아예 없어져 저녁 수집이 그만큼 빨라진다.
+    _ensure_krx_session()
+
+    df = _bounded(
+        f"pykrx.investor_flow:{code}",
+        lambda: pykrx_stock.get_market_trading_value_by_date(fromdate, todate, code, on="순매수"),
+        KRX_HTTP_TIMEOUT_S,
+    )
+    if df is None or df.empty:
+        return {}
+
+    def _col(row, name: str) -> float:
+        try:
+            v = row.get(name, 0)
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    out: dict[date, tuple[float, float, float]] = {}
+    for dt in df.index:
+        row = df.loc[dt]
+        out[dt.date()] = (_col(row, "외국인합계"), _col(row, "기관합계"), _col(row, "개인"))
+    return out
+
+
+def _fetch_kb(code: str, fromdate: str, todate: str) -> dict[date, tuple[float, float, float]]:
+    """
+    KB IVU10430 경로(계좌 무관 조회 API, **CI에서도 호출 가능**).
+
+    파싱 관례차는 `kb_supply.parse_supply_records`가 단독으로 책임진다
+    (단위 백만원→원, 외국인=fgnr+ntv_fgnr, 확정치 mtrl_clsf='0'만).
+    """
+    from src import kb_client
+    from src.kb_supply import SUPPLY_API, parse_supply_records
+
+    body = kb_client.call(SUPPLY_API, {
+        "excg_clsf": "1",     # KRX (pykrx와 동일 시장 기준)
+        "is_cd": code,
+        "strt_dt": fromdate,
+        "end_dt": todate,
+        "amt_q_clsf": "1",    # 1:금액
+        "trd_clsf": "1",      # 1:순매수
+        "acml_clsf": "0",     # 0:누적안함(일별)
+    })
+    return {
+        d: (v["foreign"], v["institution"], v["individual"])
+        for d, v in parse_supply_records(body.get("out") or []).items()
+    }
+
+
+def fetch_investor_flow(
+    ticker: str,
+    lookback_days: int = INVESTOR_LOOKBACK_DAYS,
+    source: Optional[str] = None,
+) -> list[InvestorFlowRow]:
+    """
+    KR 종목 일별 투자자 순매수 수집 → InvestorFlowRow 리스트.
+
+    소스는 `INVESTOR_FLOW_SOURCE`(kb|pykrx|auto, 기본 auto)로 고른다.
+    auto = KB 우선 → 실패/0건이면 pykrx 폴백. KB는 CI에서도 호출되지만 오픈베타이고
+    한도가 비공개라, KRX 원천(pykrx)을 폴백으로 남겨 단일 실패점을 만들지 않는다.
+    빈 응답·타임아웃은 빈 리스트 반환(호출부에서 종목 단위 격리).
+    """
+    code = _clean_ticker(ticker)
+    today = today_kst()
+    fromdate = (today - timedelta(days=lookback_days)).strftime("%Y%m%d")
+    todate = today.strftime("%Y%m%d")
+    mode = (source or INVESTOR_FLOW_SOURCE).strip().lower()
+
+    daily: dict[date, tuple[float, float, float]] = {}
+    used = ""
+    if mode in ("kb", "auto"):
+        try:
+            from src import kb_client
+            if kb_client.kb_enabled():
+                daily = _fetch_kb(code, fromdate, todate)
+                used = "kb"
+            elif mode == "kb":
+                logger.warning("%s: INVESTOR_FLOW_SOURCE=kb 인데 KB 키 미설정", ticker)
+        except Exception as exc:  # noqa: BLE001 — 폴백 판단을 위해 광범위 포착
+            logger.warning("%s: KB 수급 조회 실패(%s)", ticker, str(exc)[:150])
+            daily = {}
+
+    if not daily and mode != "kb":
+        if used == "kb":
+            logger.info("%s: KB 0건 → pykrx 폴백", ticker)
+        daily = _fetch_pykrx(code, fromdate, todate)
+        used = "pykrx"
+
+    if not daily:
+        logger.warning("%s: investor_flow 빈 응답(source=%s)", ticker, mode)
+        return []
+
+    rows = _build_rows(ticker, daily)
+    logger.info("%s: investor_flow %d rows (source=%s)", ticker, len(rows), used)
     return rows
 
 
@@ -189,13 +248,12 @@ def run_investor_flow_ingest(
 ) -> dict:
     """KR 종목 수급 수집 실행기 — pipeline_ingest에서 호출.
 
-    - KRX 세션 초기화(재로그인 포함)
+    - 소스는 INVESTOR_FLOW_SOURCE(kb|pykrx|auto). KRX 세션은 pykrx 경로가 실제로
+      쓰일 때만 초기화한다(_fetch_pykrx 내부).
     - 종목별 격리: 실패 시 skip + errors 기록, 전체 중단 금지
     - 단계별 commit (Supabase pooler 연결 끊김 방지)
     """
     from src.db import upsert_investor_flow
-
-    _ensure_krx_session()
 
     counts = {"rows": 0, "tickers": 0}
     errors: list[dict] = []

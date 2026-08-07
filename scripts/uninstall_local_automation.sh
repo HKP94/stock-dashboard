@@ -5,7 +5,7 @@
 set -uo pipefail
 
 AGENTS="$HOME/Library/LaunchAgents"
-LABELS=(com.atlas.local-refresh com.atlas.dashboard)
+LABELS=(com.atlas.local-refresh com.atlas.supply-early com.atlas.dashboard com.atlas.discovery)
 
 for label in "${LABELS[@]}"; do
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null && echo "✓ 언로드: $label" || echo "· 이미 언로드됨: $label"

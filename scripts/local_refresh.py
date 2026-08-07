@@ -56,9 +56,10 @@ def _write_state(ok: bool, rows: int, error: str | None = None) -> None:
 
 
 def main() -> int:
+    supply_only = "--supply-only" in sys.argv
     load_dotenv()
     _setup_logging()
-    logger.info("=== local_refresh 시작 ===")
+    logger.info("=== local_refresh 시작%s ===", " (수급 전용)" if supply_only else "")
 
     from src import compute_portfolio, detect_moves, export_dashboard_data
     from src.db import get_conn
@@ -76,6 +77,15 @@ def main() -> int:
             rows = result["counts"]["rows"]
             n_err = len(result["errors"])
             logger.info("investor_flow: %d행 저장, 실패 %d건", rows, n_err)
+
+            # 수급 전용 슬롯(18:30) — R2 "21시 브리핑 전 당일 수급 적재" 목표.
+            # 포트폴리오 재계산·export는 여기서 하지 않는다: KR 당일종가가 CI news_refresh로
+            # ~21시에야 들어오므로, 이 시각에 export하면 전일 종가를 캡처한다(PR #88 회귀).
+            # 화면·총자산 갱신은 22:30 전체 실행이 담당한다.
+            if supply_only:
+                _write_state(ok=True, rows=rows)
+                logger.info("=== local_refresh 완료 (수급 전용, %d행) ===", rows)
+                return 0
 
             # 2) 포트폴리오 재계산 — export '전에' 실행해야 총자산이 당일 KR 종가를 반영한다.
             #    저녁 스케줄(22:30)은 CI news_refresh가 KR 당일종가를 적재한 '후'라, compute_portfolio가

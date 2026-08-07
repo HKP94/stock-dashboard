@@ -30,8 +30,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import kb_client  # noqa: E402
-
-SUPPLY_API = "ivu10430"
+from src.kb_supply import (  # noqa: E402
+    DETAIL_FIELDS,
+    KB_UNIT_KRW,
+    SUPPLY_API,
+    _num,
+    parse_supply_records,
+)
 
 # 파일럿 대상 — 보유(삼성전자·현대해상) + 관심(하이닉스·효성중공업) + 코스닥(미코).
 PILOT_TICKERS: list[tuple[str, str]] = [
@@ -44,29 +49,12 @@ PILOT_TICKERS: list[tuple[str, str]] = [
 PILOT_DAYS = 5           # 최근 5거래일
 LOOKBACK_CALENDAR = 12   # 5거래일을 덮는 캘린더 여유
 
-# ★ 관례차 1 — 단위: KB IVU10430 금액은 **백만원**, pykrx/investor_flow는 **원**.
-KB_UNIT_KRW: int = 1_000_000
-# ★ 관례차 2 — 외국인 정의: KB `fgnr`(외국인)는 pykrx `외국인합계`가 아니다.
-#   pykrx 외국인합계 == KB fgnr + ntv_fgnr(내외국인). 이 합을 써야 정합한다.
 # 백만원 반올림 때문에 원 단위 환산 시 종목·일자당 최대 ~1백만원 잔차가 남는다(구조적).
 ROUNDING_TOLERANCE_KRW: float = 1_000_000.0
 
-# IVU10430 out 레코드의 12분류 상세 컬럼(충전 여부 점검용).
-DETAIL_FIELDS: list[tuple[str, str]] = [
-    ("scrt", "증권"), ("insr", "보험"), ("invst_trst", "투신"), ("invst_bnk", "종금"),
-    ("bnk", "은행"), ("fnd", "기금"), ("prv_o_fnd", "사모펀드"), ("etc_corp", "기타법인"),
-    ("ntn", "국가"), ("ntv_fgnr", "내외국인"), ("pgm", "프로그램"),
-    ("frgn_afflt_dl_orgn_sum", "외국계거래원합계"),
-]
 
 _metrics: dict = {"calls": 0, "elapsed": [], "errors": [], "rate_limited": 0, "headers": {}}
 
-
-def _num(value: object) -> float:
-    try:
-        return float(str(value).strip() or 0)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def fetch_kb_supply(code: str, start: date, end: date) -> list[dict]:
@@ -103,29 +91,6 @@ def _record_limit_headers() -> None:
         _metrics["rate_limited"] += 1
 
 
-def _kb_rows_by_date(records: list[dict]) -> dict[str, dict]:
-    """out 레코드 → {YYYYMMDD: 파싱된 행}. 확정치(mtrl_clsf='0')만."""
-    out: dict[str, dict] = {}
-    for rec in records:
-        if str(rec.get("mtrl_clsf") or "").strip() not in ("0", ""):
-            continue  # 추정치 제외
-        dt = str(rec.get("dt") or "").strip()
-        if not dt:
-            continue
-        # 원 단위로 환산(×백만) + 외국인은 pykrx '외국인합계'와 같은 정의(외국인+내외국인)로 맞춘다.
-        fgnr = _num(rec.get("fgnr"))
-        ntv = _num(rec.get("ntv_fgnr"))
-        out[dt] = {
-            "foreign": (fgnr + ntv) * KB_UNIT_KRW,       # ≡ pykrx 외국인합계
-            "foreign_narrow": fgnr * KB_UNIT_KRW,        # KB fgnr 단독(정의 차이 노출용)
-            "institution": _num(rec.get("ogn")) * KB_UNIT_KRW,
-            "individual": _num(rec.get("indv")) * KB_UNIT_KRW,
-            "close": _num(rec.get("cls_prc")),
-            "details": {ko: _num(rec.get(en)) * KB_UNIT_KRW for en, ko in DETAIL_FIELDS},
-            "raw": rec,
-        }
-    return out
-
 
 # ── 대조 소스 ────────────────────────────────────────────────────────────────
 def fetch_pykrx(code: str, start: date, end: date) -> dict[str, dict]:
@@ -144,7 +109,7 @@ def fetch_pykrx(code: str, start: date, end: date) -> dict[str, dict]:
     if df is None or df.empty:
         return {}
     return {
-        dt.strftime("%Y%m%d"): {
+        dt.date(): {
             "foreign": float(df.loc[dt].get("외국인합계", 0) or 0),
             "institution": float(df.loc[dt].get("기관합계", 0) or 0),
             "individual": float(df.loc[dt].get("개인", 0) or 0),
@@ -166,7 +131,7 @@ def fetch_db(conn, ticker: str, start: date, end: date) -> dict[str, dict]:
             (ticker, start, end),
         )
         return {
-            r["date"].strftime("%Y%m%d"): {
+            r["date"]: {
                 "foreign": float(r["foreign_net"] or 0),
                 "institution": float(r["institution_net"] or 0),
                 "individual": float(r["individual_net"] or 0),
@@ -194,7 +159,7 @@ def compare(ticker: str, name: str, code: str, start: date, end: date, conn) -> 
     """종목 1개 3자 대조 → 결과 dict + 표 출력."""
     result: dict = {"ticker": ticker, "name": name, "rows": [], "error": None}
     try:
-        kb = _kb_rows_by_date(fetch_kb_supply(code, start, end))
+        kb = parse_supply_records(fetch_kb_supply(code, start, end))
     except Exception as exc:
         _metrics["errors"].append(f"{ticker}: {exc}")
         result["error"] = str(exc)
@@ -221,7 +186,7 @@ def compare(ticker: str, name: str, code: str, start: date, end: date, conn) -> 
                                    "db": d, "verdict": verdict})
             if verdict.startswith("★"):
                 result["mismatches"] = result.get("mismatches", 0) + 1
-            print(f"  {dt:<10}{label:<7}{_fmt(k):>20}{_fmt(p):>20}{_fmt(d):>20}   {verdict}")
+            print(f"  {str(dt):<12}{label:<7}{_fmt(k):>20}{_fmt(p):>20}{_fmt(d):>20}   {verdict}")
 
     # 외국인 정의 차이 노출 — KB fgnr 단독은 pykrx 외국인합계와 다르다.
     latest = max(kb) if kb else None
@@ -316,7 +281,7 @@ def main() -> int:
             print(json.dumps({"ok": False, "error": str(exc)[:300]}, ensure_ascii=False))
             return 1
         elapsed = time.monotonic() - started
-        rows = _kb_rows_by_date(records)
+        rows = parse_supply_records(records)
         print(f"✓ 성공: {len(records)}레코드(확정치 {len(rows)}일), {elapsed:.2f}s")
         print(json.dumps({"ok": True, "records": len(records), "confirmed_days": len(rows),
                           "elapsed_s": round(elapsed, 2)}, ensure_ascii=False))

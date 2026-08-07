@@ -18,7 +18,9 @@
 
     <!-- 22:30 KST (CI news_refresh 18시 크론이 GitHub 지연으로 실제 ~21:00~22:04 완료 → KR 당일종가
          적재 후) : investor_flow + 포트폴리오 재계산 + export.  + 08:00 KST (06:00 CI run 완료 후 아침 export).
-         지연이 22:30을 넘긴 날은 다음날 08:00 export가 자가치유(신선도 감시가 경보). -->
+         지연이 22:30을 넘긴 날은 다음날 08:00 export가 자가치유(신선도 감시가 경보).
+         ※ 당일 수급을 21시 브리핑 전에 넣는 건 별도 잡(com.atlas.supply-early, 18:30)이 담당한다 —
+            이 슬롯을 앞당기면 export가 전일 KR 종가를 캡처한다(PR #88 회귀). -->
     <key>StartCalendarInterval</key>
     <array>
         <dict>

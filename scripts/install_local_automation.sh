@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ATLAS 로컬 자동화 설치 (macOS launchd) — KPH 1회 수동 실행.
-#   1) com.atlas.local-refresh : 하루 2회(22:30·08:00) KRX 수급 수집 + 포트폴리오 재계산 + data.json export
+#   1) com.atlas.local-refresh : 하루 2회(22:30·08:00) 수급 수집 + 포트폴리오 재계산 + data.json export
+#   1-b) com.atlas.supply-early : 18:30 당일 수급만 조기 적재(21시 브리핑 전). 확정시각 실측 18:05 근거
 #   2) com.atlas.dashboard     : 로그인 시 대시보드 서버 자동 기동
 #   3) com.atlas.discovery     : 주간 1회 발굴 스크린(관심종목 밖, 뉴스·LLM 없음)
 #
@@ -12,7 +13,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="$REPO/.venv/bin/python"
 AGENTS="$HOME/Library/LaunchAgents"
-LABELS=(com.atlas.local-refresh com.atlas.dashboard com.atlas.discovery)
+LABELS=(com.atlas.local-refresh com.atlas.supply-early com.atlas.dashboard com.atlas.discovery)
 
 [ -x "$PY" ] || { echo "✗ .venv 없음: $PY — 먼저 venv+requirements 설치"; exit 1; }
 mkdir -p "$AGENTS" "$HOME/atlas_logs"

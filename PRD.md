@@ -803,7 +803,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
 - [⏸] **1단계 잔고 자동화** (브랜치 `feat/kb-portfolio-sync`, commit 9c1866e, **머지 보류**): `kb_client` + `collect_kb_portfolio`(SSQM2952·SPQM2226·SSQM0004 → `portfolio_holdings`/`portfolio_cash` 전량 스왑, `--dry-run`). **보류 사유**: 오픈베타 제약으로 실투자 계좌를 앱키에 연결할 수 없어 검증 게이트 ①~③ 통과 불가. 계좌 연결이 풀리면 dry-run부터 즉시 재개(브랜치 보존).
 - [x] **2단계 수급 파일럿** (2026-08-07): IVU10430(종목별 투자자 매매동향, **계좌 무관**) 정합 검증. 5종목×5거래일 KB vs pykrx vs 실DB 3자 대조 → **75/75셀 일치**(관례차 보정 후). 관례차 2건 확정: 단위 백만원(×1e6), 외국인 = `fgnr + ntv_fgnr`. 12분류 상세 실충전 확인. DB 쓰기·스키마 변경 없음(검증 전용).
 - [ ] **2단계 CI 호출 시험**: `.github/workflows/kb_api_probe.yml`(수동 dispatch). 도달성 시험은 키 불필요, 인증 1콜은 KPH의 Secret 등록 후. **전제**: 실계좌 연결 시점에 키 로테이트 또는 시세용/계좌용 앱 분리.
-- [ ] **통합 판단**: 파일럿 결과 기반 pykrx 대체/병행 결정 후 별도 PR.
+- [x] **2단계 CI 호출 시험** (2026-08-07): `kb_api_probe.yml` 수동 dispatch 실행. **KB API는 CI에서 정상 동작** — 러너 IP 20.83.175.152(Azure eastus)에서 도달 0.69s, IVU10430 인증 1콜 성공(10레코드, 2.43s). KRX와 정반대. Secret은 KPH가 등록 완료.
+- [x] **수급 통합(auto 폴백)** (2026-08-07): `INVESTOR_FLOW_SOURCE=kb|pykrx|auto`(기본 auto). 파싱 단일 소스 `src/kb_supply.py`, 신호 산출 공통 `_build_rows`. 실측 28종목 648셀 KB vs pykrx **불일치 0**. 스키마·3분류 무변경. 12분류 저장은 백로그.
+- [x] **저녁 수급 스케줄 확정** (2026-08-07): KRX 확정시각 실측(12거래일) → **18:30 조기 수급 슬롯**(`com.atlas.supply-early`, 수급 전용). 17시는 잠정치 위험(삼성 기관 17:05 -10억 → 18:05 -1,445억). probe는 제거 완료.
+- [ ] **CI 배선 판단**: 도달성 확인됐으므로 수급을 CI로 옮길지 결정(로컬 18:30 유지 vs CI 이관). 별도 PR.
 
 ### 판단 기록 쓰기 경로 (신규, MCP 대화 결론 영속화)
 - [ ] **판단 기록 쓰기 설계·구현**: Claude 웹 대화 결론을 `stock_notes`/`stock_note_history`/`manual_research_*`에 남겨 새 세션이 DB로 컨텍스트 승계. **형식·3축 매핑 선행 설계** 후 구현. 자동 수집 테이블은 읽기 전용(§0 MCP 경계).

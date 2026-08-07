@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ATLAS 당일 수급 조기 적재 (18:30 KST, 수급 전용).
+     install_local_automation.sh가 __REPO__/__PY__/__HOME__를 실제 경로로 치환해 설치한다.
+
+     ■ 왜 18:30인가 (실측 근거, 2026-07-22~08-06 12거래일 probe)
+       KRX 수급 확정 시각을 여러 시각에 반복 샘플링해 값이 더 이상 변하지 않는 시점을 쟀다.
+       11일 중 5일은 16:05·17:05 관측이 **잠정치**였고 18:05에 확정됐다. 편차는 작지 않다 —
+       2026-07-28 삼성전자 기관 순매수가 17:05 -10억 → 18:05 -1,445억(144배)으로 바뀌었다.
+       따라서 17시 슬롯은 틀린 수급을 적재할 위험이 있고, 18:05 관측은 12/12일 확정치였다.
+       18:30은 그 위에 여유 25분을 둔 값이며, R2 목표(21시 브리핑 전 적재)를 충족한다.
+
+     ■ 왜 수급 '전용'인가
+       KR 당일 종가는 CI news_refresh(18시 크론)가 GitHub 지연으로 ~21:00~22:04에 적재한다.
+       이 시각에 export/포트폴리오 재계산을 같이 돌리면 전일 종가를 캡처한다(PR #88 회귀).
+       화면·총자산 갱신은 22:30 com.atlas.local-refresh가 그대로 담당한다. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.atlas.supply-early</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PY__</string>
+        <string>__REPO__/scripts/local_refresh.py</string>
+        <string>--supply-only</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+    </array>
+
+    <!-- 부팅 시 중복 실행 방지. 놓치면 22:30 전체 실행이 같은 창(lookback 10일)으로 백필한다. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/atlas_logs/launchd_supply_early.out</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/atlas_logs/launchd_supply_early.err</string>
+</dict>
+</plist>

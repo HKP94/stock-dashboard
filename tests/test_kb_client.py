@@ -4,10 +4,12 @@
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from src import kb_client
-from scripts.kb_supply_pilot import KB_UNIT_KRW, _kb_rows_by_date
+from src.kb_supply import KB_UNIT_KRW, parse_supply_records
 
 
 class TestOrderAPIBlocked:
@@ -109,14 +111,14 @@ class TestSupplyParsing:
 
     def test_unit_is_millions_of_krw(self):
         """★관례차 1 — KB 금액은 백만원, pykrx/investor_flow는 원."""
-        row = _kb_rows_by_date([self.REC])["20260806"]
+        row = parse_supply_records([self.REC])[date(2026, 8, 6)]
         assert row["institution"] == -422181 * KB_UNIT_KRW
         assert row["individual"] == 2039284 * KB_UNIT_KRW
         assert KB_UNIT_KRW == 1_000_000
 
     def test_foreign_total_includes_native_foreigner(self):
         """★관례차 2 — pykrx 외국인합계 == KB fgnr + ntv_fgnr(내외국인)."""
-        row = _kb_rows_by_date([self.REC])["20260806"]
+        row = parse_supply_records([self.REC])[date(2026, 8, 6)]
         assert row["foreign"] == (-1693585 + 16486) * KB_UNIT_KRW
         assert row["foreign_narrow"] == -1693585 * KB_UNIT_KRW
         assert row["foreign"] != row["foreign_narrow"]  # 혼동하면 조용히 틀린 값
@@ -124,10 +126,10 @@ class TestSupplyParsing:
     def test_estimate_rows_excluded(self):
         """mtrl_clsf=1(추정치)은 대조·통합 대상이 아니다(확정치만)."""
         est = dict(self.REC, mtrl_clsf="1", dt="20260807")
-        rows = _kb_rows_by_date([self.REC, est])
-        assert set(rows) == {"20260806"}
+        rows = parse_supply_records([self.REC, est])
+        assert set(rows) == {date(2026, 8, 6)}
 
     def test_details_also_scaled(self):
-        row = _kb_rows_by_date([self.REC])["20260806"]
+        row = parse_supply_records([self.REC])[date(2026, 8, 6)]
         assert row["details"]["증권"] == -100000 * KB_UNIT_KRW
         assert row["details"]["프로그램"] == -500 * KB_UNIT_KRW
