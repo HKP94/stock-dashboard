@@ -1939,7 +1939,7 @@ export function StockDetail({ D, ticker, nav }) {
             <PriceChart stock={s} w={560} h={270} showSMAs={smaViz} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", borderTop: `1px solid ${C.line}` }}>
-            {[["SMA 20", s.sma20], ["SMA 60", s.sma50], ["SMA 120", s.sma200], ["20일 이격도", s.disparity != null ? s.disparity + "%" : "—"]].map(([l, v], i) => (
+            {[["SMA 20", s.sma20], ["SMA 50", s.sma50], ["SMA 200", s.sma200], ["20일 이격도", s.disparity != null ? s.disparity + "%" : "—"]].map(([l, v], i) => (
               <div key={l} style={{ padding: "11px 16px", borderRight: i < 3 ? `1px solid ${C.line}` : "none" }}>
                 <MonoCaps style={{ fontSize: 9 }}>{l}</MonoCaps>
                 <div><Num size={14} weight={600}>{typeof v === "number" ? (s.cur === "₩" ? "₩" + Math.round(v).toLocaleString() : "$" + v) : v}</Num></div>
