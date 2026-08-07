@@ -50,6 +50,40 @@ cd dashboard-web && npm install && cd ..
 
 DB 접속 정보는 `.streamlit/secrets.toml` 에 둔다(예시는 `.streamlit/secrets.toml.example`). **시크릿은 절대 커밋 금지**(gitignore 처리됨).
 
+### 1-b) 로컬 자동화(launchd) 설치
+
+```bash
+cd ~/atlas/stock-dashboard
+bash scripts/install_local_automation.sh      # ★반드시 bash로. 멱등(재실행 안전)
+```
+
+설치되는 잡 4개:
+
+| 라벨 | 시각 | 하는 일 |
+|---|---|---|
+| `com.atlas.supply-early` | 18:30 | **당일 수급만** 조기 적재(21시 브리핑 전). export 안 함 |
+| `com.atlas.local-refresh` | 22:30 · 08:00 | 수급 + 포트폴리오 재계산 + `data.json` export |
+| `com.atlas.dashboard` | 로그인 시 | 대시보드 서버 상주 |
+| `com.atlas.discovery` | 주 1회 | 관심종목 밖 발굴 스크린 |
+
+**전제조건 (안 지키면 설치가 실패한다)**
+
+1. **`bash`로 실행할 것.** `zsh scripts/...`나 `source`로 실행하면 스크립트가 자기 위치를 못 찾는다(`BASH_SOURCE`는 bash 전용). 지금은 `exit 2` + 원인 안내가 나오지만, 그냥 `bash`를 쓰는 게 맞다.
+2. **리포가 `~/Desktop`·`~/Documents`·`~/Downloads` 아래에 있으면 안 된다.** macOS 프라이버시(TCC) 보호 폴더라 launchd가 파일을 실행하지 못하고(`Operation not permitted`, exit 126) 잡이 즉시 죽는다. 스크립트가 경고하지만 **plist로는 우회 불가** — 리포를 `~/atlas` 같은 비보호 경로로 옮기거나, 시스템 설정 → 개인정보 보호 및 보안 → 전체 디스크 접근에 `/bin/bash`를 추가한다.
+3. **`.venv`가 만들어져 있어야 한다**(위 1) 단계). 잡은 `.venv/bin/python`을 절대경로로 실행하므로 셸 PATH와 무관하다.
+
+**종료코드**: `0` 정상 · `2` 리포 경로 해석 실패(셸 문제) · `3` `.venv` 없음 · `4` `launchctl bootstrap` 실패 · `5` 설치는 됐으나 잡 실행 실패(TCC 등).
+
+**확인·수동 실행**
+
+```bash
+launchctl list | grep com.atlas                              # 4잡 (2열=최근 종료코드, 0이 정상)
+launchctl kickstart -k gui/$(id -u)/com.atlas.supply-early   # 즉시 1회 실행
+tail -f ~/atlas_logs/launchd_supply_early.err                # 실행 로그
+```
+
+제거는 `bash scripts/uninstall_local_automation.sh`.
+
 ### 2) GitHub Actions Secrets (DB 자동 최신화용)
 
 리포 **Settings → Secrets and variables → Actions → New repository secret** 에서 등록:
