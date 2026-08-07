@@ -251,6 +251,11 @@ def _axis_level(value: Optional[float], strong: float, weak: float, *, weak_incl
     return "중"
 
 
+def _is_fallback_composite(stock: dict) -> bool:
+    """A②: 종합점수가 사전필터 탈락 경로로 채워졌는지(flags의 fallback 표식)."""
+    return any("fallback" in str(f) for f in (stock.get("flags") or []))
+
+
 def derive_grade(stock: dict, *, market_direction: Optional[str] = None) -> tuple[str, str, dict]:
     """매력도 3축 정렬 패턴 → 등급(매수/관망/축소) + 신뢰도(상/중/하) + 근거(basis).
 
@@ -261,6 +266,31 @@ def derive_grade(stock: dict, *, market_direction: Optional[str] = None) -> tupl
     quant = _axis_level(stock.get("comp"), GRADE_QUANT_STRONG, GRADE_QUANT_WEAK)
     cons = _axis_level(stock.get("up"), GRADE_CONS_STRONG, GRADE_CONS_WEAK)
     my = _axis_level((stock.get("note") or {}).get("attractiveness"), GRADE_MY_STRONG, GRADE_MY_WEAK, weak_inclusive=True)
+
+    # ── A②: 사전필터 탈락(fallback) composite는 퀀트 축을 '강'으로 만들지 못한다 ──────
+    # fallback은 '값 없음'이 아니라 "사전필터는 통과 못 했지만 팩터 가중평균은 계산됨"이다
+    # (PR-B). 그래서 축을 **제외하지 않는다** — 제외하면 축이 하나 사라져 정보를 버리고
+    # 오히려 '관망·하'로 뭉개진다. 대신 **'강' 승격만 막는다**: 사전필터 탈락(F-Score 낮음
+    # ·고유변동성 과다)은 그 종목의 퀀트 신호를 덜 믿으라는 뜻이지 무시하라는 뜻이 아니다.
+    # 실사례: SK하이닉스·효성중공업·LS일렉트릭·파두가 fallback comp로 '매수·신뢰도 상'이었다.
+    # 시장·베타 보정과 같은 **비대칭 보수화** 패턴(하방 민감·상방 신중)이라 설계도 일관된다.
+    quant_fallback = _is_fallback_composite(stock)
+    fallback_adjust = None
+    if quant_fallback and quant == "강":
+        fallback_adjust = {"applied": True, "axis": "quant", "from": "강", "to": "중",
+                           "reason": "사전필터 탈락(fallback) 종합점수 — 퀀트 신호 신뢰도 낮춤"}
+        quant = "중"
+
+    # ── A③: 스테일 컨센서스는 '강'으로 만들지 못한다 ────────────────────────────────
+    # 목표가가 오래 갱신되지 않은 채 괴리만 극단이면(예 BBW: 52회 수집 동안 고유 목표가 1개,
+    # 괴리 +105%) 그건 강한 상승여력이 아니라 **갱신되지 않은 값**일 가능성이 크다.
+    # 데이터 원류 수정은 별건이고, 여기서는 등급이 그 값을 근거로 '매수'를 만들지 않게 막는다.
+    cons_stale = bool((stock.get("consensusStale") or {}).get("stale"))
+    stale_adjust = None
+    if cons_stale and cons == "강":
+        stale_adjust = {"applied": True, "axis": "consensus", "from": "강", "to": "중",
+                        "reason": "컨센서스 정체 의심(목표가 장기 미갱신 + 괴리 극단)"}
+        cons = "중"
 
     # 시장·베타 보정(퀀트 축 경로로만, 하방 민감·상방 신중). 강세는 끌어올리지 않는다.
     beta = _num(stock.get("beta"))
@@ -299,6 +329,8 @@ def derive_grade(stock: dict, *, market_direction: Optional[str] = None) -> tupl
         "strong": strong,
         "weak": weak,
         "marketAdjust": market_adjust,
+        "fallbackAdjust": fallback_adjust,     # A②
+        "staleConsensusAdjust": stale_adjust,  # A③
         "divergence": divergence,
     }
     return grade, confidence, basis
