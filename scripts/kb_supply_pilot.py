@@ -44,7 +44,7 @@ PILOT_TICKERS: list[tuple[str, str]] = [
     ("001450.KS", "현대해상"),
     ("000660.KS", "SK하이닉스"),
     ("298040.KS", "효성중공업"),
-    ("059090.KS", "미코"),
+    ("059090.KQ", "미코"),
 ]
 PILOT_DAYS = 5           # 최근 5거래일
 LOOKBACK_CALENDAR = 12   # 5거래일을 덮는 캘린더 여유

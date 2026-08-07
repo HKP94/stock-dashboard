@@ -21,10 +21,17 @@ class TestKosdaqBenchmark:
         assert _market_benchmark("005930.KS", "KR") == "^KS11"
         assert _market_benchmark("001450.KS", "KR") == "^KS11"
 
-    def test_legacy_allowlist_still_honored(self):
-        """과거 .KS로 잘못 저장된 코스닥 종목 하위호환(일괄 정정 전까지 유지)."""
-        assert _market_benchmark("059090.KS", "KR") == "^KQ11"   # 미코
-        assert _market_benchmark("213420.KS", "KR") == "^KQ11"   # 덕산네오룩스
+    def test_corrected_legacy_tickers(self):
+        """s1 정정 완료 — 레거시 종목도 이제 접미사만으로 판정된다(allowlist 제거)."""
+        for t in ("059090.KQ", "078350.KQ", "213420.KQ", "338220.KQ"):
+            assert _market_benchmark(t, "KR") == "^KQ11", t
+
+    def test_no_hardcoded_allowlist(self):
+        """별도 진실원본이 되살아나면 실패 — 078350 드리프트의 재발 방지."""
+        from src import compute_quant
+
+        # 심볼 자체가 없어야 한다(주석의 '제거했다' 설명은 허용).
+        assert not hasattr(compute_quant, "_KOSDAQ_DEFAULT")
 
     def test_us_unchanged(self):
         assert _market_benchmark("MSFT", "US") == "^GSPC"

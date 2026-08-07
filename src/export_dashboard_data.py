@@ -1200,6 +1200,44 @@ def _build_strategy_constituents(conn) -> dict:
                               "items": _top("composite", None)}
     return out
 # ── Phase C: 발굴 스크린(관심종목 밖) 로드 ────────────────────────────────
+def _group_estimated_earnings(rows: list[dict]) -> list[dict]:
+    """
+    R7 후속: **추정(법정기한) 건을 같은 날짜끼리 1행으로 집약**한다.
+
+    KR은 사전 실적일정 공시가 없어 전 종목이 같은 법정기한(예 반기 8/14)으로 들어온다.
+    28건이 같은 날짜를 채우면 US 확정일정(LITE 8/11·SPCE 8/12·FUTU 8/19)이 파묻혀
+    "향후 2주 일정" 뷰가 죽는다. 사실은 맞지만 읽을 수 없는 화면이 된다.
+
+    - 집약 대상은 `confirmed=false`(추정)뿐 — **확정 일정은 절대 합치지 않는다**.
+    - 라벨을 '예정일'이 아니라 **'법정기한'**으로 명시한다(오해 방지).
+    - DART 실접수가 잡히면 `confirmed=true`로 승격돼 자동으로 개별 행이 된다(추가 코드 없음).
+    - 집약은 **표시 레이어 전용** — `earnings_calendar` 원본은 종목별 행 그대로다(조회·트리거용).
+    """
+    out: list[dict] = []
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        item = {**r, "scheduled_date": r["scheduled_date"].isoformat()}
+        if r.get("confirmed"):
+            out.append(item)
+            continue
+        groups.setdefault((item["scheduled_date"], r.get("source")), []).append(item)
+
+    for (sched, source), members in groups.items():
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        out.append({
+            "kind": "group",
+            "scheduled_date": sched,
+            "confirmed": False,
+            "source": source,
+            "label": "KR 반기·분기보고서 법정기한" if source == "dart" else "추정 일정",
+            "count": len(members),
+            "tickers": sorted(m["ticker"] for m in members),
+        })
+    return sorted(out, key=lambda r: (r["scheduled_date"], r.get("ticker") or ""))
+
+
 def _load_recent_earnings(conn, days: int = 14) -> list[dict]:
     """R7: 최근 발표 결과(컨센 대비 서프라이즈). 표시·판단 참고용 — 점수 소급 반영 금지."""
     from src.freshness import today_kst
@@ -2533,10 +2571,7 @@ def build_data() -> dict:
         try:
             from src.ingest_earnings import upcoming_earnings
             earnings = {
-                "upcoming": [
-                    {**r, "scheduled_date": r["scheduled_date"].isoformat()}
-                    for r in upcoming_earnings(conn)
-                ],
+                "upcoming": _group_estimated_earnings(upcoming_earnings(conn)),
                 "recent": _load_recent_earnings(conn),
             }
         except Exception as _exc:

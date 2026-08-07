@@ -66,8 +66,10 @@ def test_beta_window_limits_to_recent_observations(monkeypatch):
 def test_benchmark_mapping():
     assert _market_benchmark("AAPL", "US") == "^GSPC"
     assert _market_benchmark("005930.KS", "KR") == "^KS11"     # 코스피 기본
-    assert _market_benchmark("059090.KS", "KR") == "^KQ11"     # 미코(코스닥 default)
-    assert _market_benchmark("338220.KS", "KR") == "^KQ11"     # 뷰노(코스닥)
+    # s1 정정 후: 판별은 접미사 단일 소스(하드코딩 allowlist 없음)
+    assert _market_benchmark("059090.KQ", "KR") == "^KQ11"     # 미코
+    assert _market_benchmark("338220.KQ", "KR") == "^KQ11"     # 뷰노
+    assert _market_benchmark("078350.KQ", "KR") == "^KQ11"     # 한양디지텍(allowlist 누락 사고 종목)
 
 
 def test_kosdaq_env_override(monkeypatch):
@@ -75,8 +77,9 @@ def test_kosdaq_env_override(monkeypatch):
     codes = _kosdaq_codes()
     assert "111111" in codes and "222222" in codes
     assert _market_benchmark("111111.KS", "KR") == "^KQ11"
-    # 기본 코스닥 종목도 유지
-    assert "059090" in codes
+    # env는 임시 보정 전용 — 평시 하드코딩 기본값은 없다(별도 진실원본 제거).
+    monkeypatch.delenv("KOSDAQ_TICKERS")
+    assert _kosdaq_codes() == set()
 
 
 def test_beta_not_in_composite():

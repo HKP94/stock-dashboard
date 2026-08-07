@@ -170,27 +170,26 @@ def _floatify(row: dict) -> dict:
 # ──────────────────────────────────────────────────────────────
 BETA_WINDOW_DAYS = int(os.getenv("BETA_WINDOW_DAYS", "252"))   # 약 1년 거래일
 BETA_MIN_OBS = int(os.getenv("BETA_MIN_OBS", "60"))           # 공통 거래일 최소 관측 수
-# 벤치마크: KR→코스피, US→S&P500. 코스닥 상장은 ^KQ11.
-# 코스닥 판별 자동화(pykrx 보드 엔드포인트)가 현재 불가 → 1차 ^KS11 기본 +
-# 확정 코스닥 종목 allowlist(env KOSDAQ_TICKERS로 보강). 보드 자동 분류는 후속 백로그.
-_KOSDAQ_DEFAULT: frozenset[str] = frozenset({"059090", "213420", "338220"})  # 미코·덕산네오룩스·뷰노
+# 벤치마크: KR→코스피(^KS11), 코스닥 상장은 ^KQ11, US→S&P500.
+# 판별은 **티커 접미사 단일 소스**(s1 정정 후). 하드코딩 allowlist(_KOSDAQ_DEFAULT)는 제거했다 —
+# 접미사와 별개의 진실원본이라 신규 종목이 등록될 때마다 손봐야 했고, 실제로 한양디지텍(078350)이
+# 거기 빠져 코스닥인데 ^KS11 기준으로 베타가 계산·저장돼 있었다(드리프트 실증).
+# KOSDAQ_TICKERS env는 코드 배포 없이 임시 보정할 여지로 남긴다(평시 비어 있음).
 
 
 def _kosdaq_codes() -> set[str]:
+    """임시 보정용 코스닥 코드 집합. 평시 비어 있고, 판별은 접미사가 한다."""
     env = os.getenv("KOSDAQ_TICKERS", "")
-    extra = {c.strip().split(".")[0] for c in env.split(",") if c.strip()}
-    return set(_KOSDAQ_DEFAULT) | extra
+    return {c.strip().split(".")[0] for c in env.split(",") if c.strip()}
 
 
 def _market_benchmark(ticker: str, market: str) -> str:
     """
     종목의 벤치마크 지수 코드. US→^GSPC, KR→^KQ11(코스닥)·^KS11(코스피 기본).
 
-    R4: **`.KQ` 접미사를 1차 판정 근거로 삼는다** — 티커 접미사가 실제 상장시장을 뜻한다는
-    관례(CLAUDE.md)와 벤치마크 판정을 한 소스로 묶기 위함. `_KOSDAQ_DEFAULT` allowlist는
-    과거에 `.KS`로 잘못 저장된 코스닥 종목(미코·덕산네오룩스·뷰노)을 위한 하위호환으로 유지한다
-    — 신규 코스닥 종목마다 allowlist를 손대야 했던 드리프트(뉴프렉스·파두가 코스피 벤치마크로
-    베타 계산될 뻔한 경로)를 접미사 판정이 구조적으로 막는다.
+    R4/s1: **`.KQ` 접미사가 유일한 판정 근거다.** 티커 접미사가 실제 상장시장을 뜻한다는
+    관례(CLAUDE.md)와 벤치마크 판정을 한 소스로 묶는다 — 별도 allowlist를 두면 그것이
+    드리프트해 조용히 틀린 벤치마크로 베타를 재게 된다(078350 실사고).
     """
     if market == "US":
         return "^GSPC"
