@@ -232,7 +232,14 @@ export function Screener({ D, nav }) {
   const overall = D.market.overall;
   const regimeBasis = D.market.kr?.regimeBasis || D.market.us?.regimeBasis || "";
 
-  const momentum = [...D.stocks].sort((a, b) => b.f.m - a.f.m).slice(0, 9);
+  // A①: 모멘텀 픽에도 #90 추세확인 게이트를 적용한다. 게이트는 4상한에만 붙어 있었고
+  // 이 패널은 도입 전 코드 그대로라 '고점 후 붕괴' 종목이 그대로 1위로 올라왔다
+  // (실측: 효성중공업 모멘텀 100·고점比 -38%가 1위, 한양디지텍 96·-53%가 2위).
+  // §2 레이어 분리: 팩터 값(f.m)은 손대지 않고 **픽 레이어에서만** 강등한다.
+  const isBroken = (s) => (s.momoTrend?.state === "broken" ? 1 : 0);
+  const momentum = [...D.stocks]
+    .sort((a, b) => isBroken(a) - isBroken(b) || b.f.m - a.f.m)
+    .slice(0, 9);
   // PR-1: 장기보유 = 안전마진(가치+퀄리티+재무건전성) 복합 기준. 단일 F-Score 7+ 필터 폐기(구조적으로 비어).
   const SAFETY_FLOOR = 55;
   const longterm = [...D.stocks]
@@ -269,15 +276,16 @@ export function Screener({ D, nav }) {
     </div>
 
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
-      <Panel title="모멘텀 픽" sub="타이밍 시그널" right={<MonoCaps style={{ fontSize: 9.5 }} color={C.acc}>모멘텀 내림차순</MonoCaps>}>
+      <Panel title="모멘텀 픽" sub="타이밍 시그널" right={<MonoCaps style={{ fontSize: 9.5 }} color={C.acc}>추세 확인 후 모멘텀순</MonoCaps>}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
-            {["#", "종목", "모멘텀", "심리", "RSI"].map((h, i) => <th key={i} style={{ padding: "8px 12px", textAlign: i >= 2 ? "right" : "left" }}><MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps></th>)}
+            {["#", "종목", "추세", "모멘텀", "심리", "RSI"].map((h, i) => <th key={i} style={{ padding: "8px 12px", textAlign: i >= 3 ? "right" : "left" }}><MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps></th>)}
           </tr></thead>
           <tbody>
             {momentum.map((s, i) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
               <td style={{ padding: "10px 12px" }}><Num size={13} weight={700} color={i < 3 ? C.acc : C.ink3}>{i + 1}</Num></td>
               <td style={{ padding: "10px 12px" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 13, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 10, color: C.ink3 }}>{s.mk}</span></div></td>
+              <td style={{ padding: "10px 12px" }}>{s.momoTrend ? <MomoTrendBadge trend={s.momoTrend} /> : <span style={{ fontSize: 10.5, color: C.ink3 }}>—</span>}</td>
               <td style={{ padding: "10px 12px", textAlign: "right" }}><div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}><Num size={13} weight={600} color={gradeCol(s.f.m)}>{s.f.m}</Num><GradeChip value={s.f.m} /></div></td>
               <td style={{ padding: "10px 12px", textAlign: "right" }}><SentBadge label={s.sent} sm /></td>
               <td style={{ padding: "10px 12px", textAlign: "right" }}><Num size={13} weight={600} color={s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>

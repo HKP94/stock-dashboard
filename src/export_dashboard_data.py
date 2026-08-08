@@ -110,11 +110,32 @@ def _rr(v):
 # 유지해 최근 붕괴를 못 잡는다(효성 모멘텀100·고점-33%). 여기서 단기 기술(sma·60일 드로다운·
 # MACD)로 '지금 추세'를 판정해 픽/조언에만 오버레이한다. 팩터·composite·dual-score 값은 불변.
 # §F7: 오늘 종가·오늘 지표만 사용(룩어헤드 없음). 임계는 상수로 노출(튜닝 가능).
+# A③: 컨센서스 정체 판정 — 최근 N일 수집분에서 목표가 고유값이 1개 이하이고 표본이 충분할 때,
+# 괴리가 극단(|CONSENSUS_STALE_UPSIDE_PCT|+)이면 '정체 의심'으로 표식한다.
+CONSENSUS_STALE_WINDOW_DAYS = 45
+CONSENSUS_STALE_MIN_SAMPLES = 10
+CONSENSUS_STALE_UPSIDE_PCT = 50.0
+
 MOMO_DD_BROKEN = -20.0   # 60일 종가고점 대비 드로다운 ≤ 이 값 = 깊은 붕괴 신호
 MOMO_DD_INTACT = -15.0   # 드로다운 ≥ 이 값(고점 15% 이내) + sma20 위 = 상승 유지(정상 조정 허용)
 MOMO_SWING_WIN = 20      # 스윙 로우(최근 저점) 창(거래일)
 MOMO_HIGH_WIN = 60       # 60일 고점 창
 MOMO_ATR_MULT = 2.0      # ATR 트레일링 스톱 배수
+
+
+def _consensus_stale(info: dict | None, upside_pct) -> dict | None:
+    """A③: 목표가 장기 미갱신 + 괴리 극단 → 정체 의심 표식. 둘 다 충족할 때만 stale."""
+    if not info:
+        return None
+    up = _f(upside_pct)
+    extreme = up is not None and abs(up) >= CONSENSUS_STALE_UPSIDE_PCT
+    if not extreme:
+        return None
+    return {
+        "stale": True,
+        "reason": f"최근 {info['samples']}회 수집 동안 목표가 변동 없음 · 괴리 {up:+.0f}%",
+        **info,
+    }
 
 
 def _momentum_trend(close, sma20, sma50, ser, macd_line, macd_signal, macd_hist) -> dict | None:
@@ -2153,6 +2174,31 @@ def build_data() -> dict:
         """)
         ana_map = {r["ticker"]: dict(r) for r in cur.fetchall()}
 
+        # A③: 컨센서스 정체 가드 — 목표가가 오래 갱신되지 않았는데 괴리만 극단이면
+        # '강한 상승여력'이 아니라 **갱신 안 된 값**일 가능성이 크다. 표시·등급에서 주의로 다룬다.
+        # (데이터 원류 수정은 별건. 여기선 그 값이 근거가 되어 '매수'를 만들지 않게 막는 가드다.)
+        # 실측: BBW 52회 수집 동안 고유 목표가 1개인데 괴리 +105%, 덕산네오룩스 고유 2개에 +148%.
+        cur.execute(
+            """
+            SELECT ticker,
+                   count(*)                        AS n,
+                   count(DISTINCT target_price)    AS uniq_targets,
+                   max(asof)                       AS last_asof,
+                   min(asof)                       AS first_asof
+              FROM analyst
+             WHERE asof >= %s AND target_price IS NOT NULL
+             GROUP BY ticker
+            """,
+            (today_kst() - timedelta(days=CONSENSUS_STALE_WINDOW_DAYS),),
+        )
+        consensus_stale_map = {}
+        for r in cur.fetchall():
+            if r["n"] >= CONSENSUS_STALE_MIN_SAMPLES and r["uniq_targets"] <= 1:
+                consensus_stale_map[r["ticker"]] = {
+                    "samples": r["n"], "uniqTargets": r["uniq_targets"],
+                    "since": r["first_asof"].isoformat(), "last": r["last_asof"].isoformat(),
+                }
+
         # PR-1: 증분 처리로 오늘자 news_analysis가 없는 종목도 빈 카드가 되지 않도록
         # 종목별 "가장 최근 1건"을 조회한다(asof 날짜도 함께 반환).
         # PR-1(진단): 폴백('분석 실패'/'일시 보류')보다 '실제 요약'을 우선한다.
@@ -2387,6 +2433,8 @@ def build_data() -> dict:
                 # 점수 이원화: 장기(가치·퀄리티·성장) / 모멘텀(모멘텀·심리). 재합산 금지(§2).
                 **_dual_scores(mom, value, qual, grow, sent_f),
                 # 모멘텀 추세확인 오버레이(팩터 불변): 픽에서 붕괴주 강등·매수/매도 구간 표출.
+                "consensusStale": _consensus_stale(consensus_stale_map.get(tk),
+                                                  round(upside * 100, 1) if upside else None),  # A③
                 "momoTrend": momo_trend,
                 "momoZone": momo_zone,
                 # 신규-A1: 시장 민감도(퀀트 축 별도 팩터, composite 미합산). None=미산출.
