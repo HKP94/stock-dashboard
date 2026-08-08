@@ -13,6 +13,23 @@ import { WatchlistAdmin } from './tabsE.jsx';
 const DATA_API = "http://127.0.0.1:8765/api/data";
 const POLL_MS = 5 * 60 * 1000;
 
+// Phase 2: 기본은 라이트(KPH 확정). 다크는 옵션으로 남긴다 — 선택은 localStorage에 유지.
+function ThemeToggle() {
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute("data-theme") || "light");
+  const flip = () => {
+    const next = theme === "light" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", next);
+    localStorage.setItem("atlas-theme", next);
+    setTheme(next);
+  };
+  return (
+    <button onClick={flip} title={`${theme === "light" ? "다크" : "라이트"} 테마로 전환`}
+      style={{ border: `1px solid ${C.line2}`, background: C.surface, color: C.ink2, borderRadius: 999, width: 30, height: 30, cursor: "pointer", fontSize: 13, lineHeight: 1, flexShrink: 0 }}>
+      {theme === "light" ? "◐" : "◑"}
+    </button>
+  );
+}
+
 export default function App() {
   const [D, setD] = useState(atlasData);
   const [tab, setTab] = useState("overview");
@@ -92,7 +109,9 @@ export default function App() {
             </span>
           </div>
 
-          {/* right: 가격 기준일(신선도) + 데이터 생성 시각 */}
+          {/* right: 테마 토글 + 가격 기준일(신선도) + 데이터 생성 시각 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <ThemeToggle />
           <div style={{ textAlign: "right" }}>
             <MonoCaps style={{ fontSize: 9 }} color={C.ink3} title="대시보드 가격이 기준한 최신 거래일">가격 기준일</MonoCaps>
             <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
@@ -111,6 +130,7 @@ export default function App() {
                 KR {D.priceAsofByMarket.KR || "—"} · US {D.priceAsofByMarket.US || "—"}
               </div>
             )}
+          </div>
           </div>
         </div>
 

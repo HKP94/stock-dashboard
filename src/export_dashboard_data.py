@@ -393,6 +393,10 @@ def _format_investor_flow(row: dict | None, market: str) -> dict | None:
             return None
 
     return {
+        # 당일 순매수(원). "외인 순매수일" 같은 규칙은 3일 합계로는 판정이 안 되므로
+        # 당일값을 그대로 내보낸다(쿼리는 이미 select 중 — 계산·수집 무변경).
+        "foreignNet1d":      _f(row.get("foreign_net")),
+        "institutionNet1d":  _f(row.get("institution_net")),
         "foreignNet3d":      _f(row.get("foreign_3d_sum")),
         "institutionNet3d":  _f(row.get("institution_3d_sum")),
         "foreignSignal":     row.get("foreign_signal"),

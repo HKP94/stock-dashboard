@@ -83,11 +83,13 @@ function PriceSample({ label, value, dir }) {
 }
 
 export default function StyleGuide() {
-  const [theme, setTheme] = useState('dark');
+  // Phase 2: 기본 테마는 앱과 같은 곳(main.jsx가 설정한 문서 속성)에서 온다.
+  // 여기에 'dark'를 하드코딩하면 스타일가이드만 앱과 다른 테마로 뜬다.
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') || 'light');
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     document.body.style.background = 'var(--bg-app)';
-    return () => { document.documentElement.removeAttribute('data-theme'); document.body.style.background = ''; };
+    return () => { document.body.style.background = ''; };
   }, [theme]);
 
   return (

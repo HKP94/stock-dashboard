@@ -9,7 +9,7 @@ import {
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { cleanDisplayText, extractBullets, filterStocks, portfolioAssetTotal, sortStocksBySentiment, isCompleteSignal, userFlagLabel } from './display.js';
+import { cleanDisplayText, extractBullets, filterStocks, portfolioAssetTotal, sortStocksBySentiment, isCompleteSignal, userFlagLabel, stopDistance, eventDDay, buildTriggers, fmtEok } from './display.js';
 
 // PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
 function fmtBig(v, cur) {
@@ -173,38 +173,267 @@ const isDataQuality = (f) => /데이터 부족|사전필터 제외|발행주식�
 
 // ============================ OVERVIEW ============================
 // PR-1: 오버뷰 최상단 "오늘의 요약 밴드" — 30초 스캔용 합성 인사이트 (정보·관찰용)
-function DailyBriefBand({ b, regimes, nav }) {
-  if (!b) return null;
-  const regimeMeta = (regimes && regimes[b.regime]) || {};
-  const Chip = ({ item, color }) => (
-    <button onClick={() => nav(item.t)} className="row-hover"
-      style={{ display: "block", width: "100%", textAlign: "left", border: "none", background: "none", cursor: "pointer", padding: "5px 8px", borderRadius: 6 }}>
-      <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{item.name}</span>
-      <span style={{ fontSize: 11, color: C.ink2, marginLeft: 6 }}>{item.why}</span>
+// ============================================================
+// 홈 4밴드 — 정보 우선순위 = 투자 결정 순서
+//   1 내 보유 → 2 오늘의 트리거 → 3 시장 국면 → 4 관찰
+// 표현 레이어만. 계산·수집·판정은 전부 백엔드 값 그대로 쓴다(§2).
+// ============================================================
+
+function Band({ n, title, sub, right, children, bodyStyle }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 12, boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", borderBottom: `1px solid ${C.line}`, background: C.surface2 }}>
+        <span className="tnum" style={{ fontSize: 10, fontWeight: 800, color: C.onAcc, background: C.acc, borderRadius: 999, width: 17, height: 17, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</span>
+        <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{title}</span>
+        {sub && <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>{sub}</MonoCaps>}
+        {right && <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>{right}</span>}
+      </div>
+      <div style={bodyStyle}>{children}</div>
+    </div>
+  );
+}
+
+// ── 1열: 내 보유 ────────────────────────────────────────────
+// 카드 1장 = 종목 1개, 지표 4종(손익 · 손절/목표 거리 · 수급 · 임박 이벤트).
+function HoldingCard({ s, earnings, today, nav }) {
+  const h = s.holding || {};
+  const pnlPct = h.pnl_pct;
+  const pnlCol = pnlPct == null ? C.ink3 : pnlPct >= 0 ? C.up : C.down;
+  const zone = stopDistance(s);
+  const ev = eventDDay(earnings, s.t, today);
+  const flow = s.investorFlow;
+  const net1d = flow?.foreignNet1d;
+  const hasNet1d = net1d !== null && net1d !== undefined;
+
+  const Metric = ({ label, children, tip }) => (
+    <div style={{ minWidth: 0 }} title={tip || undefined}>
+      <MonoCaps style={{ fontSize: 8.5, display: "block", marginBottom: 3 }} color={C.ink3}>{label}</MonoCaps>
+      {children}
+    </div>
+  );
+
+  return (
+    <button onClick={() => nav(s.t)} className="row-hover"
+      style={{ textAlign: "left", border: "none", borderRight: `1px solid ${C.line}`, background: "none", cursor: "pointer", padding: "13px 16px", display: "flex", flexDirection: "column", gap: 11, minWidth: 0 }}>
+      {/* 종목 + 현재가 */}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 7, minWidth: 0 }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.name}</span>
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "baseline", gap: 6, flexShrink: 0 }}>
+          <Num size={13.5} weight={700}>{fmtPrice(s)}</Num>
+          <ChangePct v={s.chg} size={11} />
+        </span>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "11px 12px" }}>
+        {/* ① 손익 */}
+        <Metric label="평가손익">
+          <Num size={16} weight={800} color={pnlCol}>
+            {pnlPct == null ? "—" : `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`}
+          </Num>
+          {h.pnl != null && (
+            <div className="tnum" style={{ fontSize: 10.5, color: pnlCol, marginTop: 1 }}>
+              {h.pnl >= 0 ? "+" : "−"}{h.currency === "KRW" ? "₩" : "$"}{Math.abs(Math.round(h.pnl)).toLocaleString("ko-KR")}
+            </div>
+          )}
+        </Metric>
+
+        {/* ② 손절 · 목표 거리 — broken이면 손절선을 지어내지 않고 재탈환가를 보여준다(#90) */}
+        <Metric label={zone?.kind === "reclaim" ? "재탈환 필요" : "손절 · 목표"} tip={zone?.note}>
+          {!zone ? <span style={{ fontSize: 11.5, color: C.ink3 }}>구간 미설정</span>
+            : zone.kind === "reclaim" ? (
+              <>
+                <Num size={13} weight={700} color={C.warn}>{fmtLevelText(zone.reclaim, s)}</Num>
+                <div style={{ fontSize: 10, color: C.ink3, marginTop: 1 }}>+{zone.reclaimPct.toFixed(1)}% · 재탈환 전 손절선 없음</div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <Num size={13} weight={700} color={zone.breached ? C.neg : C.down}>{fmtSignedPct(zone.stopPct)}</Num>
+                  <span style={{ fontSize: 10, color: C.ink3 }}>/</span>
+                  {/* 목표가를 이미 넘긴 종목은 targetPct가 음수다 — "+-7.9%"로 새지 않게 부호를 계산한다 */}
+                  <Num size={13} weight={700} color={zone.targetPct != null && zone.targetPct < 0 ? C.ink3 : C.up}>{fmtSignedPct(zone.targetPct)}</Num>
+                </div>
+                <div style={{ fontSize: 10, color: zone.breached ? C.neg : C.ink3, marginTop: 1 }}>
+                  {zone.breached ? "손절선 이탈"
+                    : zone.targetPct != null && zone.targetPct < 0 ? `목표가 상회 · 손절 ${fmtLevelText(zone.stop, s)}`
+                      : `손절 ${fmtLevelText(zone.stop, s)} · 목표 ${fmtLevelText(zone.target, s)}`}
+                </div>
+              </>
+            )}
+        </Metric>
+
+        {/* ③ 수급 — 당일(방향) + 3일(추세) 병기. US는 구조적 부재이므로 정직하게 표기. */}
+        <Metric label="외국인 수급" tip={flow?.asof ? `기준일 ${flow.asof}` : undefined}>
+          {!flow ? <span style={{ fontSize: 11.5, color: C.ink3 }}>미수집 (해외)</span>
+            : (
+              <>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                  {/* 당일값은 최신 export에만 있다. 구 data.json이면 조용히 '당일 미수집'. */}
+                  <span style={{ fontSize: 13, fontWeight: 800, color: !hasNet1d ? C.ink3 : net1d > 0 ? C.up : net1d < 0 ? C.down : C.ink3 }}>
+                    {!hasNet1d ? "당일 미수집" : `${net1d > 0 ? "▲" : net1d < 0 ? "▼" : "·"} ${fmtEok(net1d)}`}
+                  </span>
+                  {hasNet1d && <span style={{ fontSize: 9.5, color: C.ink3 }}>당일</span>}
+                </div>
+                <div style={{ fontSize: 10, color: C.ink3, marginTop: 1 }}>
+                  3일 {fmtEok(flow.foreignNet3d)} · {flow.combinedSignal?.replace(/_/g, " ") || "—"}
+                </div>
+              </>
+            )}
+        </Metric>
+
+        {/* ④ 임박 이벤트 D-day */}
+        <Metric label="임박 이벤트">
+          {!ev ? <span style={{ fontSize: 11.5, color: C.ink3 }}>예정 없음</span>
+            : (
+              <>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                  <Num size={14} weight={800} color={ev.days <= 3 ? C.warn : C.ink}>D-{ev.days}</Num>
+                  {ev.estimated && <span title="공시 접수 전 — 법정기한 기준 추정일" style={{ fontSize: 8.5, fontWeight: 700, color: C.ink3, border: `1px solid ${C.line2}`, borderRadius: 3, padding: "0 4px" }}>추정</span>}
+                </div>
+                <div style={{ fontSize: 10, color: C.ink3, marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {ev.date} {ev.consensusEps != null ? `· 컨센 EPS ${ev.consensusEps}` : ""}
+                </div>
+              </>
+            )}
+        </Metric>
+      </div>
     </button>
   );
+}
+
+function fmtLevelText(v, s) {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  return s.cur === "₩" ? `₩${Math.round(v).toLocaleString("ko-KR")}` : `$${Number(v).toFixed(2)}`;
+}
+
+const fmtSignedPct = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
+
+function HoldingsBand({ D, nav }) {
+  const held = D.stocks.filter((s) => s.hold && s.holding);
+  const total = portfolioAssetTotal(D.portfolio);
+  const p = D.portfolio || {};
+
+  const right = total != null ? (
+    <>
+      <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>총자산</MonoCaps>
+        <Num size={17} weight={800}>₩{Math.round(total).toLocaleString("ko-KR")}</Num>
+      </span>
+      <span style={{ width: 1, height: 16, background: C.line2 }}></span>
+      <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>총손익</MonoCaps>
+        <Num size={15} weight={800} color={p.total_pnl >= 0 ? C.up : C.down}>
+          {p.total_pnl >= 0 ? "+" : "−"}₩{Math.abs(Math.round(p.total_pnl || 0)).toLocaleString("ko-KR")}
+        </Num>
+        <span className="tnum" style={{ fontSize: 12, fontWeight: 700, color: p.total_pnl_pct >= 0 ? C.up : C.down }}>
+          ({p.total_pnl_pct >= 0 ? "+" : ""}{p.total_pnl_pct?.toFixed(2)}%)
+        </span>
+      </span>
+      {p.fx_rate && <span style={{ fontSize: 9.5, color: C.ink3 }}>USD/KRW {Math.round(p.fx_rate).toLocaleString("ko-KR")}</span>}
+    </>
+  ) : null;
+
+  return (
+    <Band n={1} title="내 보유" sub={`${held.length}종목 · 손익 · 손절/목표 · 수급 · 이벤트`} right={right}>
+      {held.length === 0 ? (
+        <div style={{ padding: "20px 16px", fontSize: 12.5, color: C.ink3, textAlign: "center" }}>보유 종목이 없습니다.</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(held.length, 4)}, minmax(0,1fr))` }}>
+          {held.map((s) => <HoldingCard key={s.t} s={s} earnings={D.earnings} today={D.priceAsof || D.today} nav={nav} />)}
+        </div>
+      )}
+    </Band>
+  );
+}
+
+// ── 2열: 오늘의 트리거 ──────────────────────────────────────
+const TRIGGER_TONE = { alert: C.neg, condition: C.warn, info: C.ink2 };
+const TRIGGER_KIND_LABEL = { alert: "경고", condition: "조건 충족", info: "정보" };
+
+function TriggerBand({ stocks, nav }) {
+  const triggers = buildTriggers(stocks);
+  const alerts = triggers.filter((x) => x.kind === "alert").length;
+  const byTicker = Object.fromEntries(stocks.map((s) => [s.t, s]));
+  return (
+    <Band n={2} title="오늘의 트리거" sub={`${triggers.length}건${alerts ? ` · 경고 ${alerts}` : ""}`}
+      right={<span style={{ fontSize: 10, color: C.ink3 }}>조건 충족은 사실 표시 · 매매 지시 아님</span>}
+      bodyStyle={{ maxHeight: 280, overflowY: "auto" }}>
+      {triggers.length === 0 && (
+        <div style={{ padding: "18px 16px", fontSize: 12.5, color: C.ink3, textAlign: "center" }}>오늘 발동한 트리거 없음</div>
+      )}
+      {triggers.map((x, i) => {
+        const tone = TRIGGER_TONE[x.kind];
+        // rules.py 플래그는 라벨만으론 근거가 안 보인다 — 기존 설명문을 그대로 붙인다.
+        const detail = x.detail || (x.flag ? flagDesc(x.flag, byTicker[x.t] || {}) : "");
+        return (
+          <button key={`${x.t}-${x.label}-${i}`} onClick={() => nav(x.t)} className="row-hover"
+            style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", border: "none", borderTop: i ? `1px solid ${C.line}` : "none", background: "none", cursor: "pointer", padding: "9px 14px" }}>
+            <span style={{ width: 3, alignSelf: "stretch", borderRadius: 2, background: tone, flexShrink: 0 }}></span>
+            {x.hold && <HoldDot on />}
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, minWidth: 92, flexShrink: 0 }}>{x.name}</span>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: tone, flexShrink: 0 }}>{x.label}</span>
+            <span style={{ fontSize: 8.5, fontWeight: 700, color: C.ink3, border: `1px solid ${C.line2}`, borderRadius: 3, padding: "0 4px", flexShrink: 0 }}>{TRIGGER_KIND_LABEL[x.kind]}</span>
+            {detail && <span style={{ fontSize: 11, color: C.ink2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{detail}</span>}
+          </button>
+        );
+      })}
+    </Band>
+  );
+}
+
+// ── 3열: 시장 국면 ──────────────────────────────────────────
+function MarketBand({ D, nav }) {
+  const summaryMd = D.market?.summaryMd || D.market?.kr?.summaryMd || "";
+  const line = D.dailyBrief?.marketLine || extractBullets(summaryMd, { limit: 2 }).join(" / ");
+  return (
+    <Band n={3} title="시장 국면" sub="지수 · 환율 · 국면"
+      right={<>
+        <RegimeBadge regime={D.market.overall} regimes={D.regimes} />
+        <button onClick={() => nav(null, "market")} style={{ ...btnGhost, flexShrink: 0 }}>시장 전망 →</button>
+      </>}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${D.market.indices.length}, 1fr)` }}>
+        {D.market.indices.map((ix, i) => {
+          const hasChg = ix.chg != null;
+          const up = hasChg && (ix.inv ? ix.chg < 0 : ix.chg > 0);
+          return (
+            <div key={ix.k} style={{ padding: "12px 14px", borderLeft: i ? `1px solid ${C.line}` : "none", display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <MonoCaps style={{ fontSize: 9.5 }}>{ix.k}</MonoCaps>
+                <span style={{ width: 5, height: 5, borderRadius: 999, background: !hasChg ? C.ink3 : up ? C.up : C.down }}></span>
+              </div>
+              <Num size={19} weight={700}>{ix.v}</Num>
+              <ChangePct v={ix.chg} inv={ix.inv} size={12} />
+            </div>
+          );
+        })}
+      </div>
+      {line && (
+        <div style={{ borderTop: `1px solid ${C.line}`, padding: "10px 16px", fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>{line}</div>
+      )}
+    </Band>
+  );
+}
+
+// ── 4열 보조: 주목·괴리 (구 '오늘의 요약'에서 흡수) ──────────
+function WatchChips({ b, nav }) {
+  if (!b) return null;
   const Col = ({ label, color, items, empty }) => (
-    <div style={{ flex: 1, minWidth: 0, padding: "10px 10px", borderLeft: `3px solid ${color}` }}>
-      <MonoCaps style={{ fontSize: 9, marginLeft: 8, marginBottom: 4, display: "block" }} color={color}>{label}</MonoCaps>
-      {items && items.length > 0 ? items.map((it) => <Chip key={it.t} item={it} color={color} />)
-        : <div style={{ fontSize: 11, color: C.ink3, padding: "5px 8px" }}>{empty}</div>}
+    <div style={{ flex: 1, minWidth: 0, padding: "10px 12px", borderLeft: `3px solid ${color}` }}>
+      <MonoCaps style={{ fontSize: 9, marginBottom: 4, display: "block" }} color={color}>{label}</MonoCaps>
+      {items && items.length > 0 ? items.map((it) => (
+        <button key={it.t} onClick={() => nav(it.t)} className="row-hover"
+          style={{ display: "block", width: "100%", textAlign: "left", border: "none", background: "none", cursor: "pointer", padding: "4px 6px", borderRadius: 6 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{it.name}</span>
+          <span style={{ fontSize: 11, color: C.ink2, marginLeft: 6 }}>{it.why}</span>
+        </button>
+      )) : <div style={{ fontSize: 11, color: C.ink3, padding: "4px 6px" }}>{empty}</div>}
     </div>
   );
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 12, boxShadow: "0 1px 2px rgba(15,23,42,0.04)", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", borderBottom: `1px solid ${C.line}`, background: C.surface2 }}>
-        <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>오늘의 요약</span>
-        <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>30초 스캔 · 정보·관찰용</MonoCaps>
-        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-          <RegimeBadge regime={b.regime} regimes={regimes} />
-          <span style={{ fontSize: 11.5, color: C.ink2, maxWidth: 420, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={`${b.krLine}\n${b.usLine}`}>{b.usLine || b.krLine || b.marketLine}</span>
-        </span>
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap" }}>
-        <Col label="▲ 주목 (퀀트 상위·신선 신호)" color={C.pos} items={b.highlights} empty="해당 종목 없음" />
-        <Col label="▼ 주의 (위험 신호)" color={C.neg} items={b.cautions} empty="오늘 두드러진 주의 신호 없음" />
-        <Col label="⚠ 3축 괴리 (확인 필요)" color={C.warn} items={b.diverge} empty="퀀트·컨센서스 큰 괴리 없음" />
-      </div>
+    <div style={{ display: "flex", flexWrap: "wrap", background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 12, overflow: "hidden" }}>
+      <Col label="▲ 주목 (퀀트 상위)" color={C.pos} items={b.highlights} empty="해당 종목 없음" />
+      <Col label="▼ 주의 (위험 신호)" color={C.neg} items={b.cautions} empty="두드러진 주의 신호 없음" />
+      <Col label="⚠ 3축 괴리 (확인 필요)" color={C.warn} items={b.diverge} empty="큰 괴리 없음" />
     </div>
   );
 }
@@ -261,92 +490,29 @@ export function Overview({ D, nav, goNews }) {
     });
   }, [filter, D.stocks]);
 
-  // PR-3: 플래그 분리
-  const actionAlerts = [], qualityAlerts = [];
+  // 데이터 품질 표식은 트리거(2열)가 아니라 관찰(4열)에 접어 둔다.
+  const qualityAlerts = [];
   D.stocks.forEach((s) => {
-    const af = s.flagsAction ?? (s.flags || []).filter((f) => !isDataQuality(f));
     const qf = s.flagsQuality ?? (s.flags || []).filter(isDataQuality);
-    af.forEach((f) => actionAlerts.push({ s, f }));
     qf.forEach((f) => qualityAlerts.push({ s, f }));
   });
-  const sortRank = (f) => (/과열|데드크로스|과매도|약세|경계|하회/.test(f) ? 0 : /임박|급증|골든/.test(f) ? 1 : 2);
-  actionAlerts.sort((a, b) => sortRank(a.f) - sortRank(b.f));
 
   const topNews = D.news.filter((n) => n.hot).slice(0, 4);
 
-  // PR-2: 시장 코멘트
-  const summaryMd = D.market?.summaryMd || D.market?.kr?.summaryMd || "";
-  const summaryText = extractBullets(summaryMd, { limit: 2 }).join(" / ");
-  const overall = D.market.overall;
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* PR-1: 오늘의 요약 밴드 (최상단, 지수 스트립 위) */}
-      <DailyBriefBand b={D.dailyBrief} regimes={D.regimes} nav={nav} />
+      {/* ── 1열: 내 보유 — 내 돈이 걸린 것부터 ── */}
+      <HoldingsBand D={D} nav={nav} />
 
-      {/* 신규-G: 오늘의 이상 움직임(급등·급락 감지 + 귀인) */}
+      {/* ── 2열: 오늘의 트리거 — 규칙 판정 결과 ── */}
+      <TriggerBand stocks={D.stocks} nav={nav} />
+
+      {/* ── 3열: 시장 국면 ── */}
+      <MarketBand D={D} nav={nav} />
+
+      {/* ── 4열: 관찰 — 이상움직임 · 주목/괴리 · 랭킹 · 뉴스 ── */}
       <AnomaliesBand items={D.moveAnomalies} nav={nav} />
-
-      {/* 지수 스트립 */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 10 }}>
-        {D.market.indices.map((ix) => {
-          const chgNum = ix.chg;
-          const hasChg = chgNum != null;
-          const up = hasChg && (ix.inv ? chgNum < 0 : chgNum > 0);
-          return (
-            <div key={ix.k} style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <MonoCaps style={{ fontSize: 9.5 }}>{ix.k}</MonoCaps>
-                <span style={{ width: 5, height: 5, borderRadius: 999, background: !hasChg ? C.ink3 : up ? C.up : C.down }}></span>
-              </div>
-              <Num size={19} weight={700}>{ix.v}</Num>
-              <ChangePct v={chgNum} inv={ix.inv} size={12} />
-            </div>
-          );
-        })}
-      </div>
-
-      {/* PR-2: 시장 코멘트 카드 */}
-      {summaryText && (
-        <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-          <RegimeBadge regime={overall} regimes={D.regimes} />
-          <span style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.5, flex: 1 }}>{summaryText}</span>
-          <button onClick={() => nav(null, "market")} style={{ ...btnGhost, flexShrink: 0 }}>시장 전망 →</button>
-        </div>
-      )}
-
-      {/* PR-3: 포트폴리오 요약 카드 — ₩ 환산 전체 숫자 */}
-      {portfolioAssetTotal(D.portfolio) != null && (
-        <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "14px 20px", display: "flex", alignItems: "center", gap: 24 }}>
-          <div>
-            <MonoCaps style={{ fontSize: 9 }}>내 포트폴리오 (₩ 환산)</MonoCaps>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
-              <Num size={22} weight={800} style={{ textDecoration: "none" }}>
-                ₩{Math.round(portfolioAssetTotal(D.portfolio)).toLocaleString("ko-KR")}
-              </Num>
-              <span style={{ fontSize: 12, color: C.ink3 }}>총자산</span>
-            </div>
-          </div>
-          <div style={{ width: 1, height: 36, background: C.line2 }}></div>
-          <div>
-            <MonoCaps style={{ fontSize: 9 }}>총손익</MonoCaps>
-            <div style={{ marginTop: 4 }}>
-              <Num size={18} weight={700} style={{ textDecoration: "none" }}
-                color={D.portfolio.total_pnl >= 0 ? C.up : C.down}>
-                {D.portfolio.total_pnl >= 0 ? "+" : ""}₩{Math.round(D.portfolio.total_pnl).toLocaleString("ko-KR")}
-              </Num>
-              <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 700,
-                color: D.portfolio.total_pnl_pct >= 0 ? C.up : C.down }}>
-                ({D.portfolio.total_pnl_pct >= 0 ? "+" : ""}{D.portfolio.total_pnl_pct?.toFixed(2)}%)
-              </span>
-            </div>
-          </div>
-          <div style={{ marginLeft: "auto", textAlign: "right" }}>
-            <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>{D.portfolio.n_holdings}종목 보유</MonoCaps>
-            {D.portfolio.fx_rate && <div style={{ fontSize: 9.5, color: C.ink3, marginTop: 2 }}>USD/KRW {Math.round(D.portfolio.fx_rate).toLocaleString("ko-KR")}</div>}
-          </div>
-        </div>
-      )}
+      <WatchChips b={D.dailyBrief} nav={nav} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 420px", gap: 16, alignItems: "start" }}>
         {/* 랭킹 테이블 */}
@@ -436,35 +602,15 @@ export function Overview({ D, nav, goNews }) {
           </table>
         </Panel>
 
-        {/* 우측 패널 */}
+        {/* 우측 패널 — 알림은 2열 트리거로 이관, 여기엔 품질 안내와 뉴스만 남는다 */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* PR-3: 액션 신호 메인 */}
-          <Panel
-            title="오늘의 알림"
-            sub={`${actionAlerts.length} RULES FLAGGED`}
-            bodyStyle={{ maxHeight: 320, overflowY: "auto" }}
-          >
-            {actionAlerts.map((a, i) => {
-              const desc = flagDesc(a.f, a.s);  // PR-2: 헤더(플래그)와 다른 근거 문장. 빈 값이면 본문 생략
-              return (
-              <div key={i} onClick={() => nav(a.s.t)} className="row-hover" style={{ display: "flex", gap: 11, padding: "11px 16px", borderBottom: `1px solid ${C.line}`, cursor: "pointer", alignItems: "flex-start" }}>
-                <span style={{ width: 3, alignSelf: "stretch", borderRadius: 2, background: flagTone(a.f), flexShrink: 0 }}></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 2 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{a.s.name}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: flagTone(a.f) }}>{userFlagLabel(a.f)}</span>
-                  </div>
-                  {desc && <div style={{ fontSize: 11.5, color: C.ink2, lineHeight: 1.4 }}>{desc}</div>}
-                </div>
-              </div>
-            );})}
-            {actionAlerts.length === 0 && (
-              <div style={{ padding: "18px 16px", fontSize: 12.5, color: C.ink3, textAlign: "center" }}>액션 신호 없음</div>
+          <Panel title="데이터 품질" sub="수집 상태 안내">
+            {qualityAlerts.length === 0 && (
+              <div style={{ padding: "18px 16px", fontSize: 12.5, color: C.ink3, textAlign: "center" }}>미수집 항목 없음</div>
             )}
 
-            {/* PR-3: 데이터 품질 접을 수 있는 섹션 */}
             {qualityAlerts.length > 0 && (
-              <div style={{ borderTop: `1px solid ${C.line}` }}>
+              <div>
                 <button
                   onClick={() => setQualityOpen(!qualityOpen)}
                   style={{ width: "100%", background: C.surface2, border: "none", padding: "8px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}

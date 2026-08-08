@@ -127,3 +127,122 @@ export function userFlagLabel(flag) {
   }
   return flag;   // 이미 사용자 언어인 플래그(과열·골든크로스·목표가 근접 등)는 그대로
 }
+
+
+// ============================================================
+// 홈 4밴드 — 표시 전용 순수 함수 (계산·수집 무변경, §2 관찰만)
+// ============================================================
+
+/** 1열 카드: 현재가와 손절·목표선의 거리(%).
+ *  momoZone은 `broken`이면 stop/target이 **없고** reclaim만 준다(#90 철학 —
+ *  재탈환 전엔 매수·손절선을 제시하지 않는다). 그 경우를 숫자로 위조하지 않고
+ *  kind='reclaim'으로 구분해 돌려준다. */
+export function stopDistance(stock) {
+  const price = Number(stock?.price);
+  const zone = stock?.momoZone;
+  if (!zone || !Number.isFinite(price) || price === 0) return null;
+
+  const pct = (level) => ((Number(level) - price) / price) * 100;
+
+  if (zone.state === "broken") {
+    return Number.isFinite(Number(zone.reclaim))
+      ? { kind: "reclaim", reclaim: Number(zone.reclaim), reclaimPct: pct(zone.reclaim), note: zone.note }
+      : null;
+  }
+  const stop = Number.isFinite(Number(zone.stop)) ? Number(zone.stop) : null;
+  const target = Number.isFinite(Number(zone.target)) ? Number(zone.target) : null;
+  if (stop === null && target === null) return null;
+  return {
+    kind: "zone",
+    state: zone.state,
+    stop, target,
+    stopPct: stop === null ? null : pct(stop),        // 음수 = 손절선이 아래
+    targetPct: target === null ? null : pct(target),
+    breached: stop !== null && price < stop,
+    note: zone.note,
+  };
+}
+
+/** 1열 카드: 임박 실적 이벤트 D-day.
+ *  earnings.upcoming은 개별 행과 KR 법정기한 group 행(tickers[])이 섞여 있다.
+ *  group은 추정(confirmed=false)이므로 estimated 표식을 반드시 달고 나간다. */
+export function eventDDay(earnings, ticker, todayISO) {
+  const items = earnings?.upcoming;
+  if (!Array.isArray(items) || !ticker || !todayISO) return null;
+  const today = Date.parse(`${todayISO}T00:00:00Z`);
+  if (!Number.isFinite(today)) return null;
+
+  let best = null;
+  for (const it of items) {
+    const hit = it.kind === "group"
+      ? (it.tickers || []).includes(ticker)
+      : it.ticker === ticker;
+    if (!hit) continue;
+    const when = Date.parse(`${it.scheduled_date}T00:00:00Z`);
+    if (!Number.isFinite(when)) continue;
+    const days = Math.round((when - today) / 86400000);
+    if (days < 0) continue;                       // 지난 일정은 '임박'이 아니다
+    if (best && best.days <= days) continue;
+    best = {
+      days,
+      date: it.scheduled_date,
+      estimated: it.confirmed === false,
+      label: it.label || it.fiscal_period || "실적 발표",
+      consensusEps: it.consensus_eps ?? null,
+    };
+  }
+  return best;
+}
+
+// 트리거 정렬: 경고(하방)가 먼저, 그다음 조건 충족, 그다음 정보.
+const TRIGGER_RANK = { alert: 0, condition: 1, info: 2 };
+
+/** 2열 「오늘의 트리거」 — 이미 export된 값만 조합한다(새 규칙 판정 없음).
+ *  ① rules.py가 판정한 flagsAction
+ *  ② 손절선 이탈·접근  (price vs momoZone.stop 단순 비교)
+ *  ③ 보유 종목 외인 **당일** 순매수 양(+) 전환 — 종목 하드코딩 없이 보유 전체 일반화
+ *  ④ 3축 등급 '축소'
+ *  보유 종목을 항상 위로 올린다(내 돈이 걸린 것 먼저). */
+export function buildTriggers(stocks, { stopWarnPct = 3 } = {}) {
+  const out = [];
+  for (const s of stocks || []) {
+    const push = (kind, label, detail) => out.push({ t: s.t, name: s.name, hold: !!s.hold, kind, label, detail });
+
+    for (const f of s.flagsAction || []) {
+      if (/^fallback$/i.test(f)) continue;          // 데이터 품질 표식은 트리거가 아니다
+      // 원본 플래그도 실어 보낸다 — 표시 레이어가 근거 문장을 붙일 수 있게.
+      out.push({ t: s.t, name: s.name, hold: !!s.hold, kind: "condition", label: userFlagLabel(f), detail: null, flag: f });
+    }
+
+    const d = stopDistance(s);
+    if (d?.kind === "zone" && d.stopPct !== null) {
+      if (d.breached) push("alert", "손절선 이탈", `현재가가 손절선(${fmtLevel(d.stop, s)}) 아래 ${Math.abs(d.stopPct).toFixed(1)}%`);
+      else if (Math.abs(d.stopPct) <= stopWarnPct) push("alert", "손절선 접근", `손절선까지 ${Math.abs(d.stopPct).toFixed(1)}%`);
+    }
+
+    // ③ 당일값이 본질 — 3일 합계로는 "순매수일" 판정이 안 된다.
+    const net1d = s.investorFlow?.foreignNet1d;
+    if (s.hold && Number.isFinite(Number(net1d)) && Number(net1d) > 0) {
+      push("condition", "외국인 당일 순매수", `외국인 ${fmtEok(net1d)} 순매수 · 3일 ${fmtEok(s.investorFlow?.foreignNet3d)}`);
+    }
+
+    if (s.grade === "축소") push("info", "3축 등급 축소", s.gradeConfidence ? `신뢰도 ${s.gradeConfidence}` : null);
+  }
+
+  return out.sort((a, b) =>
+    (b.hold - a.hold) || (TRIGGER_RANK[a.kind] - TRIGGER_RANK[b.kind]) || String(a.name).localeCompare(String(b.name), "ko"));
+}
+
+function fmtLevel(v, s) {
+  if (!Number.isFinite(Number(v))) return "—";
+  return s?.cur === "₩" ? `₩${Math.round(v).toLocaleString("ko-KR")}` : `$${Number(v).toFixed(2)}`;
+}
+
+/** 원 단위 순매수 → 억원 표기. 수급은 억 단위로 읽는 게 관례다. */
+export function fmtEok(won) {
+  if (won === null || won === undefined || won === "") return "—";   // Number(null)===0 — 결측이 '0억'으로 새면 안 된다
+  const n = Number(won);
+  if (!Number.isFinite(n)) return "—";
+  const eok = n / 1e8;
+  return `${eok >= 0 ? "+" : "−"}${Math.abs(eok).toFixed(Math.abs(eok) >= 100 ? 0 : 1)}억`;
+}
