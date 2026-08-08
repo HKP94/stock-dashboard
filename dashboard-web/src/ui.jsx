@@ -1,13 +1,30 @@
 // ATLAS — shared UI primitives + SVG charts
 import { factorLabel, isCompleteSignal, regimeLabel } from './display.js';
 
+// Phase 1: 팔레트를 디자인 토큰(tokens.css)에 위임한다. 값을 여기 박지 않으므로
+// 테마 전환(data-theme)이 이 객체를 거치지 않고 바로 먹는다.
+//
+// ★두 축을 분리했다(Phase 0 §3). 예전엔 ok/bad 두 색이 '등락'과 '상태'를 겸해서,
+//   등락을 한국 관례(상승 빨강)로 바꾸면 "긍정 심리"까지 빨강이 되는 문제가 있었다.
+//   - 등락축 up/down/flat  : 가격·손익·수익률의 방향   → 상승 빨강 / 하락 파랑(한국 관례)
+//   - 상태축 pos/warn/neg  : 심리·신호·점수의 좋고 나쁨 → 긍정 녹색 / 부정 적색
+//   ok/bad라는 이름은 두 의미가 섞이는 원인이었으므로 되살리지 않는다.
 export const C = {
-  ink: "#0F1419", ink2: "#4A5568", ink3: "#94A3B8",
-  line: "#ECEEF1", line2: "#DDE1E6", lineStrong: "#C7CCD3",
-  acc: "#2A5BFF", accHover: "#1A48EA", accTint: "#E8EEFF", accSoft: "rgba(42,91,255,0.08)",
-  ok: "#15803D", warn: "#B45309", bad: "#B91C1C",
-  okBg: "#F0FDF4", warnBg: "#FFFBEB", badBg: "#FEF2F2",
-  surface: "#FFFFFF", surface2: "#F4F6F8", canvas: "#FAFBFC", tint: "#EEF0F3",
+  ink: "var(--text-1)", ink2: "var(--text-2)", ink3: "var(--text-3)",
+  line: "var(--border)", line2: "var(--border)", lineStrong: "var(--border-strong)",
+  acc: "var(--accent)", accHover: "var(--accent-hover)", onAcc: "var(--on-accent)",
+  accTint: "var(--accent-tint)", accSoft: "var(--accent-tint)",
+
+  // 등락축 (한국 관례)
+  up: "var(--price-up)", down: "var(--price-down)", flat: "var(--price-flat)",
+  upBg: "var(--price-up-bg)", downBg: "var(--price-down-bg)",
+
+  // 상태축
+  pos: "var(--state-positive)", warn: "var(--state-warn)", neg: "var(--state-negative)",
+  posBg: "var(--state-positive-bg)", warnBg: "var(--state-warn-bg)", negBg: "var(--state-negative-bg)",
+
+  surface: "var(--bg-card)", surface2: "var(--bg-input)",
+  canvas: "var(--bg-app)", tint: "var(--bg-input)",
 };
 
 export const fmtPrice = (s) => {
@@ -16,16 +33,16 @@ export const fmtPrice = (s) => {
   return "$" + s.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 export const fmtNum = (n, d = 0) => Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
-export const compColor = (c) => (c >= 70 ? C.ok : c >= 55 ? C.warn : C.ink3);
-export const compBg = (c) => (c >= 70 ? C.okBg : c >= 55 ? C.warnBg : C.surface2);
+export const compColor = (c) => (c >= 70 ? C.pos : c >= 55 ? C.warn : C.ink3);
+export const compBg = (c) => (c >= 70 ? C.posBg : c >= 55 ? C.warnBg : C.surface2);
 export const sentMeta = (label) =>
-  label === "긍정" ? { c: C.ok, bg: C.okBg, t: "긍정" }
-    : label === "부정" ? { c: C.bad, bg: C.badBg, t: "부정" }
+  label === "긍정" ? { c: C.pos, bg: C.posBg, t: "긍정" }
+    : label === "부정" ? { c: C.neg, bg: C.negBg, t: "부정" }
       : { c: C.ink2, bg: C.surface2, t: "중립" };
 export const flagTone = (f) => {
-  if (/과열|과매도|데드크로스|약세|경계|하회|신고가 -1|신고가 -2/.test(f)) return C.bad;
+  if (/과열|과매도|데드크로스|약세|경계|하회|신고가 -1|신고가 -2/.test(f)) return C.neg;
   if (/임박|급증|매력|유지|저변동/.test(f)) return C.warn;
-  if (/강세|골든크로스 발생|수혜|모멘텀|신고가 -3/.test(f)) return C.ok;
+  if (/강세|골든크로스 발생|수혜|모멘텀|신고가 -3/.test(f)) return C.pos;
   return C.ink2;
 };
 
@@ -41,21 +58,21 @@ export function ChangePct({ v, inv, size = 13.5, weight = 600 }) {
   }
   const up = inv ? v < 0 : v > 0;
   const flat = v === 0;
-  const col = flat ? C.ink3 : up ? C.ok : C.bad;
+  const col = flat ? C.flat : up ? C.up : C.down;   // 등락축
   const arrow = flat ? "·" : v > 0 ? "▲" : "▼";
   return <span className="tnum" style={{ fontSize: size, fontWeight: weight, color: col, letterSpacing: "-0.01em", whiteSpace: "nowrap" }}>
     <span style={{ fontSize: size * 0.72, marginRight: 3 }}>{arrow}</span>{v > 0 ? "+" : ""}{v.toFixed(2)}%
   </span>;
 }
 export function Pill({ children, tone, solid, style, onClick, active }) {
-  const map = { ok: C.ok, bad: C.bad, warn: C.warn, acc: C.acc, neutral: C.ink2 };
+  const map = { ok: C.pos, bad: C.neg, warn: C.warn, acc: C.acc, neutral: C.ink2 };
   const col = map[tone] || C.ink2;
-  const bgMap = { ok: C.okBg, bad: C.badBg, warn: C.warnBg, acc: C.accTint, neutral: C.surface2 };
+  const bgMap = { ok: C.posBg, bad: C.negBg, warn: C.warnBg, acc: C.accTint, neutral: C.surface2 };
   return <span onClick={onClick} style={{
     display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
     fontSize: 11.5, fontWeight: 600, letterSpacing: "-0.005em", padding: "3px 9px", borderRadius: 999,
     border: `1px solid ${solid ? col : tone === "acc" ? "rgba(42,91,255,0.3)" : C.line2}`,
-    color: solid ? "#fff" : col, background: solid ? col : (active ? bgMap[tone] : C.surface),
+    color: solid ? C.onAcc : col, background: solid ? col : (active ? bgMap[tone] : C.surface),
     cursor: onClick ? "pointer" : "default", ...style,
   }}>{children}</span>;
 }
@@ -77,15 +94,15 @@ export function HoldDot({ on }) {
   }}></span>;
 }
 export function AlignBadge({ on }) {
-  return <span style={{ fontSize: 11, fontWeight: 700, color: on ? C.ok : C.ink3, whiteSpace: "nowrap" }}>{on ? "정배열" : "—"}</span>;
+  return <span style={{ fontSize: 11, fontWeight: 700, color: on ? C.pos : C.ink3, whiteSpace: "nowrap" }}>{on ? "정배열" : "—"}</span>;
 }
 
 export function SignalCard({ signal, compact = false }) {
   if (!isCompleteSignal(signal)) {
     return <span style={{ fontSize: 11.5, color: C.ink3 }}>신호 산정 데이터 없음</span>;
   }
-  const tone = signal.label === "매수" ? C.ok : signal.label === "축소" ? C.bad : C.warn;
-  const bg = signal.label === "매수" ? C.okBg : signal.label === "축소" ? C.badBg : C.warnBg;
+  const tone = signal.label === "매수" ? C.pos : signal.label === "축소" ? C.neg : C.warn;
+  const bg = signal.label === "매수" ? C.posBg : signal.label === "축소" ? C.negBg : C.warnBg;
   return <div style={{ padding: compact ? "6px 8px" : "10px 12px", border: `1px solid ${tone}33`, borderRadius: 8, background: bg, minWidth: compact ? 190 : 0 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <span style={{ fontSize: compact ? 11.5 : 13.5, fontWeight: 800, color: tone }}>{signal.label}</span>
@@ -98,8 +115,8 @@ export function SignalCard({ signal, compact = false }) {
 // 신규-A2: 매력도 3축 종합 등급 뱃지(매수/관망/축소). 결론 레이어 — 횡단면 신호와 구분.
 export function GradeBadge({ grade, confidence, compact = false }) {
   if (!grade) return compact ? null : <span style={{ fontSize: 11.5, color: C.ink3 }}>등급 산정 전</span>;
-  const tone = grade === "매수" ? C.ok : grade === "축소" ? C.bad : C.ink2;
-  const bg = grade === "매수" ? C.okBg : grade === "축소" ? C.badBg : C.surface2;
+  const tone = grade === "매수" ? C.pos : grade === "축소" ? C.neg : C.ink2;
+  const bg = grade === "매수" ? C.posBg : grade === "축소" ? C.negBg : C.surface2;
   return <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: compact ? "3px 9px" : "5px 12px", border: `1px solid ${tone}44`, borderRadius: 999, background: bg }}>
     <span style={{ fontSize: compact ? 12 : 14.5, fontWeight: 800, color: tone }}>{grade}</span>
     {confidence && <span style={{ fontSize: compact ? 9.5 : 11, color: tone, opacity: 0.85 }}>신뢰도 {confidence}</span>}
@@ -121,7 +138,7 @@ export function MiniBars({ f, h = 26 }) {
   return <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: h }}>
     {order.map(([k, lbl, ko]) => {
       const v = f[k];
-      const col = v >= 70 ? C.ok : v >= 45 ? C.ink2 : C.ink3;
+      const col = v >= 70 ? C.pos : v >= 45 ? C.ink2 : C.ink3;
       return <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, cursor: "help" }} title={`${ko} ${v}`}>
         <div style={{ width: 7, height: h - 10, background: C.surface2, borderRadius: 2, display: "flex", alignItems: "flex-end", overflow: "hidden" }}>
           <div style={{ width: "100%", height: (v / 100) * (h - 10), background: col, borderRadius: 2 }}></div>
@@ -134,7 +151,7 @@ export function MiniBars({ f, h = 26 }) {
 
 export function FactorBar({ label, value, group, fallback }) {
   // PR-6: 중립 폴백(데이터 없음→50)은 옅은 색 + "데이터 없음" 표기로 실제 점수와 구분
-  const col = fallback ? C.line2 : value >= 70 ? C.ok : value >= 50 ? C.warn : C.ink3;
+  const col = fallback ? C.line2 : value >= 70 ? C.pos : value >= 50 ? C.warn : C.ink3;
   const groupLabel = group === "timing" ? "타이밍" : group === "mispricing" ? "미스프라이싱" : null;
   return <div style={{ display: "grid", gridTemplateColumns: "92px 1fr 56px", alignItems: "center", gap: 12, padding: "9px 0" }}>
     <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
@@ -185,7 +202,7 @@ export function PriceChart({ stock, w = 520, h = 240, showSMAs = { sma20: true, 
   const yPrice = (v) => pad.t + pih - ((v - pmin) / prng) * pih;
 
   const up = data[n - 1] >= data[0];
-  const col = up ? C.ok : C.bad;
+  const col = up ? C.up : C.down;   // 등락축(기간 수익률 방향)
   const priceLine = data.map((d, i) => `${xPos(i)},${yPrice(d)}`).join(" ");
   const priceArea = `${xPos(0)},${pad.t + pih} ${priceLine} ${xPos(n - 1)},${pad.t + pih}`;
 
@@ -275,7 +292,7 @@ export function PriceChart({ stock, w = 520, h = 240, showSMAs = { sma20: true, 
 }
 
 export function GaugeBar({ value, max = 100, tone, suffix }) {
-  const col = tone === "ok" ? C.ok : tone === "bad" ? C.bad : tone === "warn" ? C.warn : C.ink2;
+  const col = tone === "ok" ? C.pos : tone === "bad" ? C.neg : tone === "warn" ? C.warn : C.ink2;
   const pct = Math.min(100, (value / max) * 100);
   return <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
     <div style={{ flex: 1, height: 8, background: C.surface2, borderRadius: 999, overflow: "hidden" }}>
@@ -289,14 +306,14 @@ export function SentStack({ pos, neu, neg, w = 130 }) {
   const total = pos + neu + neg || 1;
   const seg = (n, c) => n > 0 ? <div style={{ width: (n / total) * 100 + "%", background: c, height: "100%" }} title={n}></div> : null;
   return <div style={{ display: "flex", height: 8, width: w, borderRadius: 999, overflow: "hidden", background: C.surface2 }}>
-    {seg(pos, C.ok)}{seg(neu, C.ink3)}{seg(neg, C.bad)}
+    {seg(pos, C.pos)}{seg(neu, C.ink3)}{seg(neg, C.neg)}
   </div>;
 }
 
 export function RegimeBadge({ regime, lg, regimes }) {
   const D = regimes[regime];
-  const col = D.color === "acc" ? C.acc : D.color === "warn" ? C.warn : C.bad;
-  const bg = D.color === "acc" ? C.accTint : D.color === "warn" ? C.warnBg : C.badBg;
+  const col = D.color === "acc" ? C.acc : D.color === "warn" ? C.warn : C.neg;
+  const bg = D.color === "acc" ? C.accTint : D.color === "warn" ? C.warnBg : C.negBg;
   return <span style={{
     display: "inline-flex", alignItems: "center", gap: 6, padding: lg ? "6px 13px" : "3px 10px",
     borderRadius: 999, background: bg, border: `1px solid ${col}33`, color: col,

@@ -20,7 +20,7 @@ import {
 const API = "http://127.0.0.1:8765";
 
 const grade = (v) => v >= 88 ? "A+" : v >= 80 ? "A" : v >= 72 ? "B+" : v >= 64 ? "B" : v >= 56 ? "C+" : v >= 48 ? "C" : "D";
-const gradeCol = (v) => v >= 80 ? C.ok : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C.bad;
+const gradeCol = (v) => v >= 80 ? C.pos : v >= 64 ? C.warn : v >= 48 ? C.ink2 : C.neg;
 const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
 const num = (v, digits = 2) => (v == null ? "—" : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits }));
 const deltaLabel = (v, digits = 2) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(digits)}`);
@@ -65,7 +65,7 @@ function Sparkline({ series = [], color = C.acc }) {
 }
 
 function MacroCard({ item }) {
-  const tone = item.deltaMonth > 0 ? C.ok : item.deltaMonth < 0 ? C.bad : C.ink2;
+  const tone = item.deltaMonth > 0 ? C.up : item.deltaMonth < 0 ? C.down : C.ink2;   // 등락축
   return (
     <div style={{ border: `1px solid ${C.line2}`, borderRadius: 10, padding: "12px 14px", background: C.surface }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -80,7 +80,7 @@ function MacroCard({ item }) {
         <Sparkline series={item.series} color={tone === C.ink2 ? C.acc : tone} />
       </div>
       <div style={{ marginTop: 8, display: "flex", gap: 14, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11.5, color: C.ink2 }}>전일 대비 <strong style={{ color: item.deltaDay > 0 ? C.ok : item.deltaDay < 0 ? C.bad : C.ink }}>{deltaLabel(item.deltaDay, 2)}</strong></span>
+        <span style={{ fontSize: 11.5, color: C.ink2 }}>전일 대비 <strong style={{ color: item.deltaDay > 0 ? C.up : item.deltaDay < 0 ? C.down : C.ink }}>{deltaLabel(item.deltaDay, 2)}</strong></span>
         <span style={{ fontSize: 11.5, color: C.ink2 }}>전월 대비 <strong style={{ color: tone }}>{deltaLabel(item.deltaMonth, 2)}</strong></span>
       </div>
     </div>
@@ -94,7 +94,7 @@ const _CONF_RANK = { "상": 3, "중": 2, "하": 1 };
 const gradeScore = (s) => (_GRADE_RANK[s.grade] || 0) * 10 + (_CONF_RANK[s.gradeConfidence] || 0);
 
 // 모멘텀 추세확인 배지: 팩터는 트레일링이라 붕괴를 못 잡음 → 단기 추세 상태를 병기.
-const _TREND_TONE = { intact: C.ok, pullback: C.warn, broken: C.bad };
+const _TREND_TONE = { intact: C.pos, pullback: C.warn, broken: C.neg };
 function MomoTrendBadge({ trend }) {
   const tone = _TREND_TONE[trend.state] || C.ink3;
   return (
@@ -109,7 +109,7 @@ function MomoZoneLine({ zone, cur }) {
   const u = cur || "";
   const n = (x) => (x == null ? "—" : `${u}${x.toLocaleString()}`);
   if (zone.state === "broken") {
-    return <div style={{ fontSize: 10, color: C.bad, marginTop: 2 }}>매수 보류 · 재탈환 {n(zone.reclaim)} 회복 전 없음</div>;
+    return <div style={{ fontSize: 10, color: C.neg, marginTop: 2 }}>매수 보류 · 재탈환 {n(zone.reclaim)} 회복 전 없음</div>;
   }
   return (
     <div className="mono" style={{ fontSize: 10, color: C.ink3, marginTop: 2 }}>
@@ -129,7 +129,7 @@ function DualLensQuadrant({ stocks, nav }) {
   // 모멘텀 픽(모멘텀 상위 분면)은 추세확인 게이트 적용: '고점 후 붕괴'는 하단으로 강등.
   const brk = (s) => (s.momoTrend?.state === "broken" ? 1 : 0);
   const boxes = [
-    { key: "both", title: "핵심", desc: "장기·모멘텀 모두 상위", color: C.ok, momoLens: true, items: ds.filter((s) => s.longScore >= mL && s.momoScore >= mM).sort((a, b) => brk(a) - brk(b) || b.longScore - a.longScore) },
+    { key: "both", title: "핵심", desc: "장기·모멘텀 모두 상위", color: C.pos, momoLens: true, items: ds.filter((s) => s.longScore >= mL && s.momoScore >= mM).sort((a, b) => brk(a) - brk(b) || b.longScore - a.longScore) },
     { key: "long", title: "가치·인내", desc: "장기 상위 · 모멘텀 하위", color: C.acc, items: ds.filter((s) => s.longScore >= mL && s.momoScore < mM).sort((a, b) => b.longScore - a.longScore) },
     { key: "momo", title: "모멘텀·단기", desc: "모멘텀 상위 · 장기 하위", color: C.warn, momoLens: true, items: ds.filter((s) => s.longScore < mL && s.momoScore >= mM).sort((a, b) => brk(a) - brk(b) || b.momoScore - a.momoScore) },
     { key: "none", title: "관망", desc: "둘 다 하위", color: C.ink3, items: ds.filter((s) => s.longScore < mL && s.momoScore < mM).sort((a, b) => b.longScore - a.longScore) },
@@ -214,7 +214,7 @@ function DiscoveryPanel({ D }) {
           ))}
         </div>}>
       <div style={{ display: "flex", gap: 20, padding: 16, flexWrap: "wrap" }}>
-        <DiscoveryList title="장기점수 상위 (가치·퀄리티·성장)" items={m.long} primary="long" color={C.ok} />
+        <DiscoveryList title="장기점수 상위 (가치·퀄리티·성장)" items={m.long} primary="long" color={C.pos} />
         <DiscoveryList title="모멘텀점수 상위 (가격 프록시 · 심리 미반영)" items={m.momentum} primary="momentum" color={C.acc} />
       </div>
       <div style={{ padding: "0 16px 12px", fontSize: 11, color: C.ink3, lineHeight: 1.5 }}>{disc.note}</div>
@@ -288,7 +288,7 @@ export function Screener({ D, nav }) {
               <td style={{ padding: "10px 12px" }}>{s.momoTrend ? <MomoTrendBadge trend={s.momoTrend} /> : <span style={{ fontSize: 10.5, color: C.ink3 }}>—</span>}</td>
               <td style={{ padding: "10px 12px", textAlign: "right" }}><div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}><Num size={13} weight={600} color={gradeCol(s.f.m)}>{s.f.m}</Num><GradeChip value={s.f.m} /></div></td>
               <td style={{ padding: "10px 12px", textAlign: "right" }}><SentBadge label={s.sent} sm /></td>
-              <td style={{ padding: "10px 12px", textAlign: "right" }}><Num size={13} weight={600} color={s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>
+              <td style={{ padding: "10px 12px", textAlign: "right" }}><Num size={13} weight={600} color={s.rsi >= 70 ? C.neg : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>
             </tr>)}
           </tbody>
         </table>
@@ -309,7 +309,7 @@ export function Screener({ D, nav }) {
           </tr></thead>
           <tbody>
             {longterm.map((s, i) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
-              <td style={{ padding: "10px 12px", verticalAlign: "top" }}><Num size={13} weight={700} color={i < 3 ? C.ok : C.ink3}>{i + 1}</Num></td>
+              <td style={{ padding: "10px 12px", verticalAlign: "top" }}><Num size={13} weight={700} color={i < 3 ? C.pos : C.ink3}>{i + 1}</Num></td>
               <td style={{ padding: "10px 12px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 13, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 10, color: C.ink3 }}>{s.mk}</span></div>
                 {s.safetyReason && <div style={{ fontSize: 10.5, color: C.ink3, marginTop: 2, lineHeight: 1.35 }}>{s.safetyReason}</div>}
@@ -318,7 +318,7 @@ export function Screener({ D, nav }) {
               <td style={{ padding: "10px 12px", textAlign: "right", verticalAlign: "top" }}><Num size={13} weight={600} color={gradeCol(s.f.v)}>{s.f.v}</Num></td>
               <td style={{ padding: "10px 12px", textAlign: "right", verticalAlign: "top" }}><Num size={13} weight={600} color={gradeCol(s.f.q)}>{s.f.q}</Num></td>
               <td style={{ padding: "10px 12px", textAlign: "right", verticalAlign: "top" }}>
-                <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, color: (s.fscore ?? 0) >= 6 ? C.ok : C.warn }}>{s.fscore ?? "—"}<span style={{ color: C.ink3, fontWeight: 500 }}>/9</span></span>
+                <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, color: (s.fscore ?? 0) >= 6 ? C.pos : C.warn }}>{s.fscore ?? "—"}<span style={{ color: C.ink3, fontWeight: 500 }}>/9</span></span>
               </td>
             </tr>)}
           </tbody>
@@ -341,7 +341,7 @@ export function Screener({ D, nav }) {
             {[["global", "글로벌"], ["sector", "섹터내"]].map(([v, label]) => (
               <button key={v} onClick={() => { setFactorView(v); setShowAll(true); }}
                 title={v === "sector" ? "모멘텀·가치·우량성·성장을 같은 섹터 종목끼리 백분위(표본<5는 글로벌 폴백, *표시)" : "전 유니버스 백분위"}
-                style={{ border: "none", background: factorView === v ? C.acc : C.surface, color: factorView === v ? "#fff" : C.ink2, padding: "4px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{label}</button>
+                style={{ border: "none", background: factorView === v ? C.acc : C.surface, color: factorView === v ? C.onAcc : C.ink2, padding: "4px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{label}</button>
             ))}
           </div>
           {[["all", "전체"], ["매수", "매수만"], ["관망", "관망"], ["축소", "축소"]].map(([v, label]) => (
@@ -374,8 +374,8 @@ export function Screener({ D, nav }) {
               </td>;
             })}
             <td style={{ padding: "9px 10px", textAlign: "right" }} title={s.divYield != null ? `배당수익률 ${s.divYield}%` : "배당 데이터 없음"}><Num size={12.5} weight={600} color={sortKey === "shYield" ? gradeCol(s.shYield ?? 0) : C.ink2}>{s.shYield ?? "—"}</Num></td>
-            <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>
-            <td style={{ padding: "9px 10px", textAlign: "right" }}><span className="mono" style={{ fontSize: 12, fontWeight: 700, color: s.fscore >= 7 ? C.ok : C.ink2 }}>{s.fscore ?? "—"}</span></td>
+            <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={s.rsi >= 70 ? C.neg : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>
+            <td style={{ padding: "9px 10px", textAlign: "right" }}><span className="mono" style={{ fontSize: 12, fontWeight: 700, color: s.fscore >= 7 ? C.pos : C.ink2 }}>{s.fscore ?? "—"}</span></td>
           </tr>)}
         </tbody>
       </table>}
@@ -390,10 +390,10 @@ function MarketColumn({ title, m, regimes }) {
   const bullets = extractBullets(m.summaryMd || "");
   // PR-2: 시장 매력도(진입 환경) — 레짐·시장폭·변동성 종합. 단일 점수 아님, 환경 평가.
   const att = m.attractiveness;
-  const envCol = att ? (att.env === "우호" ? C.ok : att.env === "비우호" ? C.bad : C.ink2) : C.ink3;
+  const envCol = att ? (att.env === "우호" ? C.pos : att.env === "비우호" ? C.neg : C.ink2) : C.ink3;
   // Wave 5-B: 시장 매력도 점수·방향·신뢰도(결정론). 단일 점수 강요 아님 — 근거·신뢰도 동반.
   const ms = m.marketScore;
-  const dirCol = ms ? (ms.direction === "강세" ? C.ok : ms.direction === "약세" ? C.bad : C.ink2) : C.ink3;
+  const dirCol = ms ? (ms.direction === "강세" ? C.pos : ms.direction === "약세" ? C.neg : C.ink2) : C.ink3;
   return <Panel title={title} right={<RegimeBadge regime={m.regime} regimes={regimes} />}>
     <div style={{ padding: "16px 18px" }}>
       {ms && (
@@ -410,7 +410,7 @@ function MarketColumn({ title, m, regimes }) {
               {Object.entries({ trend: "추세", vol: "변동성", macro: "매크로", breadth: "시장폭" }).map(([k, lbl]) =>
                 ms.components.subscores[k] != null && (
                   <span key={k} style={{ fontSize: 10, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "2px 6px" }}>
-                    {lbl} <b style={{ color: ms.components.subscores[k] > 0 ? C.ok : ms.components.subscores[k] < 0 ? C.bad : C.ink2 }}>{ms.components.subscores[k] > 0 ? "+" : ""}{ms.components.subscores[k]}</b>
+                    {lbl} <b style={{ color: ms.components.subscores[k] > 0 ? C.pos : ms.components.subscores[k] < 0 ? C.neg : C.ink2 }}>{ms.components.subscores[k] > 0 ? "+" : ""}{ms.components.subscores[k]}</b>
                   </span>
                 ))}
             </div>
@@ -438,7 +438,7 @@ function MarketColumn({ title, m, regimes }) {
           <div style={{ marginTop: 2 }}>
             {ix.chg == null
               ? <span className="tnum" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink3 }}>—</span>
-              : <span className="tnum" style={{ fontSize: 12.5, fontWeight: 600, color: ix.chg > 0 ? C.ok : ix.chg < 0 ? C.bad : C.ink3 }}>{ix.chg > 0 ? "▲ +" : ix.chg < 0 ? "▼ " : "· "}{ix.chg.toFixed(2)}%</span>}
+              : <span className="tnum" style={{ fontSize: 12.5, fontWeight: 600, color: ix.chg > 0 ? C.up : ix.chg < 0 ? C.down : C.ink3 }}>{ix.chg > 0 ? "▲ +" : ix.chg < 0 ? "▼ " : "· "}{ix.chg.toFixed(2)}%</span>}
           </div>
         </div>)}
       </div>
@@ -550,7 +550,7 @@ export function Market({ D }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{strategyGuidance.label}</MonoCaps>
               <span style={{ fontSize: 18, fontWeight: 800, color: C.acc }}>{strategyGuidance.primary.label}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: C.ok, background: C.okBg, border: `1px solid ${C.ok}33`, borderRadius: 999, padding: "3px 8px" }}>true</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: C.pos, background: C.posBg, border: `1px solid ${C.pos}33`, borderRadius: 999, padding: "3px 8px" }}>true</span>
               <span style={{ marginLeft: "auto", fontSize: 12, color: C.ink2 }}>신뢰도 {strategyGuidance.primary.confidence}</span>
             </div>
             <div style={{ marginTop: 8, fontSize: 13, color: C.ink, lineHeight: 1.65 }}>{strategyGuidance.primary.reason}</div>
@@ -569,7 +569,7 @@ export function Market({ D }) {
               </div>
               <div style={{ marginTop: 6, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>{strategyGuidance.reference.reason}</div>
               {strategyGuidance.reference.warning && (
-                <div style={{ marginTop: 6, fontSize: 11.5, color: C.bad }}>{strategyGuidance.reference.warning}</div>
+                <div style={{ marginTop: 6, fontSize: 11.5, color: C.neg }}>{strategyGuidance.reference.warning}</div>
               )}
             </div>
           )}
@@ -604,12 +604,12 @@ export function Market({ D }) {
               <div style={{ marginTop: 10, fontSize: 12.5, color: C.ink3 }}>거시 요약 생성 전입니다.</div>
             )}
             <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div style={{ border: `1px solid ${C.ok}33`, background: C.ok + "10", borderRadius: 9, padding: "10px 12px" }}>
-                <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>우호 해석</MonoCaps>
+              <div style={{ border: `1px solid ${C.pos}33`, background: C.pos + "10", borderRadius: 9, padding: "10px 12px" }}>
+                <MonoCaps style={{ fontSize: 9.5 }} color={C.pos}>우호 해석</MonoCaps>
                 <div style={{ marginTop: 6, fontSize: 12.5, color: C.ink, lineHeight: 1.6 }}>{cleanDisplayText(macro.summary?.support || "—")}</div>
               </div>
-              <div style={{ border: `1px solid ${C.bad}33`, background: C.bad + "10", borderRadius: 9, padding: "10px 12px" }}>
-                <MonoCaps style={{ fontSize: 9.5 }} color={C.bad}>부담 해석</MonoCaps>
+              <div style={{ border: `1px solid ${C.neg}33`, background: C.neg + "10", borderRadius: 9, padding: "10px 12px" }}>
+                <MonoCaps style={{ fontSize: 9.5 }} color={C.neg}>부담 해석</MonoCaps>
                 <div style={{ marginTop: 6, fontSize: 12.5, color: C.ink, lineHeight: 1.6 }}>{cleanDisplayText(macro.summary?.oppose || "—")}</div>
               </div>
             </div>
@@ -674,11 +674,11 @@ export function Market({ D }) {
           <button
             onClick={submitMarketManual}
             disabled={marketSaving || !marketText.trim()}
-            style={{ border: "none", borderRadius: 8, padding: "10px 12px", background: C.ink, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: marketSaving || !marketText.trim() ? 0.45 : 1 }}
+            style={{ border: "none", borderRadius: 8, padding: "10px 12px", background: C.acc, color: C.onAcc, fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: marketSaving || !marketText.trim() ? 0.45 : 1 }}
           >
             {marketSaving ? "분석 중…" : "시장 분석"}
           </button>
-          {marketError && <div style={{ fontSize: 11.5, color: C.bad }}>{marketError}</div>}
+          {marketError && <div style={{ fontSize: 11.5, color: C.neg }}>{marketError}</div>}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -693,12 +693,12 @@ export function Market({ D }) {
                 <span style={{ fontSize: 11.5, color: C.ink2 }}>{marketManualLatest.asof}</span>
               </div>
               <div style={{ padding: "14px 16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div style={{ border: `1px solid ${C.ok}33`, borderRadius: 8, background: C.ok + "10", padding: "10px 12px" }}>
-                  <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>강세 시나리오</MonoCaps>
+                <div style={{ border: `1px solid ${C.pos}33`, borderRadius: 8, background: C.pos + "10", padding: "10px 12px" }}>
+                  <MonoCaps style={{ fontSize: 9.5 }} color={C.pos}>강세 시나리오</MonoCaps>
                   <div style={{ marginTop: 7, fontSize: 12.5, color: C.ink, lineHeight: 1.65 }}>{cleanDisplayText(marketManualLatest.bullScenario || "수집된 강세 시나리오 없음")}</div>
                 </div>
-                <div style={{ border: `1px solid ${C.bad}33`, borderRadius: 8, background: C.bad + "10", padding: "10px 12px" }}>
-                  <MonoCaps style={{ fontSize: 9.5 }} color={C.bad}>약세 시나리오</MonoCaps>
+                <div style={{ border: `1px solid ${C.neg}33`, borderRadius: 8, background: C.neg + "10", padding: "10px 12px" }}>
+                  <MonoCaps style={{ fontSize: 9.5 }} color={C.neg}>약세 시나리오</MonoCaps>
                   <div style={{ marginTop: 7, fontSize: 12.5, color: C.ink, lineHeight: 1.65 }}>{cleanDisplayText(marketManualLatest.bearScenario || "수집된 약세 시나리오 없음")}</div>
                 </div>
               </div>
@@ -784,14 +784,14 @@ function pctText(value) {
 }
 
 function ratingTone(label) {
-  if (label === "매수") return { bg: C.ok + "14", border: C.ok + "33", color: C.ok };
+  if (label === "매수") return { bg: C.pos + "14", border: C.pos + "33", color: C.pos };
   if (label === "중립") return { bg: C.warnBg, border: C.warn + "33", color: C.warn };
-  if (label === "매도") return { bg: C.bad + "14", border: C.bad + "33", color: C.bad };
+  if (label === "매도") return { bg: C.neg + "14", border: C.neg + "33", color: C.neg };
   return { bg: C.surface2, border: C.line2, color: C.ink2 };
 }
 
 function ConsensusStat({ label, value, note, tone = "neutral" }) {
-  const color = tone === "ok" ? C.ok : tone === "bad" ? C.bad : tone === "warn" ? C.warn : C.ink;
+  const color = tone === "ok" ? C.pos : tone === "bad" ? C.neg : tone === "warn" ? C.warn : C.ink;
   return (
     <div style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: "12px 14px", background: C.surface2 }}>
       <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{label}</MonoCaps>
@@ -889,7 +889,7 @@ function ConsensusTrendCard({ history = [], currency }) {
 
 function AnalystPointsCard({ title, tone, points, emptyText }) {
   const count = points.length;
-  const color = tone === "bull" ? C.ok : C.bad;
+  const color = tone === "bull" ? C.pos : C.neg;
   return (
     <Panel
       title={title}
@@ -1136,11 +1136,11 @@ export function Research({ D, nav }) {
               </div>
               <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 10px", background: C.surface2 }}>
                 <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>강세 논거</MonoCaps>
-                <div style={{ marginTop: 4, fontSize: 18, fontWeight: 800, color: C.ok }}>{counts.bull}</div>
+                <div style={{ marginTop: 4, fontSize: 18, fontWeight: 800, color: C.pos }}>{counts.bull}</div>
               </div>
               <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 10px", background: C.surface2 }}>
                 <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>약세 논거</MonoCaps>
-                <div style={{ marginTop: 4, fontSize: 18, fontWeight: 800, color: C.bad }}>{counts.bear}</div>
+                <div style={{ marginTop: 4, fontSize: 18, fontWeight: 800, color: C.neg }}>{counts.bear}</div>
               </div>
             </div>
             <button onClick={() => nav(s.t)} style={{ ...btnGhost, width: "100%", justifyContent: "center", fontSize: 12 }}>
@@ -1172,11 +1172,11 @@ export function Research({ D, nav }) {
             <button
               onClick={submitManualResearch}
               disabled={manualSaving || !manualText.trim()}
-              style={{ border: "none", borderRadius: 8, padding: "10px 12px", background: C.ink, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: manualSaving || !manualText.trim() ? 0.45 : 1 }}
+              style={{ border: "none", borderRadius: 8, padding: "10px 12px", background: C.acc, color: C.onAcc, fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: manualSaving || !manualText.trim() ? 0.45 : 1 }}
             >
               {manualSaving ? "분석 중…" : "분석"}
             </button>
-            {manualError && <div style={{ fontSize: 11.5, color: C.bad }}>{manualError}</div>}
+            {manualError && <div style={{ fontSize: 11.5, color: C.neg }}>{manualError}</div>}
           </div>
         </Panel>
       </div>
@@ -1193,8 +1193,8 @@ export function Research({ D, nav }) {
             </div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ok, background: C.ok + "14", border: `1px solid ${C.ok}33`, borderRadius: 999, padding: "5px 10px" }}>강세 {counts.bull}</span>
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: C.bad, background: C.bad + "14", border: `1px solid ${C.bad}33`, borderRadius: 999, padding: "5px 10px" }}>약세 {counts.bear}</span>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: C.pos, background: C.pos + "14", border: `1px solid ${C.pos}33`, borderRadius: 999, padding: "5px 10px" }}>강세 {counts.bull}</span>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: C.neg, background: C.neg + "14", border: `1px solid ${C.neg}33`, borderRadius: 999, padding: "5px 10px" }}>약세 {counts.bear}</span>
             {!hasAnalystCoverage(s) && (
               <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink2, background: C.surface2, border: `1px solid ${C.line2}`, borderRadius: 999, padding: "5px 10px" }}>수집 대기</span>
             )}

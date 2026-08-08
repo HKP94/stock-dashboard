@@ -74,7 +74,7 @@ export default function App() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-              <span style={{ width: 34, height: 34, borderRadius: 8, background: C.ink, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 24, lineHeight: 1 }}>A</span>
+              <span style={{ width: 34, height: 34, borderRadius: 8, background: C.acc, color: C.onAcc, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 24, lineHeight: 1 }}>A</span>
               <span style={{ fontSize: 21, fontWeight: 800, letterSpacing: "-0.02em", color: C.ink }}>ATLAS</span>
             </div>
             <span style={{ width: 1, height: 22, background: C.line2 }}></span>
@@ -86,9 +86,9 @@ export default function App() {
                title="현재 시장 국면에 따라 5개 팩터에 적용되는 가중치(%). 합 100%.">
             <RegimeBadge regime={overall} regimes={D.regimes} />
             <span style={{ width: 1, height: 18, background: C.line2 }}></span>
-            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>국면 가중치</MonoCaps>
+            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>국면별 팩터 가중치 (%)</MonoCaps>
             <span className="mono" style={{ fontSize: 10.5, color: C.ink2, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
-              모멘텀 <b style={{ color: C.acc }}>{w.m}</b> · 가치 <b style={{ color: C.ink }}>{w.v}</b> · 우량성 <b style={{ color: C.ink }}>{w.q}</b> · 성장 <b style={{ color: C.ink }}>{w.g}</b> · 심리 <b style={{ color: C.acc }}>{w.s}</b>
+              모멘텀 <b style={{ color: C.acc }}>{w.m}%</b> · 가치 <b style={{ color: C.ink }}>{w.v}%</b> · 우량성 <b style={{ color: C.ink }}>{w.q}%</b> · 성장 <b style={{ color: C.ink }}>{w.g}%</b> · 심리 <b style={{ color: C.acc }}>{w.s}%</b>
             </span>
           </div>
 
@@ -96,7 +96,7 @@ export default function App() {
           <div style={{ textAlign: "right" }}>
             <MonoCaps style={{ fontSize: 9 }} color={C.ink3} title="대시보드 가격이 기준한 최신 거래일">가격 기준일</MonoCaps>
             <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-              <span style={{ width: 6, height: 6, borderRadius: 999, background: stale ? C.warn : C.ok }}></span>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: stale ? C.warn : C.pos }}></span>
               <span className="mono tnum" style={{ fontSize: 12, fontWeight: 600, color: C.ink }}>{D.priceAsof || D.updated}</span>
             </div>
             {/* PR-3: 데이터 생성 시각 + 오래됨 경고 */}

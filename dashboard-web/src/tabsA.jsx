@@ -9,7 +9,7 @@ import {
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { cleanDisplayText, extractBullets, filterStocks, portfolioAssetTotal, sortStocksBySentiment, isCompleteSignal } from './display.js';
+import { cleanDisplayText, extractBullets, filterStocks, portfolioAssetTotal, sortStocksBySentiment, isCompleteSignal, userFlagLabel } from './display.js';
 
 // PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
 function fmtBig(v, cur) {
@@ -43,7 +43,7 @@ function FinancialsCard({ s }) {
   }
 
   const TrendTag = ({ label, v }) => v == null ? null : (
-    <span style={{ fontSize: 11, color: v >= 0 ? C.ok : C.bad, fontWeight: 600 }}>
+    <span style={{ fontSize: 11, color: v >= 0 ? C.pos : C.neg, fontWeight: 600 }}>
       {label} {v >= 0 ? "▲" : "▼"} {Math.abs(v).toFixed(1)}%
     </span>
   );
@@ -66,7 +66,7 @@ function FinancialsCard({ s }) {
             <Legend wrapperStyle={{ fontSize: 11 }} />
             <Bar yAxisId="l" dataKey="rev" name="매출" fill={C.ink2} radius={[3, 3, 0, 0]} maxBarSize={26} />
             <Bar yAxisId="l" dataKey="op" name="영업이익" fill={C.acc} radius={[3, 3, 0, 0]} maxBarSize={26} />
-            <Bar yAxisId="l" dataKey="ni" name="순이익" fill={C.ok} radius={[3, 3, 0, 0]} maxBarSize={26} />
+            <Bar yAxisId="l" dataKey="ni" name="순이익" fill={C.pos} radius={[3, 3, 0, 0]} maxBarSize={26} />
             <Line yAxisId="r" type="monotone" dataKey="opm" name="영업이익률" stroke={C.warn} strokeWidth={2} dot={{ r: 3 }} />
           </ComposedChart>
         </ResponsiveContainer>
@@ -94,7 +94,7 @@ function FinancialsCard({ s }) {
         <div style={{ padding: "11px 16px", borderTop: `1px solid ${C.line}`, background: C.surface2, borderRadius: "0 0 10px 10px", display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
           <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>컨센서스 전망</MonoCaps>
           {s.tp != null && <span style={{ fontSize: 12, color: C.ink2 }}>목표가 <b style={{ color: C.ink }}>{s.cur}{Math.round(s.tp).toLocaleString()}</b></span>}
-          {s.up != null && <span style={{ fontSize: 12, color: C.ink2 }}>상승여력 <b style={{ color: s.up >= 0 ? C.ok : C.bad }}>{s.up >= 0 ? "+" : ""}{s.up}%</b></span>}
+          {s.up != null && <span style={{ fontSize: 12, color: C.ink2 }}>상승여력 <b style={{ color: s.up >= 0 ? C.up : C.down }}>{s.up >= 0 ? "+" : ""}{s.up}%</b></span>}
           {s.rating && <span style={{ fontSize: 12, color: C.ink2 }}>투자의견 <b style={{ color: C.ink }}>{s.rating}</b></span>}
           {s.per != null && <span style={{ fontSize: 12, color: C.ink2 }}>PER <b style={{ color: C.ink }}>{s.per}</b></span>}
         </div>
@@ -167,7 +167,9 @@ const flagDesc = (f, s) => {
 };
 
 // PR-3: 플래그 분류 헬퍼 (data.json이 분리되어 있지만 fallback 포함)
-const isDataQuality = (f) => /데이터 부족|사전필터 제외|발행주식수|데이터 없음/.test(f);
+// ⑤ fallback은 매매 액션 신호가 아니라 **데이터 품질** 표식이다. 여기 빠져 있어서
+// '오늘의 알림'에 "SK하이닉스 fallback"처럼 개발자 용어가 액션 신호로 떴다.
+const isDataQuality = (f) => /데이터 부족|사전필터 제외|발행주식수|데이터 없음|fallback/i.test(f);
 
 // ============================ OVERVIEW ============================
 // PR-1: 오버뷰 최상단 "오늘의 요약 밴드" — 30초 스캔용 합성 인사이트 (정보·관찰용)
@@ -199,8 +201,8 @@ function DailyBriefBand({ b, regimes, nav }) {
         </span>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap" }}>
-        <Col label="▲ 주목 (퀀트 상위·신선 신호)" color={C.ok} items={b.highlights} empty="해당 종목 없음" />
-        <Col label="▼ 주의 (위험 신호)" color={C.bad} items={b.cautions} empty="오늘 두드러진 주의 신호 없음" />
+        <Col label="▲ 주목 (퀀트 상위·신선 신호)" color={C.pos} items={b.highlights} empty="해당 종목 없음" />
+        <Col label="▼ 주의 (위험 신호)" color={C.neg} items={b.cautions} empty="오늘 두드러진 주의 신호 없음" />
         <Col label="⚠ 3축 괴리 (확인 필요)" color={C.warn} items={b.diverge} empty="퀀트·컨센서스 큰 괴리 없음" />
       </div>
     </div>
@@ -222,8 +224,8 @@ function AnomaliesBand({ items, nav }) {
         {top.map((a) => {
           const up = a.direction === "급등";
           const unknown = a.class === "이유 불명";
-          const dirColor = up ? C.ok : C.bad;
-          const classColor = unknown ? C.bad : C.ink2;
+          const dirColor = up ? C.up : C.down;   // 등락축(급등/급락 방향)
+          const classColor = unknown ? C.neg : C.ink2;
           return (
             <button key={a.t} onClick={() => nav(a.t)} className="row-hover"
               style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", textAlign: "left", border: "none", borderTop: `1px solid ${C.line}`, background: "none", cursor: "pointer", padding: "8px 14px" }}>
@@ -232,7 +234,7 @@ function AnomaliesBand({ items, nav }) {
               <span style={{ fontSize: 9.5, fontWeight: 700, color: classColor, border: `1px solid ${classColor}`, borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>{a.class}</span>
               {a.unusual && <span title="이 종목 기준 이례적 변동폭" style={{ fontSize: 9, color: C.warn, border: `1px solid ${C.warn}`, borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>이례적 z{a.z}</span>}
               {a.idiosyncratic && <span title="지수 대비 자체 이동" style={{ fontSize: 9, color: C.ink3, flexShrink: 0 }}>자체이동</span>}
-              <span style={{ fontSize: 11, color: unknown ? C.bad : C.ink2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{a.reason}</span>
+              <span style={{ fontSize: 11, color: unknown ? C.neg : C.ink2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{a.reason}</span>
             </button>
           );
         })}
@@ -295,7 +297,7 @@ export function Overview({ D, nav, goNews }) {
             <div key={ix.k} style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 4 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <MonoCaps style={{ fontSize: 9.5 }}>{ix.k}</MonoCaps>
-                <span style={{ width: 5, height: 5, borderRadius: 999, background: !hasChg ? C.ink3 : up ? C.ok : C.bad }}></span>
+                <span style={{ width: 5, height: 5, borderRadius: 999, background: !hasChg ? C.ink3 : up ? C.up : C.down }}></span>
               </div>
               <Num size={19} weight={700}>{ix.v}</Num>
               <ChangePct v={chgNum} inv={ix.inv} size={12} />
@@ -330,11 +332,11 @@ export function Overview({ D, nav, goNews }) {
             <MonoCaps style={{ fontSize: 9 }}>총손익</MonoCaps>
             <div style={{ marginTop: 4 }}>
               <Num size={18} weight={700} style={{ textDecoration: "none" }}
-                color={D.portfolio.total_pnl >= 0 ? C.ok : C.bad}>
+                color={D.portfolio.total_pnl >= 0 ? C.up : C.down}>
                 {D.portfolio.total_pnl >= 0 ? "+" : ""}₩{Math.round(D.portfolio.total_pnl).toLocaleString("ko-KR")}
               </Num>
               <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 700,
-                color: D.portfolio.total_pnl_pct >= 0 ? C.ok : C.bad }}>
+                color: D.portfolio.total_pnl_pct >= 0 ? C.up : C.down }}>
                 ({D.portfolio.total_pnl_pct >= 0 ? "+" : ""}{D.portfolio.total_pnl_pct?.toFixed(2)}%)
               </span>
             </div>
@@ -404,12 +406,12 @@ export function Overview({ D, nav, goNews }) {
                         : <CompositeCell value={s.comp} />}
                     </td>
                     <td style={{ padding: "10px 12px" }}><MiniBars f={s.f} /></td>
-                    <td style={{ padding: "10px 12px" }}><Num size={13} weight={600} color={s.rsi == null ? C.ink3 : s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi == null ? "—" : s.rsi.toFixed(0)}</Num></td>
+                    <td style={{ padding: "10px 12px" }}><Num size={13} weight={600} color={s.rsi == null ? C.ink3 : s.rsi >= 70 ? C.neg : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi == null ? "—" : s.rsi.toFixed(0)}</Num></td>
                     <td style={{ padding: "10px 12px", whiteSpace: "nowrap" }}><AlignBadge on={s.align} /></td>
                     <td style={{ padding: "10px 12px", maxWidth: 150 }}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                         {af.slice(0, 2).map((f) => (
-                          <span key={f} style={{ fontSize: 10.5, fontWeight: 600, color: flagTone(f), background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>{f}</span>
+                          <span key={f} style={{ fontSize: 10.5, fontWeight: 600, color: flagTone(f), background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>{userFlagLabel(f)}</span>
                         ))}
                       </div>
                     </td>
@@ -417,8 +419,8 @@ export function Overview({ D, nav, goNews }) {
                       {s.note?.horizon && (
                         <span style={{
                           fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, whiteSpace: "nowrap",
-                          background: s.note.horizon === "short" ? C.accTint : s.note.horizon === "long" ? C.okBg : C.surface2,
-                          color: s.note.horizon === "short" ? C.acc : s.note.horizon === "long" ? C.ok : C.ink3,
+                          background: s.note.horizon === "short" ? C.accTint : s.note.horizon === "long" ? C.posBg : C.surface2,
+                          color: s.note.horizon === "short" ? C.acc : s.note.horizon === "long" ? C.pos : C.ink3,
                         }}>
                           {s.note.horizon === "short" ? "단기" : s.note.horizon === "long" ? "장기" : "관망"}
                           {s.note.attractiveness && ` ${"★".repeat(s.note.attractiveness)}`}
@@ -450,7 +452,7 @@ export function Overview({ D, nav, goNews }) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 2 }}>
                     <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{a.s.name}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: flagTone(a.f) }}>{a.f}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: flagTone(a.f) }}>{userFlagLabel(a.f)}</span>
                   </div>
                   {desc && <div style={{ fontSize: 11.5, color: C.ink2, lineHeight: 1.4 }}>{desc}</div>}
                 </div>
@@ -474,7 +476,7 @@ export function Overview({ D, nav, goNews }) {
                   <div key={i} style={{ padding: "8px 16px", borderTop: `1px solid ${C.line}`, display: "flex", gap: 9, alignItems: "center" }}>
                     <span style={{ width: 3, height: 12, borderRadius: 2, background: C.ink3, flexShrink: 0 }}></span>
                     <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink2 }}>{a.s.name}</span>
-                    <span style={{ fontSize: 11, color: C.ink3 }}>{a.f}</span>
+                    <span style={{ fontSize: 11, color: C.ink3 }}>{userFlagLabel(a.f)}</span>
                   </div>
                 ))}
               </div>
@@ -536,7 +538,7 @@ export function toYtEmbed(url) {
   return m ? `https://www.youtube.com/embed/${m[1]}` : null;
 }
 export const RESEARCH_TYPE_LABEL = { youtube: "유튜브", article: "기사", report: "리포트", quant: "퀀트", memo: "메모" };
-export const RESEARCH_TYPE_COLOR = { youtube: C.bad, article: C.acc, report: C.warn, quant: C.ok, memo: C.ink3 };
+export const RESEARCH_TYPE_COLOR = { youtube: C.neg, article: C.acc, report: C.warn, quant: C.pos, memo: C.ink3 };
 
 export function ResearchItemCard({ item, onDelete }) {
   const ytEmbed = item.type === "youtube" ? toYtEmbed(item.url) : null;
@@ -612,9 +614,9 @@ export function StockResearchSection({ s }) {
           <textarea value={form.note} placeholder="메모 (선택)" onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
             style={{ minHeight: 50, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "var(--sans)", resize: "vertical", outline: "none", color: C.ink, boxSizing: "border-box" }} />
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button onClick={add} disabled={busy} style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 12.5, fontWeight: 600, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}>{busy ? "추가 중…" : "추가"}</button>
+            <button onClick={add} disabled={busy} style={{ background: C.acc, color: C.onAcc, border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 12.5, fontWeight: 600, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}>{busy ? "추가 중…" : "추가"}</button>
             <span className="mono" style={{ fontSize: 10, color: C.ink3 }}>{s.name} ({s.t})</span>
-            {err && <span style={{ fontSize: 11.5, color: C.bad }}>{err}</span>}
+            {err && <span style={{ fontSize: 11.5, color: C.neg }}>{err}</span>}
           </div>
         </div>
       )}
@@ -634,8 +636,8 @@ export function StockResearchSection({ s }) {
 
 function DriverTonePill({ tone }) {
   const map = {
-    support: { label: "우호", color: C.ok, bg: C.okBg },
-    oppose: { label: "부담", color: C.bad, bg: C.badBg },
+    support: { label: "우호", color: C.pos, bg: C.posBg },
+    oppose: { label: "부담", color: C.neg, bg: C.negBg },
     neutral: { label: "중립", color: C.ink3, bg: C.surface2 },
   };
   const meta = map[tone] || map.neutral;
@@ -666,10 +668,10 @@ function DriverRow({ item, draft, busy, onDraftChange, onSave, onDelete }) {
         <div style={{ background: C.surface2, borderRadius: 8, padding: "10px 12px", minHeight: 76 }}>
           {series.length >= 2 ? (
             <>
-              <Sparkline data={series} color={item.deltaDay >= 0 ? C.ok : C.bad} w={130} h={34} fill />
+              <Sparkline data={series} color={item.deltaDay >= 0 ? C.up : C.down} w={130} h={34} fill />
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 10.5, color: C.ink2 }}>
                 <span>{item.price != null ? item.price.toLocaleString() : "—"}</span>
-                <span className="tnum" style={{ color: item.deltaMonth >= 0 ? C.ok : item.deltaMonth < 0 ? C.bad : C.ink3 }}>
+                <span className="tnum" style={{ color: item.deltaMonth >= 0 ? C.up : item.deltaMonth < 0 ? C.down : C.ink3 }}>
                   {item.deltaMonth != null ? `${item.deltaMonth > 0 ? "+" : ""}${item.deltaMonth}%` : "월간 변화 없음"}
                 </span>
               </div>
@@ -708,7 +710,7 @@ function DriverRow({ item, draft, busy, onDraftChange, onSave, onDelete }) {
               {busy ? "저장 중…" : "저장"}
             </button>
             <button onClick={() => onDelete(item.code)} disabled={busy}
-              style={{ ...btnGhost, color: C.bad, opacity: busy ? 0.6 : 1 }}>
+              style={{ ...btnGhost, color: C.neg, opacity: busy ? 0.6 : 1 }}>
               삭제
             </button>
           </div>
@@ -879,7 +881,7 @@ function StockDriversSection({ s }) {
           <textarea value={form.rationale} placeholder="왜 이 동인인지 1줄 메모" onChange={(event) => setForm((prev) => ({ ...prev, rationale: event.target.value }))}
             style={{ minHeight: 58, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, fontFamily: "var(--sans)", resize: "vertical", color: C.ink }} />
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button onClick={addItem} disabled={busyCode === "new"} style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, opacity: busyCode === "new" ? 0.6 : 1 }}>
+            <button onClick={addItem} disabled={busyCode === "new"} style={{ background: C.acc, color: C.onAcc, border: "none", borderRadius: 7, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, opacity: busyCode === "new" ? 0.6 : 1 }}>
               {busyCode === "new" ? "추가 중…" : "추가"}
             </button>
             <span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{s.name} · {s.t}</span>
@@ -887,8 +889,8 @@ function StockDriversSection({ s }) {
         </div>
       )}
 
-      {msg && <div style={{ padding: "10px 16px 0", fontSize: 12, color: C.ok }}>{msg}</div>}
-      {err && <div style={{ padding: "10px 16px 0", fontSize: 12, color: C.bad }}>{err}</div>}
+      {msg && <div style={{ padding: "10px 16px 0", fontSize: 12, color: C.pos }}>{msg}</div>}
+      {err && <div style={{ padding: "10px 16px 0", fontSize: 12, color: C.neg }}>{err}</div>}
 
       {(items || []).length === 0 ? (
         <div style={{ padding: "22px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
@@ -916,9 +918,9 @@ function StockDriversSection({ s }) {
 // ── PR-1+3: 매력도 3축 카드 (퀀트·컨센서스·내 판단 나란히, 단일점수 금지) ──
 function _upsideGrade(up) {
   if (up == null) return null;
-  if (up >= 20) return { label: "높음", col: C.ok };
+  if (up >= 20) return { label: "높음", col: C.pos };
   if (up >= 5) return { label: "보통", col: C.warn };
-  return { label: "낮음", col: C.bad };
+  return { label: "낮음", col: C.neg };
 }
 function _level(kind, v) {
   if (v == null) return null;
@@ -1001,7 +1003,7 @@ function AxesCard({ s }) {
     <Panel title="매력도 — 3축 비교" sub="합산하지 않음 · 축 간 괴리를 그대로 표시 (확인편향 방지)"
       right={
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {saved && <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>✓ 저장됨</MonoCaps>}
+          {saved && <MonoCaps style={{ fontSize: 9.5 }} color={C.pos}>✓ 저장됨</MonoCaps>}
           {saving && <MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>저장 중…</MonoCaps>}
           {hasNote && !confirmDel && (
             <button onClick={() => setConfirmDel(true)}
@@ -1011,9 +1013,9 @@ function AxesCard({ s }) {
           )}
           {confirmDel && (
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.bad }}>이력 포함 삭제?</span>
+              <span style={{ fontSize: 11, color: C.neg }}>이력 포함 삭제?</span>
               <button onClick={deleteNote} disabled={deleting}
-                style={{ border: "none", borderRadius: 6, padding: "3px 9px", fontSize: 11, color: "#fff", background: C.bad, cursor: "pointer", opacity: deleting ? 0.5 : 1 }}>
+                style={{ border: "none", borderRadius: 6, padding: "3px 9px", fontSize: 11, color: C.onAcc, background: C.neg, cursor: "pointer", opacity: deleting ? 0.5 : 1 }}>
                 {deleting ? "삭제 중…" : "삭제"}
               </button>
               <button onClick={() => setConfirmDel(false)}
@@ -1031,7 +1033,7 @@ function AxesCard({ s }) {
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <Num size={30} weight={800} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num>
             <span style={{ fontSize: 11, color: C.ink3 }}>/100</span>
-            {qLevel && <span style={{ fontSize: 11, fontWeight: 700, color: qLevel === "높음" ? C.ok : qLevel === "낮음" ? C.bad : C.ink2 }}>{qLevel}</span>}
+            {qLevel && <span style={{ fontSize: 11, fontWeight: 700, color: qLevel === "높음" ? C.pos : qLevel === "낮음" ? C.neg : C.ink2 }}>{qLevel}</span>}
           </div>
           <div style={{ display: "flex", gap: 4, marginTop: 12, flexWrap: "wrap" }}>
             {[["모멘텀", s.f.m], ["가치", s.f.v], ["우량성", s.f.q], ["성장", s.f.g], ["심리", s.f.s]].map(([k, v]) => (
@@ -1041,7 +1043,7 @@ function AxesCard({ s }) {
           {/* 횡단면 신호(display_signals) — 퀀트 축 내부 상대 위치. 등급(결론)과 구분. */}
           {isCompleteSignal(s.signal) && (
             <div style={{ marginTop: 10, fontSize: 10.5, color: C.ink3, lineHeight: 1.5 }}>
-              횡단면 위치 <b style={{ color: s.signal.label === "매수" ? C.ok : s.signal.label === "축소" ? C.bad : C.ink2 }}>{s.signal.label}</b>
+              횡단면 위치 <b style={{ color: s.signal.label === "매수" ? C.pos : s.signal.label === "축소" ? C.neg : C.ink2 }}>{s.signal.label}</b>
               <span style={{ color: C.ink3 }}> · {s.signal.reason}</span>
             </div>
           )}
@@ -1087,9 +1089,9 @@ function AxesCard({ s }) {
           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
             {["short", "long", "watch"].map((h) => (
               <button key={h} onClick={() => setNote((current) => ({ ...current, horizon: current.horizon === h ? null : h }))}
-                style={{ border: `1px solid ${note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.line2}`,
-                  background: note.horizon === h ? (h === "short" ? C.accTint : h === "long" ? C.okBg : C.surface2) : C.surface,
-                  color: note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.ink2,
+                style={{ border: `1px solid ${note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.pos : C.ink3) : C.line2}`,
+                  background: note.horizon === h ? (h === "short" ? C.accTint : h === "long" ? C.posBg : C.surface2) : C.surface,
+                  color: note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.pos : C.ink3) : C.ink2,
                   borderRadius: 6, padding: "5px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}>
                 {HORIZON_LABEL[h].replace(" 트레이딩", "").replace(" 보유", "")}
               </button>
@@ -1108,7 +1110,7 @@ function AxesCard({ s }) {
             placeholder="현재 판단과 근거를 여러 줄로 기록하세요…"
             style={{ width: "100%", minHeight: 110, marginTop: 10, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "9px 10px", fontSize: 12.5, fontFamily: "var(--sans)", lineHeight: 1.55, color: C.ink, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
           <button onClick={saveNote} disabled={saving || !(note.thesis || "").trim()}
-            style={{ marginTop: 8, width: "100%", border: "none", borderRadius: 7, padding: "8px 10px", background: C.ink, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: saving || !(note.thesis || "").trim() ? 0.45 : 1 }}>
+            style={{ marginTop: 8, width: "100%", border: "none", borderRadius: 7, padding: "8px 10px", background: C.acc, color: C.onAcc, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: saving || !(note.thesis || "").trim() ? 0.45 : 1 }}>
             {saving ? "저장 중…" : "판단 추가"}
           </button>
         </div>
@@ -1163,10 +1165,10 @@ function ManualAiPerspectiveCard({ entry }) {
         ))}
       </div>
       <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <div style={{ border: `1px solid ${C.ok}22`, borderRadius: 7, padding: "9px 10px", background: C.ok + "0E", fontSize: 12, color: C.ink2 }}>
+        <div style={{ border: `1px solid ${C.pos}22`, borderRadius: 7, padding: "9px 10px", background: C.pos + "0E", fontSize: 12, color: C.ink2 }}>
           강세 {(entry.bull || []).length}건
         </div>
-        <div style={{ border: `1px solid ${C.bad}22`, borderRadius: 7, padding: "9px 10px", background: C.bad + "0E", fontSize: 12, color: C.ink2 }}>
+        <div style={{ border: `1px solid ${C.neg}22`, borderRadius: 7, padding: "9px 10px", background: C.neg + "0E", fontSize: 12, color: C.ink2 }}>
           약세 {(entry.bear || []).length}건
         </div>
       </div>
@@ -1200,19 +1202,19 @@ function AutoCollectionPerspectiveCard({ s }) {
   return (
     <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface2, padding: "12px 14px" }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.ok, background: C.okBg, border: `1px solid ${C.ok}33`, borderRadius: 999, padding: "3px 8px" }}>자동수집</span>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.pos, background: C.posBg, border: `1px solid ${C.pos}33`, borderRadius: 999, padding: "3px 8px" }}>자동수집</span>
         <span style={{ fontSize: 10.5, color: C.ink2 }}>강세 {bull.length} · 약세 {bear.length}</span>
         {s.consensus?.ratingLabel && <span style={{ fontSize: 10.5, color: C.ink2 }}>의견 {s.consensus.ratingLabel}</span>}
       </div>
       <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
         {bull.slice(0, 2).map((item, idx) => (
           <div key={`bull-${idx}`} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>
-            <b style={{ color: C.ok }}>강세</b> · {cleanDisplayText(item.point)}
+            <b style={{ color: C.pos }}>강세</b> · {cleanDisplayText(item.point)}
           </div>
         ))}
         {bear.slice(0, 2).map((item, idx) => (
           <div key={`bear-${idx}`} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>
-            <b style={{ color: C.bad }}>약세</b> · {cleanDisplayText(item.point)}
+            <b style={{ color: C.neg }}>약세</b> · {cleanDisplayText(item.point)}
           </div>
         ))}
         {insights.slice(0, 2).map((item) => (
@@ -1259,7 +1261,7 @@ function PerspectiveComparisonCard({ s, manualEntry }) {
         </div>
         <div>
           <div style={{ marginBottom: 8 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ok }}>자동 수집 근거</div>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.pos }}>자동 수집 근거</div>
             <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>뉴스 · 컨센서스</MonoCaps>
           </div>
           <AutoCollectionPerspectiveCard s={s} />
@@ -1326,8 +1328,8 @@ function ActionAdviceCard({ advice, history = [] }) {
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div style={{ border: `1px solid ${C.ok}22`, borderRadius: 8, background: C.ok + "0E", padding: "10px 12px" }}>
-              <MonoCaps style={{ fontSize: 9.5 }} color={C.ok}>지지 재료</MonoCaps>
+            <div style={{ border: `1px solid ${C.pos}22`, borderRadius: 8, background: C.pos + "0E", padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.pos}>지지 재료</MonoCaps>
               <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
                 {(advice.supportingFactors || []).length ? advice.supportingFactors.map((item, idx) => (
                   <div key={`support-${idx}`} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>
@@ -1336,8 +1338,8 @@ function ActionAdviceCard({ advice, history = [] }) {
                 )) : <div style={{ fontSize: 12, color: C.ink3 }}>지지 재료 없음</div>}
               </div>
             </div>
-            <div style={{ border: `1px solid ${C.bad}22`, borderRadius: 8, background: C.bad + "0E", padding: "10px 12px" }}>
-              <MonoCaps style={{ fontSize: 9.5 }} color={C.bad}>반대 재료</MonoCaps>
+            <div style={{ border: `1px solid ${C.neg}22`, borderRadius: 8, background: C.neg + "0E", padding: "10px 12px" }}>
+              <MonoCaps style={{ fontSize: 9.5 }} color={C.neg}>반대 재료</MonoCaps>
               <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
                 {(advice.opposingFactors || []).length ? advice.opposingFactors.map((item, idx) => (
                   <div key={`oppose-${idx}`} style={{ fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>
@@ -1385,8 +1387,8 @@ function TradingSignalCard({ s }) {
   const basis = ts?.basis || [];
   const volNote = ts?.volNote;
 
-  const labelColor = label === "단기매수우호" ? C.ok : label === "단기회피" ? C.bad : C.ink2;
-  const labelBg    = label === "단기매수우호" ? C.okBg : label === "단기회피" ? C.badBg : C.surface2;
+  const labelColor = label === "단기매수우호" ? C.pos : label === "단기회피" ? C.neg : C.ink2;
+  const labelBg    = label === "단기매수우호" ? C.posBg : label === "단기회피" ? C.negBg : C.surface2;
 
   const rows = [
     ti?.macdHist != null && { name: "MACD 히스토그램", val: ti.macdHist.toFixed(3), note: ti.macdHist > 0 ? "양(0선 위)" : "음(0선 아래)" },
@@ -1485,13 +1487,13 @@ function InvestorFlowCard({ s }) {
   const foreign  = flow.foreignSignal  || "중립";
   const instit   = flow.institutionSignal || "중립";
 
-  const combColor = combined === "수급_강세" ? C.ok
-    : combined === "수급_약세" ? C.bad
+  const combColor = combined === "수급_강세" ? C.pos
+    : combined === "수급_약세" ? C.neg
     : combined === "수급_혼조" ? C.acc
     : C.ink2;
-  const combBg = combined === "수급_강세" ? C.okBg
-    : combined === "수급_약세" ? C.badBg
-    : combined === "수급_혼조" ? "#FFF3E0"
+  const combBg = combined === "수급_강세" ? C.posBg
+    : combined === "수급_약세" ? C.negBg
+    : combined === "수급_혼조" ? C.warnBg
     : C.surface2;
 
   // 억원 단위 포맷 (소수점 1자리)
@@ -1502,7 +1504,7 @@ function InvestorFlowCard({ s }) {
   };
 
   const sigColor = (sig) =>
-    sig === "매수우호" ? C.ok : sig === "매도우세" ? C.bad : C.ink2;
+    sig === "매수우호" ? C.pos : sig === "매도우세" ? C.neg : C.ink2;
 
   // E-1↔E-2 divergence: 기술신호와 수급신호 충돌 감지
   const techLabel = s?.tradingSignal?.label;
@@ -1646,7 +1648,7 @@ export function InsightHistoryCard({ items }) {
 }
 
 // PR-2: 중요 뉴스 방향 색상 (호재 초록 / 악재 빨강 / 중립 회색)
-export const dirColor = (d) => d === "호재" ? C.ok : d === "악재" ? C.bad : C.ink3;
+export const dirColor = (d) => d === "호재" ? C.pos : d === "악재" ? C.neg : C.ink3;
 
 // PR-2: 종목상세 중요 뉴스 카드
 export function CuratedNews({ items }) {
@@ -1747,7 +1749,7 @@ export function StockDetail({ D, ticker, nav }) {
     { label: "이동평균 배열", val: s.align ? "정배열" : "역배열", tone: s.align ? "ok" : "bad", note: "20·60·120일" },
     { label: "컨센서스 의견", val: s.rating ?? "—", tone: /Strong Buy|Buy/.test(s.rating) ? "ok" : s.rating === "Hold" ? "warn" : "bad", note: "애널리스트" },
   ];
-  const toneCol = (t) => ({ ok: C.ok, bad: C.bad, warn: C.warn, acc: C.acc, neutral: C.ink }[t] || C.ink);
+  const toneCol = (t) => ({ ok: C.pos, bad: C.neg, warn: C.warn, acc: C.acc, neutral: C.ink }[t] || C.ink);
   const sectorRankText = s.comp != null ? `${s.sec} ${sectorCount}개 중 ${sectorRank}위` : `${s.sec} ${sectorCount}개`;
   const fb = s.factorFallback || {};  // PR-6: 팩터별 중립폴백 여부
 
@@ -1829,10 +1831,10 @@ export function StockDetail({ D, ticker, nav }) {
         const aa = s.actionAdviceLatest;
         const grade = aa?.grade || s.grade;
         if (!grade) return <SignalCard signal={s.signal} />;
-        const tone = grade === "매수" ? C.ok : grade === "축소" ? C.bad : C.ink2;
+        const tone = grade === "매수" ? C.pos : grade === "축소" ? C.neg : C.ink2;
         const summary = gradeAxisSummary(aa?.gradeBasis);
         return (
-          <div style={{ padding: "10px 12px", border: `1px solid ${tone}33`, borderRadius: 8, background: grade === "매수" ? C.okBg : grade === "축소" ? C.badBg : C.surface2 }}>
+          <div style={{ padding: "10px 12px", border: `1px solid ${tone}33`, borderRadius: 8, background: grade === "매수" ? C.posBg : grade === "축소" ? C.negBg : C.surface2 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <GradeBadge grade={grade} confidence={aa?.gradeConfidence || s.gradeConfidence} />
               <span style={{ fontSize: 10.5, color: C.ink3 }}>3축 종합 결론 · 합산 아님</span>
@@ -2031,7 +2033,7 @@ export function StockDetail({ D, ticker, nav }) {
                 <div key={label} style={{ padding: "14px 18px", borderRight: i < 5 ? `1px solid ${C.line}` : "none" }}>
                   <MonoCaps style={{ fontSize: 9.5 }}>{label}</MonoCaps>
                   <div style={{ marginTop: 4 }}>
-                    <Num size={18} weight={700} color={isPnl ? (pnlPos ? C.ok : C.bad) : C.ink}>{val}</Num>
+                    <Num size={18} weight={700} color={isPnl ? (pnlPos ? C.up : C.down) : C.ink}>{val}</Num>
                   </div>
                 </div>
               );
@@ -2064,13 +2066,13 @@ export function StockDetail({ D, ticker, nav }) {
 
         <Panel title="점수 히스토리" sub="최근 16주 추이">
           <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
-            {[["종합", s.compHist, C.acc, s.comp], ["모멘텀", s.momHist, C.ok, s.f.m]].filter(([, data]) => data).map(([lbl, data, col, cur]) => {
+            {[["종합", s.compHist, C.acc, s.comp], ["모멘텀", s.momHist, C.pos, s.f.m]].filter(([, data]) => data).map(([lbl, data, col, cur]) => {
               const delta = data[data.length - 1] - data[0];
               return (
                 <div key={lbl}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                     <MonoCaps style={{ fontSize: 9.5 }}>{lbl}</MonoCaps>
-                    <span className="tnum" style={{ fontSize: 11.5, fontWeight: 700, color: delta >= 0 ? C.ok : C.bad }}>{delta >= 0 ? "+" : ""}{delta} (16주)</span>
+                    <span className="tnum" style={{ fontSize: 11.5, fontWeight: 700, color: delta >= 0 ? C.up : C.down }}>{delta >= 0 ? "+" : ""}{delta} (16주)</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <Num size={24} weight={800} color={col}>{cur ?? "—"}</Num>

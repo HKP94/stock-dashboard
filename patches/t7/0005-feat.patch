@@ -1,0 +1,1645 @@
+From d7f2e2b7380f4a0e6636b700d6d2d4d7fbde3b10 Mon Sep 17 00:00:00 2001
+From: KYEONGPIL HEO <kyeongpilheo@KYEONGPILui-MacBookAir.local>
+Date: Fri, 19 Jun 2026 12:17:19 +0900
+Subject: [PATCH 5/5] =?UTF-8?q?feat:=20=ED=91=9C=EC=8B=9C=EC=9A=A9=20?=
+ =?UTF-8?q?=EB=A7=A4=EB=A7=A4=EC=8B=A0=ED=98=B8=EC=99=80=20=EC=A0=95?=
+ =?UTF-8?q?=EC=B1=85=20=EB=8F=99=EA=B8=B0=ED=99=94?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ AGENTS.md                           | 20 ++++++++
+ CLAUDE.md                           |  8 ++--
+ PRD.md                              | 35 ++++++++------
+ README.md                           |  2 +-
+ START_HERE.md                       |  1 -
+ claude design/project/app.jsx       |  2 +-
+ dashboard-web/README.md             |  2 +-
+ dashboard-web/src/App.jsx           |  7 ---
+ dashboard-web/src/display.js        |  4 ++
+ dashboard-web/src/tabsA.jsx         |  9 ++--
+ dashboard-web/src/tabsB.jsx         |  5 +-
+ dashboard-web/src/tabsC.jsx         |  8 ++--
+ dashboard-web/src/tabsD.jsx         |  7 +--
+ dashboard-web/src/ui.jsx            | 17 ++++++-
+ dashboard-web/tests/display.test.js |  7 +++
+ dashboard/README.md                 |  3 +-
+ dashboard/app.py                    |  9 +---
+ dashboard/watchlist_admin.py        |  2 +-
+ db/schema.sql                       |  2 +-
+ prompt/GEMINI_PROMPT.md             |  6 +--
+ prompt/HERMES_PROMPT.md             | 19 ++++----
+ src/assemble.py                     | 18 +++++---
+ src/backfill.py                     |  3 +-
+ src/backtest.py                     |  4 +-
+ src/compute_indicators.py           |  2 -
+ src/compute_portfolio.py            |  4 +-
+ src/compute_quant.py                |  7 +--
+ src/display_signals.py              | 71 +++++++++++++++++++++++++++++
+ src/enrich_gemini.py                | 13 ++----
+ src/export_dashboard_data.py        | 28 ++++++++++--
+ src/ingest_kr.py                    |  2 -
+ src/ingest_market.py                |  2 -
+ src/ingest_news.py                  |  2 -
+ src/ingest_us.py                    |  2 -
+ src/local_api.py                    |  4 +-
+ src/news_refresh.py                 |  3 +-
+ src/portfolio_advice.py             | 20 +++-----
+ src/recompute.py                    |  4 --
+ src/rules.py                        |  5 +-
+ src/run_pipeline.py                 |  7 +--
+ src/schemas.py                      | 15 +++---
+ src/send_telegram.py                | 16 ++-----
+ tests/test_assemble.py              | 24 ++++++++++
+ tests/test_daily_brief.py           |  4 +-
+ tests/test_display_signals.py       | 53 +++++++++++++++++++++
+ tests/test_enrich_gemini.py         |  4 +-
+ tests/test_export_safety.py         | 13 ++++++
+ tests/test_portfolio_advice.py      |  6 +--
+ tests/test_rules.py                 |  1 -
+ tests/test_send_telegram.py         | 11 +++++
+ 50 files changed, 356 insertions(+), 167 deletions(-)
+ create mode 100644 AGENTS.md
+ create mode 100644 src/display_signals.py
+ create mode 100644 tests/test_display_signals.py
+ create mode 100644 tests/test_send_telegram.py
+
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..8422118
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,20 @@
++# AGENTS.md — ATLAS 빌더 지침
++
++`PRD.md`가 설계·계약·수용 기준의 SSOT이며 세부 구현 규칙은 `CLAUDE.md`를 함께 따른다.
++
++## 절대 규칙
++
++- 시크릿·계좌정보·토큰을 코드, 로그, 문서, 시트에 하드코딩하지 않는다.
++- 근거·백분위·신뢰도를 동반한 매수/관망/축소 표시 신호는 허용한다. 근거 없는 단독 라벨은 금지한다.
++- 주문·체결·이체와 외부 주문 API 호출은 작성하지 않는다. 신호는 화면·메시지 표시 전용이다.
++- DB 스키마와 JSON 계약 변경은 같은 PR에서 `PRD.md`를 먼저 동기화한다.
++- 지표·퀀트·신호·룰은 LLM 없이 결정론적 Python으로 계산한다.
++- 외부 수집 실패는 종목 단위로 격리하고 `runs.errors`에 기록한다.
++- DB NUMERIC은 읽기 경계에서 `float`로 변환한다.
++- DB 쓰기는 단계별로 커밋하고 예외 시 롤백한다.
++- export는 종목별 최신 행을 조회하며 글로벌 `max(asof)`를 사용하지 않는다.
++- 매력도 3축(퀀트/컨센서스/내 판단)은 단일 점수로 합산하지 않는다.
++- CORS는 `PATCH`, `DELETE`, `OPTIONS`를 포함한다.
++- UI에 내부 파일명과 경로를 노출하지 않는다.
++
++각 PR은 `PRD.md` §11과 변경 이력, `CLAUDE.md`를 갱신하고 무엇을/왜/어떻게 검증했는지 기록한다.
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 275dd48..bc9780e 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -4,11 +4,10 @@
+ 
+ ## 0. 절대 규칙 (위반 금지)
+ - **시크릿 금지**: API 키/토큰/계좌번호/비밀번호를 코드·로그·커밋·문서·시트에 **절대** 하드코딩하지 않는다. 모두 환경변수(`.env`, gitignore) 또는 n8n Credentials로만 읽는다.
+-- **자동 주문 금지**: v1은 **읽기 전용**. 매수/매도/이체 등 자산을 움직이는 코드는 작성하지 않는다(요청받아도 PM에게 에스컬레이션).
++- **표시 신호 허용·자동 주문 금지**: 근거·신뢰도를 동반한 매수/관망/축소 신호는 허용한다. 주문·체결·이체 등 자산을 움직이는 코드와 외부 주문 API 호출은 작성하지 않는다.
+ - **계약 준수**: DB 스키마(PRD §5.1)·JSON 스키마(PRD §5.3)를 벗어나는 입출력을 만들지 않는다. 스키마 변경은 PRD 갱신 후에만.
+ - **결정론은 코드로**: 지표·퀀트 점수·룰 알림은 LLM 호출 없이 Python으로 계산한다.
+ - **부분 실패 격리**: 종목 단위 `try/except`. 한 종목/소스 실패가 전체 실행을 멈추면 안 된다. 실패는 `runs.errors`에 기록.
+-- **면책**: 사용자 대상 출력 텍스트에는 "투자 자문 아님 / 원금 손실 가능"을 포함한다.
+ 
+ ## 1. 프로젝트 개요
+ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main.py`)을, **n8n + Postgres + Gemini + Hermes Agent** 구조로 재설계한다. 기존의 핵심 문제는 ① Sheets를 DB로 사용 ② KR 종목 yfinance 의존 ③ 취약한 뉴스 스크래핑 ④ 모놀리식. 이를 계층 분리·소스 교체로 해결한다. 자세한 진단·아키텍처는 `PRD.md` §1~§4.
+@@ -99,12 +98,13 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
+ - **local_api CORS는 PATCH 포함 필수**: 토글류는 `PATCH /api/watchlist/{ticker}`를 쓴다. `allow_methods`에 PATCH가 빠지면 크로스오리진 프리플라이트(OPTIONS)가 400으로 막혀 **버튼이 조용히 무반응**(curl은 CORS 우회라 200이라 백엔드만 보면 못 잡음). 새 메서드(PATCH/OPTIONS 등) 엔드포인트 추가 시 CORS `allow_methods` 동기화. 토글 UI는 **낙관적 업데이트+실패 롤백+에러 표시**로 견고하게(조용한 실패 금지).
+ - **스크리너 장기보유 = 안전마진**(PRD §F4-6): 단일 "F-Score 7+" 필터는 **구조적으로 빔**(신호 7·8 미수집→실질 만점 7). 안전마진 = 가치40%+퀄리티35%+재무건전성25%(F-Score 없으면 ROE·부채 대체). **F-Score는 `quant_scores.fscore`에 영속화**(export `fscore=None` 하드코딩 금지 — 과거 버그). 가중치/SAFETY_FLOOR는 export 상단 상수. 후보 0이면 빈 화면 금지("충족 종목 없음" 명시).
+ - **재무 시계열**(PR-2): `fundamentals.ocf/fcf`(영업/잉여 현금흐름)는 ingest_us 현금흐름표에서 수집(FCF=OCF+CapEx). 종목상세 "재무 추이" 카드(recharts)는 연간 매출·영업이익·순이익·영업이익률·OCF·FCF. KR 일부(삼성·하이닉스 등)는 DART 결측이라 **empty state**(빈 박스 금지). 컨센서스 전망은 기존 analyst(목표가·의견)·valuation(per_f) 재사용.
+-- **포트폴리오 전략 조언(`portfolio_advice.py`) = 투자 자문 절대 금지**: CoT 4단계(구성/리스크/레짐/종합)를 코드로 분리하고, **모든 단계 프롬프트에 `ABSOLUTE_RULES` 주입**(매수/매도/비중 지시 금지, 관찰·리스크 식별까지만, 면책·관찰형). 매 단계 `response_mime_type=json`+pydantic 검증. **키 없음/STEP1 LLM 실패 시 전체 규칙기반 단락**(불필요한 429 재시도 방지). LLM 호출은 `enrich_gemini._call_gemini_with_backoff` 경계 재사용(`_llm_call`로 감싸 테스트 격리). `cache_key`(보유·현금·레짐 시그니처)로 증분 캐시 — 매 조회마다 호출하지 말 것. 출력에 매매 단정 문구가 있으면 버그.
++- **포트폴리오 전략 조언(`portfolio_advice.py`)**: CoT 4단계(구성/리스크/국면/종합)를 코드로 분리하고 모든 단계에 `ABSOLUTE_RULES`를 주입한다. 코드가 제공한 표시 신호는 근거·신뢰도와 함께 설명할 수 있으나 LLM이 새 신호·목표가를 만들면 안 된다. 주문·체결·이체 실행은 금지한다. 매 단계 `response_mime_type=json`+pydantic 검증, 키 없음/STEP1 실패 시 규칙기반 폴백, `cache_key` 증분 캐시를 유지한다.
+ - **매력도 3축 = 절대 단일 점수로 합치지 마라**(확인편향 방지): 종목상세 `AxesCard`는 퀀트(composite)·컨센서스(상승여력)·내 판단(별점)을 **나란히** 보여주고 각 축에 출처 라벨을 단다. 평균/가중합으로 한 숫자를 만들지 않는다. 축이 엇갈리면(한 축 높음+다른 축 낮음) "확인 필요" 코멘트로 **괴리를 드러낸다**. 컨센서스 데이터 없으면 "컨센서스 없음", 별점 없으면 "내 판단 미입력"(0점 아님).
+ - **내 판단은 누적 이력**: `stock_notes`는 3축용 최신 상태, `stock_note_history`는 명시적으로 제출한 판단의 불변 이력이다. 여러 줄 입력을 타임스탬프와 함께 최신순으로 보여주며 빈 판단은 저장하지 않는다.
+ - **용어 한글화는 표시 레이어만**: 내부 `regime/sentiment/momentum/value/quality/growth`와 `m/v/q/g/s` 키는 유지하고 UI에서는 국면/심리/모멘텀/가치/우량성/성장으로 표시한다.
+ - **리서치 항목**(`research_items`): local_api `GET/POST/DELETE /api/research`로 종목상세에서 직접 추가·삭제(유형 youtube/article/report/quant/memo). 추가 후 `_patch_data_json_research`로 해당 종목 `researchItems`만 패치(전체 재생성 회피). 공용 `ResearchItemCard`/`toYtEmbed`는 **tabsA.jsx에 정의**(tabsB가 import — tabsB→tabsA 단방향, 순환 import 금지).
+-- **오버뷰 요약밴드**(`dailyBrief`, export `_build_daily_brief`): 주목/주의/3축괴리/시장 한줄을 **규칙 기반으로 합성**(키 없어도 동작). 시장 한 줄은 이미 생성된 Gemini 시황(`market_daily.summary`)을 재사용(ad-hoc 호출 금지). 전부 '관찰/정보'로 서술, 매수매도 단정·면책 유지. **괴리 종목은 주목에서 제외**(메시지 혼선 방지). 문장 한 줄은 `_short_line`으로 소수점에서 안 끊기게.
++- **오버뷰 요약밴드**(`dailyBrief`, export `_build_daily_brief`): 주목/주의/3축괴리/시장 한줄을 규칙 기반으로 합성하고 시장 한 줄은 기존 Gemini 시황을 재사용한다. 괴리 종목은 주목에서 제외하며 문장 한 줄은 `_short_line`으로 소수점에서 끊지 않는다.
++- **표시 신호 계약**: 활성 종목의 퀀트 종합 횡단면 백분위가 70 이상이면 매수, 30 이하면 축소, 나머지는 관망이다. 신호는 `label/percentile/reason/confidence`를 항상 함께 제공하며 단독 라벨은 버그다. 계산은 `display_signals.py`의 순수 Python이고 주문 실행 경로가 없다.
+ - **시장 매력도**(`market.kr/us.attractiveness`, export `_attach_market_attractiveness`): 진입 환경(우호/중립/비우호)을 레짐+시장폭(정배열율)+변동성(VIX)으로 평가하고 근거를 서술. **단일 점수로 강요 금지**(3축 원칙과 동일 — 환경 평가+근거).
+ - **탭 간 종목 컨텍스트 연속성**: 전역 `ticker`(App.jsx)가 selectedTicker. 어느 탭에서든 종목을 '포커스'하면 `ticker`를 갱신해야 종목상세로 가도 유지된다(스크리너·포트폴리오는 `nav(tk)`로, 뉴스는 `selectNewsTicker`로 동기화). 새 탭에서 종목 선택 UI를 만들면 반드시 전역 `ticker`도 갱신.
+ - Python 3.12, 타입힌트 필수, `pydantic` v2로 외부 데이터·LLM 출력 검증.
+diff --git a/PRD.md b/PRD.md
+index 47311f5..0feafa4 100644
+--- a/PRD.md
++++ b/PRD.md
+@@ -5,7 +5,7 @@
+ 
+ | 항목 | 값 |
+ |---|---|
+-| 버전 | v3.2 |
++| 버전 | v3.3 |
+ | 작성일 | 2026-06-08 |
+ | PM | Claude (대화 세션) |
+ | 빌더 | Claude Code |
+@@ -14,9 +14,9 @@
+ 
+ ---
+ 
+-## ⚠️ 0. 면책 (모든 산출물에 적용)
++## 0. 운영 정책 (모든 산출물에 적용)
+ 
+-이 시스템은 **정보 수집·정리·정량 분석 도구**다. 매수/매도 지시나 투자 자문이 아니다. 모든 점수·플래그·요약은 참고용이며, 투자 판단과 그 결과의 책임은 전적으로 사용자에게 있다. 텔레그램 브리핑을 포함한 모든 출력에는 "투자 자문 아님 / 원금 손실 가능" 문구를 노출한다. **v1 범위는 읽기 전용(조회)이며, 자동 주문/체결은 범위에서 제외한다.**
++이 시스템은 정보 수집·정리·정량 분석 도구다. 근거·신뢰도를 동반한 매수/관망/축소 표시 신호를 허용한다. 신호는 화면과 메시지 표시 전용이며, 주문·체결·이체와 외부 주문 API 호출은 범위에서 제외한다.
+ 
+ ---
+ 
+@@ -62,7 +62,7 @@
+ 
+ ### 2.2 비목표 (v1 제외)
+ - 자동 주문/체결(매매 실행) — 안전·리스크상 제외.
+-- 개인화된 "사라/팔아라" 추천 — 자문 아님.
++- 자동 주문으로 이어지는 개인화 실행 경로.
+ - 실시간 틱 데이터/HFT — 일/분 단위로 충분.
+ 
+ ### 2.3 성공 지표
+@@ -279,7 +279,8 @@ CREATE TABLE portfolio_advice (
+   "analyst": {"rating": "BUY", "target": 260000, "upside": 0.19},
+   "news": {"sentiment": "긍정", "score": 0.4, "summary_md": "- ...", "based_on": "recent"},
+   "quant": {"composite": 71, "momentum": 78, "value": 55, "quality": 64, "growth": 70, "sentiment": 66,
+-            "flags": ["RSI 모멘텀 양호", "밸류에이션 부담 없음"]},
++            "flags": ["RSI 모멘텀 양호", "밸류에이션 부담 없음"],
++            "signal": {"label": "매수", "percentile": 82, "reason": "퀀트 종합 백분위 82위(상위 18%), 강점 팩터는 모멘텀 78점", "confidence": 70}},
+   "is_holding": true
+ }
+ ```
+@@ -344,7 +345,7 @@ LLM은 **반드시 아래 JSON만** 반환한다. 상세 프롬프트는 `prompt
+ **서술**: Gemini가 §5.3-B 스키마로 "오늘의 레짐 + 드라이버 + 한·미 온도차 + 체크포인트"를 1회 생성.
+ 
+ ### F4 — 퀀트 팩터 스코어링 (투명·규칙기반, 결정론)
+-**LLM 아님. `src/compute_quant.py`에서 순수 Python/pandas/numpy로 계산.** 유니버스 전체 백분위(0~100) 정규화 후 레짐 가중합으로 composite. **점수는 설명용이며 매수/매도 신호가 아님.**
++**LLM 아님. `src/compute_quant.py`에서 순수 Python/pandas/numpy로 계산.** 유니버스 전체 백분위(0~100) 정규화 후 국면 가중합으로 composite. 표시 신호도 결정론적 코드로 계산한다.
+ 
+ ---
+ 
+@@ -433,6 +434,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+ 
+ 데이터 없는 종목·팩터 → **50(중립)** + `flags`에 "데이터 부족" 기록 → N/A 전파 차단. 필터 제외 종목은 `composite = None` 저장.
+ 
++#### F4-7. Wave 1 표시 신호
++
++활성 종목 중 `composite`가 있는 종목의 횡단면 평균순위 백분위를 사용한다. 백분위 70 이상은 `매수`, 30 이하는 `축소`, 그 사이는 `관망`이다. 동점은 같은 백분위를 부여한다. 모든 신호는 `label`, `percentile`, 가장 높은 팩터를 포함한 `reason`, 경계 여유를 50~100으로 정규화한 `confidence`를 함께 표시한다. `composite`가 없으면 신호는 `null`이다. 신호는 표시 전용이며 주문 실행 경로가 없다.
++
+ > **KR 가치/퀄리티/성장은 이제 실제 값**(네이버+FnGuide로 PER/PBR/ROE/부채/목표가 수집, 2026-06-15). 결측인 종목만 중립(50) 유지. 검증: KR 11종목 전부 value/quality/growth가 50고정 → 실제 분포로 전환(예: 코웨이 V=77.6, KT&G V=62.7).
+ 
+ #### F4-6. 스크리너 '장기 보유 = 안전마진' (PR-1, 2026-06-16)
+@@ -451,7 +456,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+ > 기본값(`TELEGRAM_ENABLED` 미설정)에서는 `run_send`가 발송하지 않고 no-op 성공 반환 → 에러 없음.
+ 
+ **생성·발송 주체: Hermes Agent**(텔레그램 네이티브). DB에서 당일 `portfolio_snapshot`·`quant_scores`·`news_analysis`·`market_daily`를 읽고, Hermes 메모리(보유 이력·관심 변화·이전 브리핑)와 결합해 종합. 템플릿·페르소나는 `prompts/HERMES_PROMPT.md`.
+-**구성**: ① 시장 한 줄 + 레짐 ② 내 포트폴리오 손익 요약 ③ 관심종목 퀀트 점수 상·하위 + 변동 ④ 오늘의 알림 플래그 ⑤ 주목 뉴스 3건 ⑥ 면책 1줄.
++**구성**: ① 시장 한 줄 + 국면 ② 내 포트폴리오 손익 요약 ③ 관심종목 퀀트 점수·표시 신호·변동 ④ 오늘의 알림 플래그 ⑤ 주목 뉴스 3건.
+ **대안 경로**: Hermes 운영이 부담이면 n8n Telegram 노드로 직접 발송 가능(이 경우 종합 텍스트는 Gemini가 생성, 메모리 기능은 포기).
+ 
+ ### F6 — 추가 기능 (우선순위순)
+@@ -466,7 +471,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+    - **탭**: 오버뷰(랭킹·알림·주목뉴스) · 종목상세(차트·팩터·지표) · 뉴스 · 스크리너 · 시장전망 · 리서치노트.
+    - **데이터**: `src/export_dashboard_data.py` → `dashboard-web/src/data.json` → React 빌드타임 import. 없으면 mock fallback.
+    - **개선**: 종목상세 "섹터 N개 중 순위" 텍스트, 스크리너 레짐 판정 근거 한 줄.
+-   - **표시 원칙**: composite·팩터·플래그 등 **점수와 사실만**. 매수/매도 표현 금지, 하단 면책 고정. 결측은 null/None(N/A 금지).
++   - **표시 원칙**: composite·팩터·플래그와 근거·신뢰도를 동반한 신호를 표시한다. 단독 신호 라벨은 금지하며 결측은 null/None(N/A 금지).
+    - **로컬 실행**: `cd dashboard-web && npm run dev` → http://localhost:5173.
+    - **레거시**: `dashboard/app.py` (Streamlit) — 유지보수 안 함, 참조용으로만 보존.
+ 
+@@ -551,7 +556,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+ - **(중) KR 컨센서스/목표가 데이터 확보** → 무료 소스 한계. 네이버/에프앤가이드 보조, 없으면 해당 팩터 중립 처리.
+ - **(중) 로컬 모델 툴콜 신뢰성** → 검증된 모델·파서 사용, 핵심 호출은 클라우드로.
+ - **(중) 무료 데이터 레이트리밋** → n8n에서 배치·캐시·간격 제어.
+-- **(저) 자문 규제 리스크** → 출력은 정보·정량 분석에 한정, 면책 상시 노출, 자동매매 제외.
++- **(저) 신호 오해 리스크** → 모든 신호에 근거·신뢰도를 함께 표시하고 자동 주문 경로를 제외.
+ 
+ ---
+ 
+@@ -641,7 +646,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+   - PR-2: **리서치 종목상세 통합**(`StockResearchSection`) — research_items 유형별 표시(리포트/유튜브 임베드/기사/퀀트/메모) + **빠른 추가(해당 ticker 프리필)**. local_api `GET/POST/DELETE /api/research`(+`_patch_data_json_research`). 공용 `ResearchItemCard` tabsA로 이동(순환 import 회피). 검증: POST→data.json 반영→DELETE 왕복.
+   - PR-3: **내 판단 축 인라인 편집** — 3축 카드에서 horizon·별점(클릭)·thesis(blur 자동저장) 즉시 `PUT /api/notes` + 저장 피드백. `attractiveness` 미입력 시 "내 판단 미입력"(0점 아님). 기존 단독 InvestmentNoteCard 폐기·3축으로 통합.
+ - [x] **오버뷰 요약밴드 + 시장 매력도 + 탭 컨텍스트 PR-1~3** (2026-06-17):
+-  - PR-1: 오버뷰 최상단 **"오늘의 요약 밴드"**(`DailyBriefBand`/`dailyBrief`) — ① 주목(퀀트 상위+신선 신호, 괴리종목 제외) ② 주의(RSI과열·데드크로스·급락·컨센서스 하회) ③ 3축 괴리(퀀트↔컨센서스, 확인 필요) ④ 시장 한 줄(레짐+Gemini 시황 재사용). 규칙 기반(키 없어도 동작), 전부 관찰·정보 서술+면책. 검증: 주목 3·괴리 2(겹침 0)·시장 한 줄 소수점 안 끊김.
++  - PR-1: 오버뷰 최상단 **"오늘의 요약 밴드"**(`DailyBriefBand`/`dailyBrief`) — ① 주목(퀀트 상위+신선 신호, 괴리종목 제외) ② 주의(RSI과열·데드크로스·급락·컨센서스 하회) ③ 3축 괴리(퀀트↔컨센서스, 확인 필요) ④ 시장 한 줄(국면+Gemini 시황 재사용). 규칙 기반(키 없어도 동작). 검증: 주목 3·괴리 2(겹침 0)·시장 한 줄 소수점 안 끊김.
+   - PR-2: 시장전망 KR/US **진입 환경**(`attractiveness`: 우호/중립/비우호) — 레짐+시장폭(정배열율)+변동성(VIX) 종합, 근거 서술. **단일 점수 강요 금지**. 검증: KR/US 우호, basis에 레짐·정배열·VIX.
+   - PR-3: **탭 간 종목 컨텍스트 연속성** — 뉴스에서 종목 선택 시 전역 `ticker` 동기화(`selectNewsTicker`)+`goNews`에 setTicker → 종목상세 탭으로 가도 유지(스크리너·포트폴리오는 nav로 이미 동기화).
+   - 단위테스트 +12(297 passed).
+@@ -654,10 +659,10 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+   - PR-2: **start_dashboard.sh**(macOS) — .venv→export(DB→data.json)→local_api(8765)+vite(5173) 기동(이미 떠 있으면 재사용)→브라우저 자동 오픈. 실패 시 명확한 에러(DB 접속/데이터 부재 구분). `stop_dashboard.sh`·더블클릭용 `start_dashboard.command` 동봉. 검증: export 38종목→포트 재사용→완료.
+   - PR-3: **데이터 신선도 가드** — export `generatedAt`/`generatedAtLabel`, 헤더에 "데이터 생성: {시각}" 표시, 생성 후 2일+이면 헤더 옅은 경고 배너("스크립트 재실행 권장"). 검증: generatedAt 반영, 300 tests passed.
+ - [x] **포트폴리오 "전략 조언"(단계분리 CoT) PR-1~3** (2026-06-17):
+-  - 절대 원칙(모든 단계 프롬프트 주입): 투자 자문 금지(매수/매도/비중 지시 금지), 관찰·리스크 식별까지만, 매 출력 면책·관찰형 서술.
++  - 절대 원칙(모든 단계 프롬프트 주입): 데이터에 없는 신호 생성 금지, 코드 신호는 근거·신뢰도와 함께 설명, 자동 주문 실행 금지.
+   - PR-1 `src/portfolio_advice.py`: enrich_gemini `_call_gemini_with_backoff` 경계 재사용(`_llm_call`, 테스트 격리). **CoT 4단계**(①구성 분석 ②리스크 식별 ③레짐 정합성 ④종합+질문형)를 코드로 분리해 각 단계 출력을 다음 입력으로. 각 단계 `response_mime_type=json`+pydantic 검증, 실패 1회 재시도. **키 없음/STEP1 LLM 실패 시 전체 규칙기반 단락**(코드가 집중도·비중·신호로 관찰 문장 생성). 보유·가격·레짐 시그니처 `cache_key`로 증분 캐시.
+   - PR-2: `portfolio_advice` 테이블(§5.1), local_api **POST/GET `/api/portfolio/advice`**(POST=force 재생성+data.json 갱신, GET=최근+stale), export `portfolioAdvice` 포함(읽기만, 호출 안 함).
+-  - PR-3: 포트폴리오 탭 **"전략 조언(참고용)"** 카드 — 종합 관찰 상단 강조 + 질문, ①②③ 펼침 섹션, source 뱃지(Gemini/규칙기반), "다시 분석" 버튼, 생성시각·면책, 보유 없으면 안내, 보유 변경 시 stale 경고.
++  - PR-3: 포트폴리오 탭 **"전략 조언"** 카드 — 종합 관찰 상단 강조 + 질문, ①②③ 펼침 섹션, source 뱃지(Gemini/규칙기반), "다시 분석" 버튼, 생성시각, 보유 없으면 안내, 보유 변경 시 stale 경고.
+   - 검증: 규칙기반·Gemini 경로 모두 동작, **금지어 0**, 단계 간 데이터 전달, 캐시 재사용. 단위테스트 +13(313 passed). (참고: 현재 Gemini 키는 선불 크레딧 소진 상태라 규칙기반으로 폴백 — 크레딧 충전 시 CoT 자동 활성.)
+ - [x] **Gemini 재활성 + 종목별 중요뉴스 큐레이션 PR-1~3** (2026-06-17):
+   - PR-1: 크레딧 충전 후 **실호출 검증** — enrich(based_on=recent 실제 요약)·CoT(source=gemini) 정상. 모델 정리: `GEMINI_SYNTH_MODEL` `gemini-3.5-flash`→**`gemini-2.5-flash`**(2.5 계열, 실호출 OK), bulk=`gemini-2.5-flash-lite`. 워크플로 env 동기화. (flash-lite 503은 일시 과부하 — 백오프가 처리.)
+@@ -674,6 +679,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
+ 
+ ### 안정화 (운영 중 발견·수정)
++- [x] **Wave 1 T7 표시 신호·정책** (2026-06-19): 활성 유니버스 퀀트 종합 백분위 상/하위 30% 기반 매수/관망/축소 신호를 계약·assemble·export·React에 추가. 근거·신뢰도 동반을 강제하고 자동 주문 금지는 유지. UI·텔레그램·Gemini/Hermes 프롬프트의 기존 보일러플레이트 제거.
+ - [x] **Wave 1 T2~T6 UX·라벨** (2026-06-19): 뉴스 종목별 심리를 점수 내림차순으로 정렬, 종목상세 티커/종목명·시장·섹터 즉시 필터, 관심종목 섹터 PATCH 편집, `stock_note_history` 기반 복수 판단 누적·최신순 표시, 8탭의 국면·심리·우량성·5팩터 한글 표시 통일. 내부 키와 매력도 3축 비합산 원칙 유지.
+ - [x] **Wave 1 T1 총자산 단일화** (2026-06-19): 오버뷰의 주식 평가액 표시와 포트폴리오의 주식+현금 표시 불일치를 제거. 종목별 최신 가격·동일 최신 환율로 계산한 `portfolio_snapshot.payload.asset_total`을 로컬 API와 두 탭이 공용 함수로 사용하고, 구형 데이터만 평가액+현금 폴백. Python·Node 회귀 테스트 추가.
+ - [x] **Decimal/DB 경계 버그**: psycopg3 NUMERIC→Decimal이 float·np.log·나눗셈에 섞여 indicators/quant 0건 → `db.get_conn` float 로더 + 읽기 경계 방어 캐스팅으로 수정
+@@ -695,6 +701,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+ 
+ ---
+ *변경 이력:*
++- *v3.3 (2026-06-19) Wave 1 T7: 근거·신뢰도 동반 표시 신호 계약과 UI 추가, 자동 주문 금지 정책 유지, 기존 출력 보일러플레이트 제거 — Codex.*
+ - *v3.2 (2026-06-19) Wave 1 T2~T6: 뉴스 심리 정렬, 종목상세 검색/시장/섹터 필터, 관심종목 섹터 편집, 판단 이력 누적, 표시 레이어 한글 라벨 통일 — Codex.*
+ - *v3.1 (2026-06-19) Wave 1 T1: 포트폴리오 총자산을 종목별 최신 평가액+KRW 환산 현금으로 단일화하고 오버뷰·포트폴리오 공용 표시 함수 및 로컬 요약 API 적용 — Codex.*
+ - *v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
+@@ -712,9 +719,9 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+ - *v2.2 (2026-06-16) 운영 PR-1~3: 텔레그램 보류(TELEGRAM_ENABLED 플래그·워크플로 주석·§F5 메모). 포트폴리오 현금(portfolio_cash·/api/cash·총자산=주식+현금). 관심종목 대시보드 관리(watchlist CRUD·backfill_single 백그라운드·관심종목관리 탭·export active만). §5.1 portfolio_cash 추가 — Claude Code.*
+ - *v2.3 (2026-06-16) Gemini "분석 실패" 진단·수정 PR-0~2: 근본원인=Gemini 키 일일쿼터 소진(429)+구버전 폴백행 잔존+파이프라인 정체+폴백 무기록+.env 미로딩. 수정=`_ensure_env`(.env 로드), `_call_gemini_with_backoff`(429/503 지수백오프 3회), 폴백 `based_on='fallback_old'` 표식+runs.errors 기록, `reenrich_stale_fallbacks`(run_pipeline Step 7a'), export 실제요약 우선+규칙기반 한 줄(`is_fallback_summary`). "분석 실패" UI 노출 0. 단위테스트 +11(272 passed) — Claude Code.*
+ - *v3.0 (2026-06-17) Gemini 재활성+중요뉴스 큐레이션 PR-1~3: 크레딧 충전 실호출 검증(enrich/CoT 실제경로), GEMINI_SYNTH_MODEL 3.5-flash→2.5-flash 정리(워크플로 동기화). 2단계 큐레이션(STEP A 스코어링=Flash-Lite·impact/category/direction, 임계값≥60 통과분만 STEP B 인사이트=2.5-Flash), news_analysis.curated 저장·증분·캡. export curatedNews/curatedFeed, React 종목상세 중요뉴스 카드+뉴스탭 중요도순. 라이브 검증(네이버/알파벳), 21종목·feed 60건, 단위테스트 +8(321 passed). §5.1 news_analysis.curated 추가 — Claude Code.*
+-- *v2.9 (2026-06-17) 포트폴리오 전략조언(단계분리 CoT) PR-1~3: src/portfolio_advice.py — 절대원칙(투자자문 금지·관찰형) 주입, CoT 4단계(구성/리스크/레짐/종합) 코드 분리·단계간 전달, response_mime_type=json+pydantic 검증, 키없음/STEP1실패 시 전체 규칙기반 단락, cache_key 증분캐시. portfolio_advice 테이블, local_api POST/GET /api/portfolio/advice, export portfolioAdvice, React 포트폴리오 탭 전략조언 카드(펼침 4단계·다시분석·면책·stale). 금지어 0, 단위테스트 +13(313 passed). Gemini 크레딧 소진 시 규칙기반 폴백 — §5.1 portfolio_advice 추가 — Claude Code.*
++- *v2.9 (2026-06-17) 포트폴리오 전략조언(단계분리 CoT) PR-1~3: src/portfolio_advice.py — 당시 관찰형 정책 주입, CoT 4단계(구성/리스크/국면/종합) 코드 분리·단계간 전달, response_mime_type=json+pydantic 검증, 키없음/STEP1실패 시 전체 규칙기반 단락, cache_key 증분캐시. portfolio_advice 테이블, local_api POST/GET /api/portfolio/advice, export portfolioAdvice, React 포트폴리오 탭 전략조언 카드. 단위테스트 +13(313 passed) — §5.1 portfolio_advice 추가 — Claude Code.*
+ - *v2.8 (2026-06-17) 운영 자동화 PR-0~3: 진단=CI(06·18시)가 enrich 포함 DB 자동 최신화(Secrets 등록 확인), data.json은 로컬 수동(스크립트 부재), auto_run 실패는 구버전 텔레그램 step 403(이미 제거)으로 DB는 갱신되고 있었음. README.md(운영방식·Secrets 등록·모델명), start_dashboard.sh(export→local_api+vite→브라우저, 포트 재사용·에러처리)+stop_dashboard.sh+.command, 신선도 가드(generatedAt·헤더 생성시각·2일+ 경고배너). 300 tests passed — Claude Code.*
+ - *v2.7 (2026-06-17) 관심종목 active 토글 무반응 버그 PR-0~1: 근본원인=CORS allow_methods에 PATCH 누락→프리플라이트 400 차단(curl은 우회라 200). 수정=CORS에 PATCH·OPTIONS 추가, 프론트 toggleActive 낙관적 업데이트+롤백+에러배너+재조회. 검증=프리플라이트 200·토글 OFF→랭킹 제외(38→37)→ON 복귀(데이터 보존). CORS 회귀테스트 +3(300 passed) — Claude Code.*
+-- *v2.6 (2026-06-17) 오버뷰 요약밴드+시장 매력도+탭 컨텍스트 PR-1~3: 오버뷰 최상단 dailyBrief(주목/주의/3축괴리/시장 한줄, 규칙기반·관찰서술·면책, 괴리종목은 주목서 제외), 시장전망 KR/US 진입환경(attractiveness 우호/중립/비우호=레짐+정배열율+VIX, 단일점수 금지), 탭 간 종목 컨텍스트 연속성(뉴스 선택→전역 ticker 동기화). export _build_daily_brief/_attach_market_attractiveness/_short_line. 단위테스트 +12(297 passed) — Claude Code.*
++- *v2.6 (2026-06-17) 오버뷰 요약밴드+시장 매력도+탭 컨텍스트 PR-1~3: 오버뷰 최상단 dailyBrief(주목/주의/3축괴리/시장 한줄, 괴리종목은 주목서 제외), 시장전망 KR/US 진입환경(attractiveness 우호/중립/비우호=국면+정배열율+VIX, 단일점수 금지), 탭 간 종목 컨텍스트 연속성. 단위테스트 +12(297 passed) — Claude Code.*
+ - *v2.5 (2026-06-16) 매력도 3축+리서치 통합+내판단 인라인 PR-1~3: 설계원칙=세 축(퀀트/컨센서스/내판단) 단일점수 합산 금지·괴리 노출(확인편향 방지). 종목상세 AxesCard(3축 나란히+엇갈림 경고), StockResearchSection(research_items 유형별+빠른추가, local_api GET/POST/DELETE /api/research+_patch_data_json_research, 공용 ResearchItemCard tabsA 이동), 내판단 인라인 편집(별점 클릭·thesis blur 자동저장 PUT /api/notes·미입력 상태). InvestmentNoteCard→AxesCard 통합. 285 tests passed — Claude Code.*
+ - *v2.4 (2026-06-16) 스크리너 장기보유+재무 시계열 PR-0~2: 장기보유 빈 원인=F-Score 구조적 만점7로 7+ 0개+export fscore=None 하드코딩. 수정=장기보유를 안전마진 복합점수(가치40+퀄리티35+건전성25, F-Score 결측 시 ROE·부채 대체)로 재정의, `quant_scores.fscore` 영속화, 스크리너 패널 재정의(≥55 상위9·empty state·근거1줄). 종목상세 재무추이: `fundamentals.ocf/fcf` 추가+ingest_us 현금흐름 수집+US25 백필, export `financials` 시계열, React recharts 카드(매출·이익·OCF·FCF+추세+컨센서스). §5.1 quant_scores.fscore·fundamentals.ocf/fcf, §F4-6 안전마진 명문화. 단위테스트 +13(285 passed) — Claude Code.*
+diff --git a/README.md b/README.md
+index cc90d11..41c0299 100644
+--- a/README.md
++++ b/README.md
+@@ -3,7 +3,7 @@
+ KR/US 관심종목을 **수집 → 지표·퀀트 → Gemini 요약 → 대시보드**로 매일 정리한다.
+ 설계·계약·수용 기준의 SSOT는 [`PRD.md`](PRD.md), 빌더 지침은 [`CLAUDE.md`](CLAUDE.md).
+ 
+-> ⚠️ 투자 자문 아님 / 원금 손실 가능. 본 도구는 정보·정량 분석 참고용입니다.
++> 표시 신호는 근거·신뢰도를 포함하며 자동 주문을 실행하지 않습니다.
+ 
+ ---
+ 
+diff --git a/START_HERE.md b/START_HERE.md
+index c8a872a..5ef8088 100644
+--- a/START_HERE.md
++++ b/START_HERE.md
+@@ -124,4 +124,3 @@ PRD.md, CLAUDE.md 기준으로 다음을 PR로 만들어줘:
+ - 무엇이든 막히면 에러 로그째로 PM에 붙이면 됨.
+ 
+ ---
+-*이 정보는 참고용이며 투자 자문이 아닙니다.*
+diff --git a/claude design/project/app.jsx b/claude design/project/app.jsx
+index 220d7e4..3a0949f 100644
+--- a/claude design/project/app.jsx	
++++ b/claude design/project/app.jsx	
+@@ -87,7 +87,7 @@ function App() {
+     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(6px)", borderTop: `1px solid ${C.line2}` }}>
+       <div style={{ maxWidth: 1280, margin: "0 auto", padding: "9px 24px", display: "flex", alignItems: "center", gap: 8 }}>
+         <span style={{ fontSize: 10.5, fontWeight: 700, color: C.ink3, letterSpacing: "0.04em", fontFamily: "var(--mono)" }}>DISCLAIMER</span>
+-        <span style={{ fontSize: 11, color: C.ink3, lineHeight: 1.4 }}>본 화면은 정보·정량 분석 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다.</span>
++        <span style={{ fontSize: 11, color: C.ink3, lineHeight: 1.4 }}>표시 신호는 근거·신뢰도를 포함하며 자동 주문을 실행하지 않습니다.</span>
+       </div>
+     </div>
+   </div>;
+diff --git a/dashboard-web/README.md b/dashboard-web/README.md
+index 284e1d7..dccb826 100644
+--- a/dashboard-web/README.md
++++ b/dashboard-web/README.md
+@@ -4,7 +4,7 @@ ATLAS 관심종목·시장·포트폴리오·전략을 한 화면에서 보는 
+ DB 데이터는 `src/export_dashboard_data.py`가 `src/data.json`으로 내보내고, React가 빌드타임에 import 한다.
+ 포트폴리오·투자판단 쓰기는 로컬 API(FastAPI, 127.0.0.1:8765)를 통한다.
+ 
+-> ⚠️ 정보·정량 분석 참고용 / 투자 자문 아님 / 원금 손실 가능. 과거 성과는 미래를 보장하지 않습니다.
++> 표시 신호는 근거·신뢰도를 포함하며 자동 주문을 실행하지 않습니다. 과거 성과는 미래를 보장하지 않습니다.
+ 
+ ## 실행 (두 프로세스)
+ 
+diff --git a/dashboard-web/src/App.jsx b/dashboard-web/src/App.jsx
+index 71211fc..05b46da 100644
+--- a/dashboard-web/src/App.jsx
++++ b/dashboard-web/src/App.jsx
+@@ -133,12 +133,5 @@ export default function App() {
+       {tab === "manage" && <WatchlistAdmin D={D} />}
+     </div>
+ 
+-    {/* fixed disclaimer */}
+-    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(6px)", borderTop: `1px solid ${C.line2}` }}>
+-      <div style={{ maxWidth: 1280, margin: "0 auto", padding: "9px 24px", display: "flex", alignItems: "center", gap: 8 }}>
+-        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.ink3, letterSpacing: "0.04em", fontFamily: "var(--mono)" }}>DISCLAIMER</span>
+-        <span style={{ fontSize: 11, color: C.ink3, lineHeight: 1.4 }}>본 화면은 정보·정량 분석 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다.</span>
+-      </div>
+-    </div>
+   </div>;
+ }
+diff --git a/dashboard-web/src/display.js b/dashboard-web/src/display.js
+index fe7be1d..4705960 100644
+--- a/dashboard-web/src/display.js
++++ b/dashboard-web/src/display.js
+@@ -34,3 +34,7 @@ const REGIME_LABELS = { bull: '강세', neutral: '중립', bear: '약세' };
+ 
+ export const factorLabel = (key) => FACTOR_LABELS[key] ?? key;
+ export const regimeLabel = (key) => REGIME_LABELS[key] ?? key;
++
++export function isCompleteSignal(signal) {
++  return Boolean(signal?.label && signal?.reason && Number.isFinite(Number(signal?.confidence)));
++}
+diff --git a/dashboard-web/src/tabsA.jsx b/dashboard-web/src/tabsA.jsx
+index a2a0dd9..a33623b 100644
+--- a/dashboard-web/src/tabsA.jsx
++++ b/dashboard-web/src/tabsA.jsx
+@@ -4,7 +4,7 @@ import {
+   C, fmtPrice, compColor, sentMeta, flagTone,
+   MonoCaps, Num, ChangePct, SentBadge, HoldDot, AlignBadge,
+   CompositeCell, MiniBars, FactorBar, Sparkline, PriceChart,
+-  SentStack, Pill, RegimeBadge, btnGhost,
++  SentStack, Pill, RegimeBadge, SignalCard, btnGhost,
+ } from './ui.jsx';
+ import {
+   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+@@ -203,7 +203,6 @@ function DailyBriefBand({ b, regimes, nav }) {
+         <Col label="▼ 주의 (위험 신호)" color={C.bad} items={b.cautions} empty="오늘 두드러진 주의 신호 없음" />
+         <Col label="⚠ 3축 괴리 (확인 필요)" color={C.warn} items={b.diverge} empty="퀀트·컨센서스 큰 괴리 없음" />
+       </div>
+-      <div style={{ padding: "7px 16px", borderTop: `1px solid ${C.line}`, fontSize: 10, color: C.ink3 }}>{b.disclaimer}</div>
+     </div>
+   );
+ }
+@@ -771,7 +770,7 @@ export function CuratedNews({ items }) {
+   const list = items || [];
+   return (
+     <Panel title="중요 뉴스" sub="Gemini 큐레이션 · 영향도순"
+-      right={<MonoCaps style={{ fontSize: 9 }} color={C.ink3}>참고용 · 투자 자문 아님</MonoCaps>}>
++      right={<MonoCaps style={{ fontSize: 9 }} color={C.ink3}>영향도순</MonoCaps>}>
+       {list.length === 0 ? (
+         <div style={{ padding: "22px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+           주목할 만한 중요 뉴스가 없습니다.
+@@ -921,6 +920,8 @@ export function StockDetail({ D, ticker, nav }) {
+         </div>
+       </div>
+ 
++      <SignalCard signal={s.signal} />
++
+       {/* PR-1: 개선된 종목 네비게이션 */}
+       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+         {/* 이전/다음 버튼 */}
+@@ -1082,7 +1083,7 @@ export function StockDetail({ D, ticker, nav }) {
+ 
+       {/* PR-2: 내 보유 정보 카드 (is_holding=true 종목만) */}
+       {s.holding && (
+-        <Panel title="내 보유 정보" sub="투자 자문 아님 / 원금 손실 가능">
++        <Panel title="내 보유 정보" sub="보유 수량·평가 손익">
+           <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)" }}>
+             {[
+               ["수량", s.holding.qty != null ? s.holding.qty : "—"],
+diff --git a/dashboard-web/src/tabsB.jsx b/dashboard-web/src/tabsB.jsx
+index 93ab76d..808e030 100644
+--- a/dashboard-web/src/tabsB.jsx
++++ b/dashboard-web/src/tabsB.jsx
+@@ -3,7 +3,7 @@ import { useState } from 'react';
+ import {
+   C, compColor, flagTone,
+   MonoCaps, Num, SentBadge, HoldDot,
+-  GaugeBar, RegimeBadge, WeightBars, btnGhost,
++  GaugeBar, RegimeBadge, SignalCard, WeightBars, btnGhost,
+ } from './ui.jsx';
+ import { Panel, ResearchItemCard, RESEARCH_TYPE_LABEL } from './tabsA.jsx';
+ 
+@@ -114,12 +114,13 @@ export function Screener({ D, nav }) {
+       right={<button onClick={() => setShowAll(!showAll)} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 5 }}>{showAll ? "접기 −" : "펼치기 +"}</button>}>
+       {showAll && <table style={{ width: "100%", borderCollapse: "collapse" }}>
+         <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
+-          <Th label="종목" /><Th k="comp" label="종합" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
++          <Th label="종목" /><Th k="comp" label="종합" /><Th label="신호" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
+         </tr></thead>
+         <tbody>
+           {unified.map((s) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
+             <td style={{ padding: "9px 10px" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><HoldDot on={s.hold} /><span style={{ fontSize: 12.5, fontWeight: 700 }}>{s.name}</span><span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>{s.t}·{s.mk}</span></div></td>
+             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={13} weight={700} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num></td>
++            <td style={{ padding: "7px 10px" }}><SignalCard signal={s.signal} compact /></td>
+             {["m", "v", "q", "g", "s"].map((k) => <td key={k} style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={sortKey === k ? gradeCol(s.f[k]) : C.ink2}>{s.f[k]}</Num></td>)}
+             <td style={{ padding: "9px 10px", textAlign: "right" }}><Num size={12.5} weight={600} color={s.rsi >= 70 ? C.bad : s.rsi <= 35 ? C.acc : C.ink2}>{s.rsi?.toFixed(0)}</Num></td>
+             <td style={{ padding: "9px 10px", textAlign: "right" }}><span className="mono" style={{ fontSize: 12, fontWeight: 700, color: s.fscore >= 7 ? C.ok : C.ink2 }}>{s.fscore ?? "—"}</span></td>
+diff --git a/dashboard-web/src/tabsC.jsx b/dashboard-web/src/tabsC.jsx
+index 5c9f928..2c8ee87 100644
+--- a/dashboard-web/src/tabsC.jsx
++++ b/dashboard-web/src/tabsC.jsx
+@@ -1,6 +1,5 @@
+ // ATLAS — Tabs C: Portfolio
+ // PR-4: 포트폴리오 탭 — GET/POST/DELETE /api/portfolio (127.0.0.1:8765)
+-// 투자 자문 아님 / 원금 손실 가능
+ 
+ import { useState, useEffect, useCallback } from 'react';
+ import { C, MonoCaps, Num, ChangePct, HoldDot, fmtPrice, btnGhost } from './ui.jsx';
+@@ -156,7 +155,7 @@ export function Portfolio({ D, nav }) {
+     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+         <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>포트폴리오</span>
+-        <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>투자 자문 아님 / 원금 손실 가능</MonoCaps>
++        <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>보유 현황과 전략 분석</MonoCaps>
+       </div>
+ 
+       {/* 합계 (PR-2: 주식 / 현금 / 총자산 분리, ₩ 환산 전체 숫자) */}
+@@ -395,7 +394,7 @@ function PortfolioAdvice({ D, hasHoldings }) {
+   );
+ 
+   return (
+-    <Panel title="전략 조언 (참고용)" sub="투자 자문 아님 · 단계분리 관찰"
++    <Panel title="전략 조언" sub="단계분리 분석"
+       right={
+         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+           {srcBadge}
+@@ -450,9 +449,8 @@ function PortfolioAdvice({ D, hasHoldings }) {
+               <div style={{ marginTop: 5 }}>{advice.step3?.alignment_note}</div>
+             </div>
+           </AdviceSection>
+-          {/* 면책 + 생성시각 */}
++          {/* 생성시각 */}
+           <div style={{ padding: "9px 16px", borderTop: `1px solid ${C.line}`, background: C.surface2, borderRadius: "0 0 10px 10px", display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+-            <span style={{ fontSize: 10, color: C.ink3 }}>{advice.disclaimer}</span>
+             <span className="mono" style={{ fontSize: 9.5, color: C.ink3 }}>생성: {advice.generatedAtLabel}</span>
+           </div>
+         </>
+diff --git a/dashboard-web/src/tabsD.jsx b/dashboard-web/src/tabsD.jsx
+index 2c3d9d1..5eed76d 100644
+--- a/dashboard-web/src/tabsD.jsx
++++ b/dashboard-web/src/tabsD.jsx
+@@ -1,5 +1,5 @@
+ // ATLAS — Tabs D: 전략 비교 (백테스트 + 회고)
+-// PR-8. 투자 자문 아님 / 원금 손실 가능. 과거 성과는 미래를 보장하지 않습니다.
++// PR-8. 과거 성과는 미래를 보장하지 않습니다.
+ //
+ // ⚠️ 두 섹션은 성격이 완전히 다르다(혼동 금지):
+ //   1) 모멘텀 백테스트 = 진짜 백테스트(과거 시점 데이터만, 미래정보 없음)
+@@ -138,7 +138,7 @@ export function Strategy({ D }) {
+           <div style={{ fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
+             아래는 <b>오늘 시점의</b> 퀀트 점수 상위 종목을 뽑아 <b>과거 수익률을 되돌아본</b> 것입니다.
+             valuation·컨센서스 데이터가 오늘 스냅샷 1건뿐이라 과거 재현이 불가능하므로 <b>백테스트가 아닙니다</b>.
+-            "이미 오른 종목을 오늘 상위로 뽑은" 편향이 있어 실제 미래 성과와 무관할 수 있습니다. 투자 자문이 아닙니다.
++            "이미 오른 종목을 오늘 상위로 뽑은" 편향이 있어 실제 미래 성과와 무관할 수 있습니다.
+           </div>
+         </div>
+ 
+@@ -187,9 +187,6 @@ export function Strategy({ D }) {
+         </div>
+       </div>
+ 
+-      <div style={{ fontSize: 10.5, color: C.ink3, textAlign: "center", padding: "4px 0 8px" }}>
+-        본 화면은 정보·정량 분석 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다.
+-      </div>
+     </div>
+   );
+ }
+diff --git a/dashboard-web/src/ui.jsx b/dashboard-web/src/ui.jsx
+index c013968..ec6cbe9 100644
+--- a/dashboard-web/src/ui.jsx
++++ b/dashboard-web/src/ui.jsx
+@@ -1,5 +1,5 @@
+ // ATLAS — shared UI primitives + SVG charts
+-import { factorLabel, regimeLabel } from './display.js';
++import { factorLabel, isCompleteSignal, regimeLabel } from './display.js';
+ 
+ export const C = {
+   ink: "#0F1419", ink2: "#4A5568", ink3: "#94A3B8",
+@@ -80,6 +80,21 @@ export function AlignBadge({ on }) {
+   return <span style={{ fontSize: 11, fontWeight: 700, color: on ? C.ok : C.ink3, whiteSpace: "nowrap" }}>{on ? "정배열" : "—"}</span>;
+ }
+ 
++export function SignalCard({ signal, compact = false }) {
++  if (!isCompleteSignal(signal)) {
++    return <span style={{ fontSize: 11.5, color: C.ink3 }}>신호 산정 데이터 없음</span>;
++  }
++  const tone = signal.label === "매수" ? C.ok : signal.label === "축소" ? C.bad : C.warn;
++  const bg = signal.label === "매수" ? C.okBg : signal.label === "축소" ? C.badBg : C.warnBg;
++  return <div style={{ padding: compact ? "6px 8px" : "10px 12px", border: `1px solid ${tone}33`, borderRadius: 8, background: bg, minWidth: compact ? 190 : 0 }}>
++    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
++      <span style={{ fontSize: compact ? 11.5 : 13.5, fontWeight: 800, color: tone }}>{signal.label}</span>
++      <span style={{ fontSize: compact ? 9.5 : 11, color: tone }}>신뢰도 {signal.confidence}</span>
++    </div>
++    <div style={{ marginTop: 3, fontSize: compact ? 9.5 : 11.5, lineHeight: 1.45, color: C.ink2 }}>{signal.reason}</div>
++  </div>;
++}
++
+ export function CompositeCell({ value, width = 110 }) {
+   const col = compColor(value);
+   return <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+diff --git a/dashboard-web/tests/display.test.js b/dashboard-web/tests/display.test.js
+index 78dc08f..2d89a7c 100644
+--- a/dashboard-web/tests/display.test.js
++++ b/dashboard-web/tests/display.test.js
+@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
+ import {
+   filterStocks,
+   factorLabel,
++  isCompleteSignal,
+   portfolioAssetTotal,
+   regimeLabel,
+   sortStocksBySentiment,
+@@ -65,3 +66,9 @@ test('maps internal factor and regime keys to Korean display labels', () => {
+   assert.equal(factorLabel('s'), '심리');
+   assert.equal(regimeLabel('bull'), '강세');
+ });
++
++
++test('rejects standalone signal labels', () => {
++  assert.equal(isCompleteSignal({ label: '매수' }), false);
++  assert.equal(isCompleteSignal({ label: '매수', reason: '종합 백분위 80위', confidence: 67 }), true);
++});
+diff --git a/dashboard/README.md b/dashboard/README.md
+index 468990c..5322e81 100644
+--- a/dashboard/README.md
++++ b/dashboard/README.md
+@@ -3,7 +3,6 @@
+ > ⚠️ **메인 대시보드는 `dashboard-web/` (React/Vite)** 입니다.
+ > `dashboard/app.py`는 레거시로, 유지보수하지 않습니다.
+ 
+-> 투자 자문 아님 / 원금 손실 가능
+ 
+ ## 관리 도구: watchlist_admin.py
+ 
+@@ -23,7 +22,7 @@ streamlit run dashboard/watchlist_admin.py
+ 접속 정보는 `.streamlit/secrets.toml` 또는 환경변수 `DB_*`를 사용합니다 (아래 참고).
+ 
+ ## 화면 구성
+-- **상단**: ATLAS 타이틀 + 날짜 + 레짐 배지(bull/neutral/bear) + 면책
++- **상단**: ATLAS 타이틀 + 날짜 + 국면 배지(강세/중립/약세)
+ - **시장 스트립**: KOSPI/KOSDAQ/S&P500/NASDAQ/VIX/USD-KRW 카드
+ - **관심종목 표**: composite 내림차순, 시장·보유 필터, 팩터(M/V/Q/G/S)·RSI·플래그
+   - composite 색상: ≥70 초록 / 55–69 노랑 / <55 회색 / 사전필터 대상은 "필터제외"
+diff --git a/dashboard/app.py b/dashboard/app.py
+index f77f238..516626a 100644
+--- a/dashboard/app.py
++++ b/dashboard/app.py
+@@ -8,11 +8,10 @@ dashboard/app.py — ATLAS 관심종목 대시보드 (Streamlit, 로컬 우선)
+   - src.compute_quant.compute_regime    → 상단 레짐 배지
+ 
+ DB 접속: src.db 패턴 재사용 (DB_* 환경변수 또는 .streamlit/secrets.toml).
+-모든 출력은 정보·참고용. 투자 자문 표현 금지(점수·사실만).
++신호는 근거·신뢰도와 함께 표시하며 자동 주문을 실행하지 않는다.
+ 
+ 실행: streamlit run dashboard/app.py
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능
+ """
+ 
+ from __future__ import annotations
+@@ -29,8 +28,6 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ if _REPO_ROOT not in sys.path:
+     sys.path.insert(0, _REPO_ROOT)
+ 
+-DISCLAIMER = "본 화면은 정보·정량 분석 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다."
+-
+ _REGIME_BADGE = {
+     "bull": ("🟢 강세 (bull)", "#1b5e20"),
+     "neutral": ("🟡 중립 (neutral)", "#f9a825"),
+@@ -152,10 +149,9 @@ def main() -> None:
+         st.markdown(
+             f"<div style='text-align:right; margin-top:18px;'>"
+             f"<span style='background:{badge_color}; color:white; padding:6px 14px; "
+-            f"border-radius:14px; font-weight:600;'>레짐 {badge_text}</span></div>",
++            f"border-radius:14px; font-weight:600;'>국면 {badge_text}</span></div>",
+             unsafe_allow_html=True,
+         )
+-    st.info(f"ℹ️ {DISCLAIMER}")
+ 
+     # ── 2. 시장 스트립 ────────────────────────────────────────
+     market = load_market(asof_iso)
+@@ -351,7 +347,6 @@ def _factor_chart(quant: dict) -> None:
+ 
+ def _footer() -> None:
+     st.divider()
+-    st.caption(f"⚠️ {DISCLAIMER}")
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/dashboard/watchlist_admin.py b/dashboard/watchlist_admin.py
+index d5c4db4..624bc93 100644
+--- a/dashboard/watchlist_admin.py
++++ b/dashboard/watchlist_admin.py
+@@ -48,7 +48,7 @@ def _reload():
+ # ── 레이아웃 ──────────────────────────────────────────────────────────
+ st.set_page_config(page_title="ATLAS Watchlist 관리", layout="wide")
+ st.title("ATLAS — Watchlist 관리 도구")
+-st.caption("투자 자문 아님 / 원금 손실 가능. 이 도구는 watchlist 메타데이터만 변경하며 주문을 실행하지 않습니다.")
++st.caption("이 도구는 관심종목 메타데이터만 변경하며 주문을 실행하지 않습니다.")
+ 
+ rows = _load_watchlist()
+ 
+diff --git a/db/schema.sql b/db/schema.sql
+index d43493a..28333e6 100644
+--- a/db/schema.sql
++++ b/db/schema.sql
+@@ -276,7 +276,7 @@ CREATE INDEX IF NOT EXISTS idx_stock_note_history_ticker
+ 
+ -- =============================================================
+ -- 포트폴리오 전략 조언 (CoT 결과 캐시) — cache_key = 보유·현금·레짐 시그니처
+--- 투자 자문 아님 / 관찰·정보. 보유 변경 시 cache_key가 달라져 stale 판정.
++-- 보유 변경 시 cache_key가 달라져 stale 판정.
+ -- =============================================================
+ CREATE TABLE IF NOT EXISTS portfolio_advice (
+     cache_key    TEXT        PRIMARY KEY,
+diff --git a/prompt/GEMINI_PROMPT.md b/prompt/GEMINI_PROMPT.md
+index add5c5c..dcfb18d 100644
+--- a/prompt/GEMINI_PROMPT.md
++++ b/prompt/GEMINI_PROMPT.md
+@@ -3,7 +3,7 @@
+ > Gemini의 역할은 **자연어 보강 단 두 가지뿐**: (A) 종목별 뉴스 요약/감성, (B) 일일 시황 종합. 정량 계산·점수·매매판단은 하지 않는다(그건 Python 몫). 출력은 **지정한 JSON만**, 마크다운 코드펜스·서두·맺음말 없이 순수 JSON. 호출은 `response_mime_type="application/json"`로 강제하고, 코드 측에서 pydantic 검증한다.
+ 
+ ## 공통 규칙
+-- 한국어로 작성. 사실 위주, 추측 최소화. 매수/매도 권유·목표가 산정 금지(컨센서스는 *전달*만).
++- 한국어로 작성. 사실 위주, 추측 최소화. 코드가 계산한 표시 신호를 새로 만들지 않으며 컨센서스는 전달만 한다.
+ - 제공된 뉴스에 없는 내용을 지어내지 않는다. 근거 없으면 보수적으로(중립).
+ - 날짜가 최신일수록 가중치를 높인다. 출처 태그 가중: `[야후/핵심팩트]`·주요언론 > `[외부/시장트렌드]` > `[이전이슈/참고]`.
+ - 토큰 절약: 입력은 dedupe·상위 N건·길이 캡 후 들어온다. 요약은 핵심만, 군더더기 금지.
+@@ -28,7 +28,7 @@
+ - 가장 최근 날짜 뉴스에 더 큰 가중치를 둬라.
+ - 주가에 핵심 영향을 주는 항목은 catalysts에 날짜·중요도와 함께 분리하라.
+ - [이전이슈/참고]에만 근거한 분석이면 based_on="fallback_old", sentiment 해석을 보수적으로.
+-- 매수/매도 의견이나 목표가를 만들지 마라. 사실과 심리 해석만.
++- 표시 신호나 목표가를 새로 만들지 마라. 사실과 심리 해석만 작성하라.
+ 
+ ★ PR-3: '정보 나열'이 아니라 '인사이트'.
+ - 각 key_point는 [핵심 사실] + [그것이 왜 중요한가/주가·심리 의미] 형태로 1줄.
+@@ -81,7 +81,7 @@
+ - {그 시장} 뉴스: _MARKET_KR / _MARKET_US 최근 기사
+ 
+ 규칙:
+-- 매수/매도 단정·종목 권유 금지. '관찰/해석'으로만(예: '~로 해석된다', '~에 유의'). 투자 자문 아님.
++- 데이터에 없는 종목 신호를 만들지 말고 관찰·해석만 작성하라.
+ - 반드시 그 시장 고유의 근거(지수 등락·환율/금리·뉴스)를 인용하라.
+ 
+ 아래 JSON 스키마로만, 순수 JSON으로 답하라:
+diff --git a/prompt/HERMES_PROMPT.md b/prompt/HERMES_PROMPT.md
+index 7bd6343..10283d5 100644
+--- a/prompt/HERMES_PROMPT.md
++++ b/prompt/HERMES_PROMPT.md
+@@ -6,14 +6,14 @@
+ 
+ ## 1. 시스템 프롬프트 (Agent persona)
+ ```
+-너는 사용자의 개인 투자 인텔리전스 비서 'ATLAS'다. 역할은 정보 전달과 맥락 유지이지 투자 자문이 아니다.
++너는 사용자의 개인 투자 인텔리전스 비서 'ATLAS'다. 역할은 데이터 전달과 맥락 유지다.
+ 원칙:
+ - 너는 DB(Postgres)에 적재된 사실(가격·재무·퀀트 점수·뉴스 요약·시황·포트폴리오)과 너의 메모리만 사용한다.
+   수치를 새로 계산하거나 추정하지 말고, 없는 값은 "데이터 없음"이라고 말한다.
+-- 매수/매도/비중 같은 지시를 하지 않는다. "퀀트 점수상 모멘텀이 높다", "컨센서스는 상승여력 X%로 본다"처럼
+-  사실과 지표를 전달하고, 판단은 사용자에게 맡긴다.
++- 코드가 제공한 매수/관망/축소 표시 신호는 근거·신뢰도와 함께 설명할 수 있다. 데이터에 없는 신호를 새로 만들지 않는다.
++- 주문·체결·이체는 실행하지 않는다. 신호는 표시 전용이다.
+ - 메모리를 활용해 연속성을 준다: 어제 대비 변화, 사용자가 관심 표한 종목, 이전 브리핑과의 차이.
+-- 한국어, 간결하고 스캔하기 쉽게. 과장·감탄 금지. 매 출력 끝에 한 줄 면책.
++- 한국어, 간결하고 스캔하기 쉽게. 과장·감탄 금지.
+ - 보안: 계좌번호·키·비밀번호를 절대 출력하거나 요청하지 않는다.
+ ```
+ 
+@@ -45,11 +45,10 @@
+ {rules 엔진 알림: 예) NVDA RSI 72 과열 / 네이버 데드크로스 임박 / TSLA 실적 D-3}
+ (없으면: "특이 알림 없음")
+ 
+-📰 주목 뉴스 (감성)
++📰 주목 뉴스 (심리)
+ • [{sentiment}] {종목}: {key_points 1줄}
+ • …(최대 3개)
+ 
+-ℹ️ 본 정보는 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다.
+ ```
+ **길이**: 한 화면에 들어오게. 종목이 많으면 점수 상·하위와 플래그 있는 것 위주로 추림.
+ **대안 경로**: Hermes 운영이 부담이면, n8n이 위 템플릿을 Gemini로 채워 Telegram 노드로 직접 발송(메모리 연속성은 포기).
+@@ -61,9 +60,9 @@
+ **예시 의도와 처리**:
+ - "네이버 왜 빠졌어?" → `news_analysis`(네이버 당일)의 catalysts/risks + 가격 변화 전달.
+ - "내 포트 중 밸류 점수 낮은 거?" → `quant_scores`에서 보유종목의 `value` 하위 정렬.
+-- "엔비디아 컨센서스 어때?" → `analyst`의 rating·target·upside 전달(자문 아님 명시).
++- "엔비디아 컨센서스 어때?" → `analyst`의 rating·target·upside 전달.
+ - "어제랑 뭐 달라졌어?" → 메모리 + 전일 레코드 비교.
+-**규칙**: DB에 답이 있으면 사실로 답하고, 없으면 "데이터 없음 / 다음 수집에 반영"이라고 답한다. 모르는 걸 지어내지 않는다. 판단 요청("살까?")엔 사실·지표를 제시하되 결정은 사용자 몫임을 분명히 한다.
++**규칙**: DB에 답이 있으면 사실로 답하고, 없으면 "데이터 없음 / 다음 수집에 반영"이라고 답한다. 모르는 걸 지어내지 않는다. 판단 요청에는 저장된 표시 신호·근거·신뢰도를 함께 전달하고 자동 주문은 실행하지 않는다.
+ 
+ ---
+ 
+@@ -83,10 +82,10 @@
+ ---
+ 
+ ## 6. 가드레일 요약 (Hermes 출력 전 자가 점검)
+-1. 매수/매도/비중 지시가 들어갔는가? → 제거, 사실·지표로 전환.
++1. 표시 신호에 근거·신뢰도가 빠졌는가? → 단독 라벨을 제거하고 계약 필드를 함께 표시.
+ 2. DB에 없는 수치를 지어냈는가? → "데이터 없음"으로.
+ 3. 계좌번호·키·비밀번호가 노출됐는가? → 절대 금지.
+-4. 면책 한 줄이 있는가? → 모든 사용자 출력에 포함.
++4. 주문·체결·이체 실행을 시도하는가? → 절대 금지.
+ 
+ ---
+ *이 문서의 데이터 필드는 PRD §5.1/§5.2 계약을 따른다. 불일치 시 PRD가 우선.*
+diff --git a/src/assemble.py b/src/assemble.py
+index c215cb1..d7ed224 100644
+--- a/src/assemble.py
++++ b/src/assemble.py
+@@ -9,8 +9,7 @@ assemble.py — 종목 일일 레코드 조립 (PRD §5.2)
+   assemble_daily(conn, asof=None) → list[StockDailyRecord]
+   assemble_one(ticker, conn, asof=None) → StockDailyRecord | None
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능
+-   출력 데이터는 정보·참고용이며 매수/매도 신호가 아닙니다.
++신호는 근거·신뢰도와 함께 표시되며 자동 주문을 실행하지 않습니다.
+ """
+ 
+ from __future__ import annotations
+@@ -23,6 +22,7 @@ from typing import Optional
+ import psycopg
+ 
+ from src.db import get_conn, log_run_finish, log_run_start
++from src.display_signals import compute_display_signals
+ from src.schemas import (
+     AnalystView,
+     FundamentalsView,
+@@ -501,7 +501,7 @@ def assemble_daily(
+     Supabase Pooler idle timeout(연결 끊김 → "the connection is closed") 회피.
+     조립(_build_record)은 메모리상 dict로만 수행 — DB 미접근, 종목 단위 try/except 격리.
+ 
+-    ⚠️ 반환값은 참고용이며 투자 자문이 아닙니다.
++    반환값의 신호는 표시 전용이며 주문 실행 경로가 없습니다.
+     """
+     asof = asof or date.today()
+     watchlist = _q_watchlist(conn)
+@@ -539,6 +539,14 @@ def assemble_daily(
+             logger.error("%s: 조립 실패 — %s", ticker, exc, exc_info=True)
+             # 실패 종목 스킵, 다음 종목 계속
+ 
++    signal_rows = [
++        {"ticker": record.ticker, **record.quant.model_dump(exclude={"signal"})}
++        for record in results
++    ]
++    signals = compute_display_signals(signal_rows)
++    for record in results:
++        record.quant.signal = signals.get(record.ticker)
++
+     logger.info("assemble_daily: %d/%d 종목 조립 완료", len(results), len(tickers))
+     return results
+ 
+@@ -548,8 +556,6 @@ def assemble_daily(
+ # ──────────────────────────────────────────────────────────────
+ 
+ if __name__ == "__main__":
+-    import sys
+-
+     logging.basicConfig(
+         level=logging.INFO,
+         format="%(asctime)s %(levelname)s %(name)s %(message)s",
+@@ -572,5 +578,3 @@ if __name__ == "__main__":
+             status = "failed"
+ 
+         log_run_finish(conn, run_id, status=status, errors=errors)
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능", file=sys.stderr)
+diff --git a/src/backfill.py b/src/backfill.py
+index cd6af12..223bc1e 100644
+--- a/src/backfill.py
++++ b/src/backfill.py
+@@ -15,7 +15,7 @@ PR-1: 관심종목이 늘 때마다 신규 종목의 가격 이력이 비어 대
+   python -m src.backfill            # 누락분 탐지 후 백필+재계산
+   python -m src.backfill --check    # 점검만(읽기 전용, 백필 안 함)
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능. 자동 주문 없음.
++자동 주문 없음.
+ """
+ 
+ from __future__ import annotations
+@@ -234,4 +234,3 @@ if __name__ == "__main__":
+         print(f"  - {g['ticker']} ({g['market']}) {g['reason']}")
+     if not check:
+         print(f"백필 완료: {result['backfilled']}종목 / indicators={result.get('indicators')} quant={result.get('quant')}")
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/backtest.py b/src/backtest.py
+index b50d3aa..80c694c 100644
+--- a/src/backtest.py
++++ b/src/backtest.py
+@@ -13,7 +13,7 @@ backtest.py — 멀티전략 비교 (진짜 백테스트 + 회고)
+ 모멘텀 공식(PRD §F4): 0.10·Z(1M) + 0.20·Z(3M) + 0.30·Z(6M) + 0.40·Z(12-1M),
+ 12-1M = 최근 1개월 skip(단기 되돌림 제거). compute_quant._zscore 재사용.
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능. 과거 성과는 미래를 보장하지 않는다.
++과거 성과는 미래 성과를 보장하지 않는다.
+ """
+ 
+ from __future__ import annotations
+@@ -390,4 +390,4 @@ if __name__ == "__main__":
+             errors.append({"step": "backtest", "error": str(exc), "ts": datetime.utcnow().isoformat()})
+             status = "failed"
+         log_run_finish(conn, run_id, status=status, errors=errors)
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능. 과거 성과는 미래를 보장하지 않습니다.")
++    print("\n과거 성과는 미래 성과를 보장하지 않습니다.")
+diff --git a/src/compute_indicators.py b/src/compute_indicators.py
+index b5c8808..0beb195 100644
+--- a/src/compute_indicators.py
++++ b/src/compute_indicators.py
+@@ -219,5 +219,3 @@ if __name__ == "__main__":
+             conn.rollback()
+             log_run_finish(conn, run_id, status="failed", errors=[{"error": str(exc)}])
+             raise
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/compute_portfolio.py b/src/compute_portfolio.py
+index 4c91768..df2d048 100644
+--- a/src/compute_portfolio.py
++++ b/src/compute_portfolio.py
+@@ -7,7 +7,7 @@ PR-2 (F1): 수동 입력된 portfolio_holdings와 prices_daily 최신가를 결
+ - portfolio(ticker, asof) upsert: 종목별 당일 평가
+ - portfolio_snapshot(asof) upsert: 전체 합산 스냅샷
+ 
+-자동 주문 없음 / 투자 자문 아님 / 원금 손실 가능
++자동 주문 없음.
+ """
+ 
+ from __future__ import annotations
+@@ -77,7 +77,7 @@ def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) ->
+     portfolio(종목별 행)는 원통화(qty×price) 그대로 저장 — 통화 정보는 holdings에 있음.
+ 
+     Returns summary dict for logging.
+-    ⚠️ 투자 자문 아님 / 원금 손실 가능
++    자동 주문 없음.
+     """
+     asof = asof or date.today()
+     asof_ts = datetime.combine(asof, datetime.min.time()).replace(tzinfo=timezone.utc)
+diff --git a/src/compute_quant.py b/src/compute_quant.py
+index 4093433..b6acff3 100644
+--- a/src/compute_quant.py
++++ b/src/compute_quant.py
+@@ -1,8 +1,7 @@
+ """
+ compute_quant.py — 팩터 스코어링 엔진 (PRD §F4)
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능
+-   출력되는 모든 점수·플래그는 정보·참고용이며 매수/매도 신호가 아닙니다.
++점수·플래그·표시 신호는 결정론적으로 계산되며 자동 주문을 실행하지 않습니다.
+    투자 판단과 결과의 책임은 전적으로 사용자에게 있습니다.
+ 
+ 설계:
+@@ -566,7 +565,7 @@ def compute_quant_universe(
+     """
+     유니버스 전체 퀀트 점수 계산.
+ 
+-    ⚠️ 반환값은 참고용이며 투자 자문이 아닙니다.
++    반환값은 표시 전용이며 주문 실행 경로가 없습니다.
+     """
+     asof = asof or date.today()
+     if not tickers:
+@@ -722,5 +721,3 @@ if __name__ == "__main__":
+             status = "failed"
+ 
+         log_run_finish(conn, run_id, status=status, errors=errors)
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/display_signals.py b/src/display_signals.py
+new file mode 100644
+index 0000000..ed1d0b6
+--- /dev/null
++++ b/src/display_signals.py
+@@ -0,0 +1,71 @@
++"""Deterministic, display-only stock signals. No order execution path."""
++
++from __future__ import annotations
++
++from typing import Optional
++
++from src.schemas import TradeSignal
++
++
++FACTOR_LABELS = {
++    "momentum": "모멘텀",
++    "value": "가치",
++    "quality": "우량성",
++    "growth": "성장",
++    "sentiment": "심리",
++}
++
++
++def _confidence(label: str, percentile: float) -> int:
++    if label == "매수":
++        value = 50 + (percentile - 70) / 30 * 50
++    elif label == "축소":
++        value = 50 + (30 - percentile) / 30 * 50
++    else:
++        value = 50 + (20 - abs(percentile - 50)) / 20 * 50
++    return round(max(50, min(100, value)))
++
++
++def _reason(row: dict, percentile: float) -> str:
++    if percentile >= 70:
++        position = f"상위 {round(100 - percentile)}%"
++    elif percentile <= 30:
++        position = f"하위 {round(percentile)}%"
++    else:
++        position = "중간 구간"
++    factors = [
++        (name, float(row[key]))
++        for key, name in FACTOR_LABELS.items()
++        if row.get(key) is not None
++    ]
++    strongest = max(factors, key=lambda item: item[1]) if factors else None
++    base = f"퀀트 종합 백분위 {round(percentile)}위({position})"
++    return f"{base}, 강점 팩터는 {strongest[0]} {round(strongest[1])}점" if strongest else base
++
++
++def compute_display_signals(rows: list[dict]) -> dict[str, Optional[TradeSignal]]:
++    result: dict[str, Optional[TradeSignal]] = {row["ticker"]: None for row in rows}
++    valid = [row for row in rows if row.get("composite") is not None]
++    if not valid:
++        return result
++
++    ordered = sorted(valid, key=lambda row: float(row["composite"]))
++    n = len(ordered)
++    index = 0
++    while index < n:
++        end = index + 1
++        score = float(ordered[index]["composite"])
++        while end < n and float(ordered[end]["composite"]) == score:
++            end += 1
++        average_rank = ((index + 1) + end) / 2
++        percentile = 50.0 if n == 1 else round((average_rank - 1) / (n - 1) * 100, 2)
++        label = "매수" if percentile >= 70 else "축소" if percentile <= 30 else "관망"
++        for row in ordered[index:end]:
++            result[row["ticker"]] = TradeSignal(
++                label=label,
++                percentile=percentile,
++                reason=_reason(row, percentile),
++                confidence=_confidence(label, percentile),
++            )
++        index = end
++    return result
+diff --git a/src/enrich_gemini.py b/src/enrich_gemini.py
+index b7f7493..bd28f4a 100644
+--- a/src/enrich_gemini.py
++++ b/src/enrich_gemini.py
+@@ -12,8 +12,7 @@ enrich_gemini.py — Gemini 호출 래퍼 (뉴스 요약 + 시황 종합)
+ 
+ 프롬프트 템플릿: prompt/GEMINI_PROMPT.md §A (뉴스), §B (시황)
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능
+-   Gemini 출력은 정보·참고용이며 매수/매도 신호가 아닙니다.
++Gemini는 코드가 계산한 표시 신호를 새로 만들지 않습니다.
+ """
+ 
+ from __future__ import annotations
+@@ -273,7 +272,7 @@ def _build_news_prompt(
+         "규칙:\n"
+         "- 가장 최근 날짜 뉴스에 더 큰 가중치를 둬라.\n"
+         "- 주가에 핵심 영향을 주는 항목은 catalysts에 날짜·중요도와 함께 분리하라.\n"
+-        "- 매수/매도 의견이나 목표가를 만들지 마라. 사실과 심리 '해석'만. 투자 자문 아님.\n\n"
++        "- 코드가 제공하는 표시 신호를 새로 만들지 마라. 뉴스 사실과 심리 해석만 작성하라.\n\n"
+         "아래 JSON 스키마로만, 순수 JSON으로 답하라(코드펜스·설명 금지):\n"
+         '{"sentiment":"긍정|중립|부정","sentiment_score":-1.0~1.0,'
+         '"key_points":["[사실]→[의미] 형태 불릿3~6개"],'
+@@ -299,7 +298,7 @@ def _build_market_prompt(
+         f"지수/지표: {market_json}\n"
+         f"관심종목 감성 집계: {sentiment_json}\n\n"
+         "규칙:\n"
+-        "- 특정 종목 매매 권유 금지. 시장 레짐·드라이버·체크포인트만.\n"
++        "- 특정 종목 주문 실행 지시 금지. 시장 국면·동인·체크포인트만 작성하라.\n"
+         "- 데이터에 근거하라. 방향성 위주로 간결하게.\n\n"
+         "아래 JSON 스키마로만, 순수 JSON으로 답하라:\n"
+         '{"regime":"위험선호|중립|위험회피","headline":"40자내외 한줄요약",'
+@@ -334,7 +333,7 @@ def _build_region_market_prompt(
+         "- 각 불릿은 [수치/사실] → [그래서 무엇을 의미하는가] 구조로. 즉 '왜 중요한가'를 해석하라.\n"
+         "- summary_md 3~5줄에 반드시 ① 오늘 시장 국면 해석 ② 주목할 리스크 또는 기회 ③ 관심종목군(섹터)에 주는 시사점을 담아라.\n\n"
+         "규칙:\n"
+-        "- 매수/매도 단정·종목 권유 금지. '관찰/해석'으로만 서술(예: '~로 해석된다', '~에 유의'). 투자 자문 아님.\n"
++        "- 데이터에 없는 종목 신호를 만들지 말고 관찰·해석만 서술하라.\n"
+         f"- 반드시 {region} 시장 고유의 근거(지수 등락·환율/금리·뉴스)를 인용하라.\n\n"
+         "아래 JSON 스키마로만, 순수 JSON으로 답하라:\n"
+         '{"regime":"위험선호|중립|위험회피","headline":"40자내외 한줄 인사이트(수치+의미)",'
+@@ -417,7 +416,7 @@ def _build_curation_insight_prompt(company_name: str, ticker: str, passing: list
+         f"너는 월스트리트 수석 애널리스트다. 아래 [{company_name}({ticker})]의 '중요 뉴스'만 골라낸 목록에 대해, "
+         "각 뉴스의 '핵심 사실 + 그것이 이 종목에 주는 의미(왜 중요한가)'를 한 줄 인사이트로 작성하라.\n"
+         "- 사실과 해석을 한 문장으로(예: '실적 가이던스 상향 → 컨센서스 상회로 단기 모멘텀 강화로 해석').\n"
+-        "- 매수/매도 의견·목표가 생성 금지. 관찰·해석만. 투자 자문 아님.\n\n"
++        "- 표시 신호를 새로 만들거나 목표가를 생성하지 말고 관찰·해석만 작성하라.\n\n"
+         "JSON으로만: {\"insights\":[{\"idx\":0,\"insight\":\"한 줄 인사이트\"}]}\n\n"
+         f"[중요 뉴스]\n{news_text}"
+     )
+@@ -896,5 +895,3 @@ if __name__ == "__main__":
+ 
+         log_run_finish(conn, run_id, status=status, errors=all_errors)
+         logger.info("=== enrich_gemini 완료 status=%s ===", status)
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/export_dashboard_data.py b/src/export_dashboard_data.py
+index 7bfc6f4..9107e5c 100644
+--- a/src/export_dashboard_data.py
++++ b/src/export_dashboard_data.py
+@@ -29,6 +29,8 @@ import sys
+ from datetime import date, datetime, timedelta
+ from pathlib import Path
+ 
++from src.display_signals import compute_display_signals
++
+ logger = logging.getLogger(__name__)
+ 
+ # dashboard-web/src/data.json 출력 경로 (이 파일 기준으로 상대 경로)
+@@ -111,7 +113,7 @@ def _safety_reason(per, pbr, roe, debt_ratio, fscore) -> str:
+ 
+ def _rule_based_insight(close, chg, rsi, comp, sent, has_data) -> str:
+     """실제 뉴스 요약이 없을 때 보여줄 '규칙기반 한 줄 인사이트'(수치+해석).
+-    '분석 실패' 원문 대신 결정론적 한 줄을 항상 채운다. 매수/매도 권유 없음(투자 자문 아님)."""
++    '분석 실패' 원문 대신 결정론적 한 줄을 항상 채운다."""
+     if not has_data or close is None:
+         return "데이터 수집 중 — 가격·지표가 채워지면 분석이 표시됩니다."
+     parts: list[str] = []
+@@ -361,6 +363,25 @@ def _split_flags(flags: list[str]) -> tuple[list[str], list[str]]:
+     return action, quality
+ 
+ 
++def _attach_display_signals(stocks: list[dict]) -> None:
++    rows = [
++        {
++            "ticker": stock["t"],
++            "composite": stock.get("comp"),
++            "momentum": stock.get("f", {}).get("m"),
++            "value": stock.get("f", {}).get("v"),
++            "quality": stock.get("f", {}).get("q"),
++            "growth": stock.get("f", {}).get("g"),
++            "sentiment": stock.get("f", {}).get("s"),
++        }
++        for stock in stocks
++    ]
++    signals = compute_display_signals(rows)
++    for stock in stocks:
++        signal = signals.get(stock["t"])
++        stock["signal"] = signal.model_dump() if signal else None
++
++
+ # ── PR-2: 포트폴리오 holdings 로드 ────────────────────────────────────
+ def _load_portfolio(conn) -> dict[str, dict]:
+     """portfolio_holdings + 최신 portfolio 평가 결과 → {ticker: info}."""
+@@ -726,7 +747,6 @@ def _build_daily_brief(stocks: list[dict], market: dict) -> dict:
+         "krLine": krline,
+         "usLine": usline,
+         "regime": overall,
+-        "disclaimer": "정보·관찰용 · 투자 자문 아님 · 원금 손실 가능",
+     }
+ 
+ 
+@@ -994,7 +1014,7 @@ def build_data() -> dict:
+             news_asof = str(news.get("asof")) if news.get("asof") else None
+             summary_raw = news.get("summary_md") or ""
+             # PR-1(진단): 폴백('분석 실패'/'일시 보류')은 화면에 절대 노출하지 않는다.
+-            # 실제 요약이 없으면 규칙기반 한 줄 인사이트(수치+해석)로 대체. (투자 자문 아님)
++            # 실제 요약이 없으면 규칙기반 한 줄 인사이트(수치+해석)로 대체.
+             if _is_fallback_summary(summary_raw, news.get("based_on")):
+                 summary_raw = ""
+                 news_asof = None
+@@ -1111,6 +1131,8 @@ def build_data() -> dict:
+                 "noteHistory": note_history_map.get(tk, []),
+             })
+ 
++        _attach_display_signals(stocks)
++
+         # PR-3: 액션 신호만 카운트
+         rules_count = sum(len(s["flagsAction"]) for s in stocks)
+ 
+diff --git a/src/ingest_kr.py b/src/ingest_kr.py
+index 4027f50..db05fe7 100644
+--- a/src/ingest_kr.py
++++ b/src/ingest_kr.py
+@@ -648,5 +648,3 @@ if __name__ == "__main__":
+     print(f"\n[에러] {len(errs)} 건")
+     for e in errs:
+         print(f"  {e}")
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/ingest_market.py b/src/ingest_market.py
+index c2315d3..87834ac 100644
+--- a/src/ingest_market.py
++++ b/src/ingest_market.py
+@@ -160,5 +160,3 @@ if __name__ == "__main__":
+     errs = result["errors"]
+     if errs:
+         print(f"에러: {errs}")
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/ingest_news.py b/src/ingest_news.py
+index f61d024..dad1771 100644
+--- a/src/ingest_news.py
++++ b/src/ingest_news.py
+@@ -628,5 +628,3 @@ if __name__ == "__main__":
+         if errs:
+             for e in errs:
+                 print(f"  ERROR: {e}")
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/ingest_us.py b/src/ingest_us.py
+index bdaa246..f9111ff 100644
+--- a/src/ingest_us.py
++++ b/src/ingest_us.py
+@@ -389,5 +389,3 @@ if __name__ == "__main__":
+     print(f"\n[에러] {len(errs)} 건")
+     for e in errs:
+         print(f"  {e}")
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/local_api.py b/src/local_api.py
+index 0ab39d9..0b95371 100644
+--- a/src/local_api.py
++++ b/src/local_api.py
+@@ -6,7 +6,6 @@ local_api.py — ATLAS 로컬 쓰기 API (FastAPI, 127.0.0.1:8765 전용)
+   - CORS: http://localhost:5173 만 허용.
+   - 자동 주문/매매 없음. 메타데이터·메모 쓰기만.
+   - 시크릿 하드코딩 금지. DB 접속은 환경변수 또는 .streamlit/secrets.toml.
+-  - 투자 자문 아님 / 원금 손실 가능.
+ 
+ 실행:
+   python -m src.local_api
+@@ -531,7 +530,7 @@ def get_portfolio_advice():
+ 
+ @app.post("/api/portfolio/advice", status_code=200)
+ def make_portfolio_advice():
+-    """전략 조언 재생성(CoT, force) → data.json 갱신 + 결과 반환. 투자 자문 아님."""
++    """전략 조언 재생성(CoT, force) → data.json 갱신 + 결과 반환."""
+     from src.portfolio_advice import analyze_portfolio
+     with get_conn() as conn:
+         advice = analyze_portfolio(conn, force=True)
+@@ -639,6 +638,5 @@ def patch_watchlist(ticker: str, body: WatchlistPatch):
+ # ── 실행 ──────────────────────────────────────────────────────────
+ if __name__ == "__main__":
+     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+-    print("⚠️  투자 자문 아님 / 원금 손실 가능")
+     print("ATLAS Local API — http://127.0.0.1:8765/docs")
+     uvicorn.run("src.local_api:app", host="127.0.0.1", port=8765, reload=True)
+diff --git a/src/news_refresh.py b/src/news_refresh.py
+index e9f86de..68175fc 100644
+--- a/src/news_refresh.py
++++ b/src/news_refresh.py
+@@ -12,7 +12,7 @@ news_refresh.py — 가벼운 갱신 잡 (하루 2회 중 18:00 KST용)
+         → 두 잡으로 KR/US 모두 최신 거래일 가격 확보.
+ 
+ 실행: python -m src.news_refresh
+-⚠️ 투자 자문 아님 / 원금 손실 가능. 자동 주문 없음.
++자동 주문 없음.
+ """
+ 
+ from __future__ import annotations
+@@ -159,4 +159,3 @@ if __name__ == "__main__":
+     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+     r = run_news_refresh()
+     print(f"\n신규 뉴스 {r['new_news']}건 / 요약 {r['enriched']}종목 / 에러 {len(r['errors'])}")
+-    print("⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/portfolio_advice.py b/src/portfolio_advice.py
+index 65893f5..ccbcaa0 100644
+--- a/src/portfolio_advice.py
++++ b/src/portfolio_advice.py
+@@ -11,9 +11,8 @@ CoT 단계:
+   STEP 4 종합       — 3~4문장 관찰 요약 + 질문형 사고 유도
+ 
+ ★ 절대 원칙(모든 단계 프롬프트에 주입):
+-  - 투자 자문 금지. 매수/매도/비중 늘려라·줄여라 같은 지시 금지.
+-  - 관찰 / 리스크 식별 / 데이터가 말하는 것까지만. 결정은 사용자.
+-  - 매 출력 면책 + 단정 아닌 관찰형 서술.
++  - 코드가 제공한 표시 신호만 근거·신뢰도와 함께 설명.
++  - 데이터에 없는 신호 생성과 자동 주문·체결·이체 실행 금지.
+ 
+ 키 없거나 단계 실패 → 규칙기반 폴백(코드가 집중도·비중·신호로 관찰 문장 생성).
+ 증분: 보유·가격·레짐이 안 바뀌면 cache_key로 캐시 재사용(매 조회 호출 안 함).
+@@ -39,19 +38,16 @@ logger = logging.getLogger(__name__)
+ # ── 상수 ─────────────────────────────────────────────────────────
+ # Gemini 2.5 (분석용). 모델명은 env로 교체 가능(하드코딩 금지 원칙).
+ PORTFOLIO_ADVICE_MODEL: str = os.environ.get("PORTFOLIO_ADVICE_MODEL", "gemini-2.5-flash")
+-DISCLAIMER: str = "투자 자문 아님 · 관찰·정보 제공 · 결정은 사용자 몫 · 원금 손실 가능"
+ CONCENTRATION_WARN_PCT: float = 40.0   # 단일 종목 비중 경고 임계
+ REGIME_KO = {"bull": "강세(위험선호)", "neutral": "중립", "bear": "약세(위험회피)"}
+ 
+ # 모든 단계 프롬프트에 주입하는 절대 원칙
+ ABSOLUTE_RULES: str = (
+     "★ 절대 원칙(반드시 지켜라):\n"
+-    "- 너는 투자 자문가가 아니다. '매수/매도/사라/팔아라/비중을 늘려라/줄여라/담아라/덜어내라' 같은 "
+-    "지시·권유·매매 신호를 절대 만들지 마라.\n"
+-    "- 오직 '관찰 / 리스크 식별 / 데이터가 말하는 것'까지만 서술한다. 최종 결정은 사용자 몫이다.\n"
+-    "- 단정하지 말고 관찰형으로('~로 보입니다', '~한 점이 관찰됩니다', '~는 검토해볼 만합니다').\n"
+-    "- 목표가·적정주가·매매 타이밍을 생성하지 마라.\n"
+-    "- 투자 자문이 아니며 원금 손실이 가능하다.\n"
++    "- 코드가 제공한 표시 신호는 근거·신뢰도와 함께 설명할 수 있다.\n"
++    "- 데이터에 없는 신호·목표가·적정주가·매매 타이밍을 새로 만들지 마라.\n"
++    "- 주문·체결·이체 실행을 지시하거나 수행하지 마라. 신호는 화면 표시 전용이다.\n"
++    "- 구성, 리스크, 데이터 근거를 명확히 서술하고 최종 선택은 사용자에게 남겨라.\n"
+ )
+ 
+ 
+@@ -366,7 +362,6 @@ def _assemble(ctx, s1, s2, s3, s4, source: str) -> dict:
+         "cacheKey": cache_key(ctx),
+         "holdingsCount": len(ctx["holdings"]),
+         "regime": REGIME_KO.get(ctx["regime"], ctx["regime"]),
+-        "disclaimer": DISCLAIMER,
+         "step1": s1.model_dump(),
+         "step2": s2.model_dump(),
+         "step3": s3.model_dump(),
+@@ -382,7 +377,7 @@ def analyze_portfolio(conn: psycopg.Connection, force: bool = False) -> dict:
+             "generatedAt": datetime.now().strftime("%Y-%m-%dT%H:%M"),
+             "generatedAtLabel": datetime.now().strftime("%Y-%m-%d %H:%M") + " KST",
+             "source": "empty", "cacheKey": cache_key(ctx), "holdingsCount": 0,
+-            "regime": REGIME_KO.get(ctx["regime"], ctx["regime"]), "disclaimer": DISCLAIMER,
++            "regime": REGIME_KO.get(ctx["regime"], ctx["regime"]),
+             "empty": True,
+         }
+ 
+@@ -476,4 +471,3 @@ if __name__ == "__main__":
+     with get_conn() as conn:
+         out = analyze_portfolio(conn, force=True)
+         print(json.dumps(out, ensure_ascii=False, indent=2))
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능")
+diff --git a/src/recompute.py b/src/recompute.py
+index f299718..0eb898e 100644
+--- a/src/recompute.py
++++ b/src/recompute.py
+@@ -11,7 +11,6 @@ recompute.py — 기존 prices_daily 기준 지표·퀀트 재계산·저장 (1
+ 
+ 실행: python -m src.recompute
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능
+ """
+ 
+ from __future__ import annotations
+@@ -94,8 +93,6 @@ def run_recompute() -> dict:
+ 
+ 
+ if __name__ == "__main__":
+-    import sys
+-
+     logging.basicConfig(
+         level=logging.INFO,
+         format="%(asctime)s %(levelname)s %(name)s %(message)s",
+@@ -105,4 +102,3 @@ if __name__ == "__main__":
+         "recompute 결과: indicators %d종목 / quant %d행 / 에러 %d건",
+         result["indicators"], result["quant"], len(result["errors"]),
+     )
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능", file=sys.stderr)
+diff --git a/src/rules.py b/src/rules.py
+index 44820d4..0e99451 100644
+--- a/src/rules.py
++++ b/src/rules.py
+@@ -1,8 +1,7 @@
+ """
+ rules.py — 룰 기반 알림 플래그 엔진 (PRD §F6-1)
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능
+-이 모듈의 출력은 정보·참고용 플래그이며 매수/매도 신호가 아닙니다.
++이 모듈의 출력은 결정론적 플래그이며 자동 주문을 실행하지 않습니다.
+ 
+ 설계 원칙:
+   - LLM 호출 없음, 네트워크 없음 — 순수 Python 계산
+@@ -145,7 +144,7 @@ def check_rules(
+     """
+     종목 플래그 계산.
+ 
+-    ⚠️ 반환된 플래그는 정보·참고용이며 매수/매도 신호가 아닙니다.
++    반환된 플래그는 자동 주문을 실행하지 않습니다.
+     투자 판단과 그 결과의 책임은 전적으로 사용자에게 있습니다.
+ 
+     Parameters
+diff --git a/src/run_pipeline.py b/src/run_pipeline.py
+index 90bfbbb..d6eedea 100644
+--- a/src/run_pipeline.py
++++ b/src/run_pipeline.py
+@@ -14,7 +14,7 @@ run_pipeline.py — ATLAS 일일 파이프라인 실행기
+ 전체 실행은 runs 테이블에 기록.
+ 시크릿은 환경변수에서만. 자동 주문 없음.
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능
++자동 주문 없음.
+ """
+ 
+ from __future__ import annotations
+@@ -320,7 +320,7 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
+     한 단계 실패해도 다음 단계 계속.
+     runs 테이블에 실행 이력 기록.
+ 
+-    ⚠️ 투자 자문 아님 / 원금 손실 가능
++    자동 주문 없음.
+     """
+     asof = asof or date.today()
+     errors: list[dict] = []
+@@ -365,12 +365,9 @@ def run_pipeline(asof: Optional[date] = None) -> list[StockDailyRecord]:
+ 
+ 
+ if __name__ == "__main__":
+-    import sys
+-
+     logging.basicConfig(
+         level=logging.INFO,
+         format="%(asctime)s %(levelname)s %(name)s %(message)s",
+     )
+     records = run_pipeline()
+     logger.info("조립된 레코드: %d종목", len(records))
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능", file=sys.stderr)
+diff --git a/src/schemas.py b/src/schemas.py
+index 65343bc..4627ae8 100644
+--- a/src/schemas.py
++++ b/src/schemas.py
+@@ -213,6 +213,13 @@ class NewsView(BaseModel):
+     based_on: Optional[Literal["recent", "fallback_old"]] = None
+ 
+ 
++class TradeSignal(BaseModel):
++    label: Literal["매수", "관망", "축소"]
++    percentile: float = Field(ge=0, le=100)
++    reason: str = Field(min_length=1)
++    confidence: int = Field(ge=50, le=100)
++
++
+ class QuantView(BaseModel):
+     composite: Optional[float] = None
+     momentum: Optional[float] = None
+@@ -221,6 +228,7 @@ class QuantView(BaseModel):
+     growth: Optional[float] = None
+     sentiment: Optional[float] = None
+     flags: list[str] = Field(default_factory=list)
++    signal: Optional[TradeSignal] = None
+ 
+ 
+ class StockDailyRecord(BaseModel):
+@@ -237,13 +245,6 @@ class StockDailyRecord(BaseModel):
+     quant: QuantView = Field(default_factory=QuantView)
+     is_holding: bool = False
+ 
+-    DISCLAIMER: str = Field(
+-        default="투자 자문 아님 / 원금 손실 가능",
+-        frozen=True,
+-        exclude=True,
+-    )
+-
+-
+ # ──────────────────────────────────────────────────────────────
+ # §5.3-A LLM 출력 — 종목 뉴스 요약 (Gemini, 종목당)
+ # ──────────────────────────────────────────────────────────────
+diff --git a/src/send_telegram.py b/src/send_telegram.py
+index 63a0b10..fbab3db 100644
+--- a/src/send_telegram.py
++++ b/src/send_telegram.py
+@@ -10,7 +10,6 @@ Gemini/Hermes 없이 동작 (Phase 3 후반에 Hermes로 업그레이드 예정)
+ 
+ 텔레그램 4096자 제한 → 초과 시 앞부분 우선, 뒤 자르기.
+ 
+-⚠️ 투자 자문 아님 / 원금 손실 가능
+ """
+ 
+ from __future__ import annotations
+@@ -35,9 +34,6 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
+ MAX_LEN = 4096
+ _WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+ 
+-_DISCLAIMER = "ℹ️ 본 정보는 참고용이며 투자 자문이 아닙니다. 원금 손실이 발생할 수 있습니다."
+-
+-
+ # ──────────────────────────────────────────────────────────────
+ # DB 조회 헬퍼
+ # ──────────────────────────────────────────────────────────────
+@@ -155,7 +151,7 @@ def _news_section(records: list[StockDailyRecord]) -> str:
+     # 긍정/부정 우선, 중립 후순
+     news_items.sort(key=lambda r: abs(r.news.score or 0), reverse=True)
+ 
+-    lines = ["📰 주목 뉴스 (감성)"]
++    lines = ["📰 주목 뉴스 (심리)"]
+     for r in news_items[:3]:
+         sent = r.news.sentiment or "—"
+         first_line = (r.news.summary_md or "").split("\n")[0].lstrip("- ").strip()
+@@ -173,7 +169,7 @@ def format_brief(
+ ) -> str:
+     """
+     HERMES_PROMPT §2 템플릿을 채워 텔레그램 메시지 문자열 반환.
+-    4096자 초과 시 면책 문구는 유지하고 뒤부터 자름.
++    4096자 초과 시 뒤부터 자름.
+     """
+     asof = asof or date.today()
+     wd = _WEEKDAYS[asof.weekday()]
+@@ -188,15 +184,11 @@ def format_brief(
+         _flags_section(records),
+         "",
+         _news_section(records),
+-        "",
+-        _DISCLAIMER,
+     ]
+ 
+     text = "\n".join(sections)
+     if len(text) > MAX_LEN:
+-        # 면책 문구는 반드시 유지
+-        keep = MAX_LEN - len(_DISCLAIMER) - 5
+-        text = text[:keep] + "\n…\n" + _DISCLAIMER
++        text = text[:MAX_LEN - 2] + "…"
+ 
+     return text
+ 
+@@ -281,5 +273,3 @@ if __name__ == "__main__":
+         else:
+             logger.error("발송 실패")
+             sys.exit(1)
+-
+-    print("\n⚠️ 투자 자문 아님 / 원금 손실 가능", file=sys.stderr)
+diff --git a/tests/test_assemble.py b/tests/test_assemble.py
+index 2bcc07b..fcda047 100644
+--- a/tests/test_assemble.py
++++ b/tests/test_assemble.py
+@@ -15,6 +15,7 @@ mock 포인트:
+ from __future__ import annotations
+ 
+ import json
++from contextlib import ExitStack
+ from datetime import date
+ from unittest.mock import MagicMock, patch
+ 
+@@ -454,3 +455,26 @@ class TestBulkSimple:
+         out = _bulk_quant(["AAPL", "MSFT"], _fake_conn(rows), ASOF)
+         assert out["AAPL"]["composite"] == 62.0
+         assert out["MSFT"] is None
++
++
++def test_assemble_daily_attaches_cross_sectional_signals():
++    watchlist = [
++        {**_WL, "ticker": "HIGH", "name": "상위"},
++        {**_WL, "ticker": "MID", "name": "중간"},
++        {**_WL, "ticker": "LOW", "name": "하위"},
++    ]
++    quant_map = {
++        "HIGH": {**_QUANT, "composite": 90.0},
++        "MID": {**_QUANT, "composite": 60.0},
++        "LOW": {**_QUANT, "composite": 10.0},
++    }
++    patches = _patch_bulk(watchlist=watchlist)
++    patches[-1] = patch("src.assemble._bulk_quant", return_value=quant_map)
++    with ExitStack() as stack:
++        for item in patches:
++            stack.enter_context(item)
++        records = assemble_daily(MagicMock(), ASOF)
++
++    labels = {record.ticker: record.quant.signal.label for record in records}
++    assert labels == {"HIGH": "매수", "MID": "관망", "LOW": "축소"}
++    assert all(record.quant.signal.reason for record in records)
+diff --git a/tests/test_daily_brief.py b/tests/test_daily_brief.py
+index 9aa034f..960e1bc 100644
+--- a/tests/test_daily_brief.py
++++ b/tests/test_daily_brief.py
+@@ -70,9 +70,9 @@ class TestDailyBrief:
+         dv = {d["t"] for d in b["diverge"]}
+         assert hi.isdisjoint(dv)  # 겹치지 않음
+ 
+-    def test_disclaimer_present(self):
++    def test_disclaimer_boilerplate_absent(self):
+         b = _build_daily_brief([_stock("A", "에이", 80)], MARKET)
+-        assert "투자 자문 아님" in b["disclaimer"]
++        assert "disclaimer" not in b
+ 
+ 
+ class TestMarketAttractiveness:
+diff --git a/tests/test_display_signals.py b/tests/test_display_signals.py
+new file mode 100644
+index 0000000..ed714c6
+--- /dev/null
++++ b/tests/test_display_signals.py
+@@ -0,0 +1,53 @@
++from __future__ import annotations
++
++
++def _row(ticker: str, composite: float | None, **factors: float) -> dict:
++    return {
++        "ticker": ticker,
++        "composite": composite,
++        "momentum": factors.get("momentum"),
++        "value": factors.get("value"),
++        "quality": factors.get("quality"),
++        "growth": factors.get("growth"),
++        "sentiment": factors.get("sentiment"),
++    }
++
++
++def test_top_middle_bottom_labels_include_reason_and_confidence() -> None:
++    from src.display_signals import compute_display_signals
++
++    signals = compute_display_signals([
++        _row("A", 90, momentum=80),
++        _row("B", 60, quality=75),
++        _row("C", 10, value=70),
++    ])
++
++    assert signals["A"].label == "매수"
++    assert signals["B"].label == "관망"
++    assert signals["C"].label == "축소"
++    for signal in signals.values():
++        assert signal is not None
++        assert "백분위" in signal.reason
++        assert 50 <= signal.confidence <= 100
++
++
++def test_equal_composites_receive_equal_percentiles() -> None:
++    from src.display_signals import compute_display_signals
++
++    signals = compute_display_signals([_row("A", 70), _row("B", 70), _row("C", 20)])
++    assert signals["A"].percentile == signals["B"].percentile
++
++
++def test_missing_composite_has_no_signal() -> None:
++    from src.display_signals import compute_display_signals
++
++    assert compute_display_signals([_row("A", None)])["A"] is None
++
++
++def test_single_valid_stock_is_watch_with_high_midpoint_confidence() -> None:
++    from src.display_signals import compute_display_signals
++
++    signal = compute_display_signals([_row("A", 50, growth=60)])["A"]
++    assert signal.label == "관망"
++    assert signal.percentile == 50.0
++    assert signal.confidence == 100
+diff --git a/tests/test_enrich_gemini.py b/tests/test_enrich_gemini.py
+index f74053f..8d9d627 100644
+--- a/tests/test_enrich_gemini.py
++++ b/tests/test_enrich_gemini.py
+@@ -413,7 +413,7 @@ class TestBuildNewsPrompt:
+ 
+     def test_no_buy_sell_recommendation(self):
+         prompt = _build_news_prompt("AAPL", "애플", SAMPLE_NEWS_ITEMS)
+-        assert "매수/매도 의견이나 목표가를 만들지 마라" in prompt
++        assert "표시 신호를 새로 만들지 마라" in prompt
+ 
+ 
+ class TestBuildMarketPrompt:
+@@ -431,4 +431,4 @@ class TestBuildMarketPrompt:
+ 
+     def test_no_stock_recommendation(self):
+         prompt = _build_market_prompt({}, {})
+-        assert "매매 권유 금지" in prompt
++        assert "주문 실행 지시 금지" in prompt
+diff --git a/tests/test_export_safety.py b/tests/test_export_safety.py
+index bce3187..4479e67 100644
+--- a/tests/test_export_safety.py
++++ b/tests/test_export_safety.py
+@@ -14,6 +14,19 @@ from src.export_dashboard_data import (
+ )
+ 
+ 
++def test_export_attaches_complete_display_signals():
++    from src.export_dashboard_data import _attach_display_signals
++
++    stocks = [
++        {"t": "A", "comp": 90, "f": {"m": 80, "v": 50, "q": 60, "g": 55, "s": 40}},
++        {"t": "B", "comp": 60, "f": {"m": 50, "v": 60, "q": 70, "g": 55, "s": 40}},
++        {"t": "C", "comp": 10, "f": {"m": 20, "v": 30, "q": 40, "g": 25, "s": 10}},
++    ]
++    _attach_display_signals(stocks)
++    assert [stock["signal"]["label"] for stock in stocks] == ["매수", "관망", "축소"]
++    assert all(stock["signal"]["reason"] and stock["signal"]["confidence"] for stock in stocks)
++
++
+ class TestSoundnessScore:
+     def test_fscore_priority_full(self):
+         # F-Score 7(실질 만점) → 100
+diff --git a/tests/test_portfolio_advice.py b/tests/test_portfolio_advice.py
+index ec1bdb3..4a5ada9 100644
+--- a/tests/test_portfolio_advice.py
++++ b/tests/test_portfolio_advice.py
+@@ -38,7 +38,7 @@ CTX = {
+ class TestAbsoluteRulesInPrompts:
+     def test_step1_has_rules(self):
+         p = PA._prompt_step1(CTX)
+-        assert "투자 자문" in p and "매수/매도" in p and "관찰" in p
++        assert "표시 신호" in p and "주문" in p and "실행" in p
+ 
+     def test_all_steps_have_rules(self):
+         s1, s2, s3 = PA._rule_step1(CTX), PA._rule_step2(CTX), PA._rule_step3(CTX)
+@@ -89,9 +89,9 @@ class TestRuleFallback:
+         out = PA._rule_based(CTX)
+         assert out["source"] == "rule"
+         assert out["holdingsCount"] == 2
+-        for k in ("step1", "step2", "step3", "step4", "disclaimer", "cacheKey"):
++        for k in ("step1", "step2", "step3", "step4", "cacheKey"):
+             assert k in out
+-        assert "자문" in out["disclaimer"]
++        assert "disclaimer" not in out
+ 
+ 
+ # ── analyze_portfolio: 키 유무에 따른 경로 ─────────────────────────
+diff --git a/tests/test_rules.py b/tests/test_rules.py
+index ba5a66d..bb5e1d8 100644
+--- a/tests/test_rules.py
++++ b/tests/test_rules.py
+@@ -5,7 +5,6 @@ tests/test_rules.py — rules.py 단위 테스트
+ 각 룰마다 True/False 케이스, 경계값, None 처리 검증.
+ 
+ ⚠️ 테스트 합격이 투자 판단 근거가 되지 않습니다.
+-   투자 자문 아님 / 원금 손실 가능.
+ """
+ 
+ from __future__ import annotations
+diff --git a/tests/test_send_telegram.py b/tests/test_send_telegram.py
+new file mode 100644
+index 0000000..99961a8
+--- /dev/null
++++ b/tests/test_send_telegram.py
+@@ -0,0 +1,11 @@
++from __future__ import annotations
++
++from datetime import date
++
++from src.send_telegram import format_brief
++
++
++def test_brief_omits_disclaimer_boilerplate() -> None:
++    text = format_brief([], asof=date(2026, 6, 19))
++    assert "투자 자문" not in text
++    assert "원금 손실" not in text
+-- 
+2.39.3 (Apple Git-146)
+

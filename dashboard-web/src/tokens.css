@@ -56,6 +56,7 @@
   --accent-hover: #3B7BEE;
   --accent-tint: rgba(76, 141, 255, 0.14);
   --accent-ring: rgba(76, 141, 255, 0.28);
+  --on-accent: #FFFFFF;   /* 액센트/솔리드 배경 위 글자 */
 
   /* ── 타이포 스케일 ──────────────────────────────────────── */
   --font-sans: "Pretendard Variable", -apple-system, BlinkMacSystemFont,
@@ -134,6 +135,7 @@
   --accent-hover: #1A48EA;
   --accent-tint: rgba(42, 91, 255, 0.08);
   --accent-ring: rgba(42, 91, 255, 0.18);
+  --on-accent: #FFFFFF;
 }
 
 /* 숫자는 항상 tabular — 표·시계열에서 자릿수가 흔들리지 않게 */

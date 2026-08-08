@@ -1,0 +1,1024 @@
+From 1db28ffa9ca5a1bbbc3581952aae0ed4f43f532c Mon Sep 17 00:00:00 2001
+From: KYEONGPIL HEO <kyeongpilheo@KYEONGPILui-MacBookAir.local>
+Date: Fri, 19 Jun 2026 12:02:40 +0900
+Subject: [PATCH 4/5] =?UTF-8?q?feat:=20Wave=201=20UX=EC=99=80=20=ED=91=9C?=
+ =?UTF-8?q?=EC=8B=9C=20=EB=9D=BC=EB=B2=A8=20=EA=B0=9C=EC=84=A0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ CLAUDE.md                           |   2 +
+ PRD.md                              |  14 +++-
+ dashboard-web/src/App.jsx           |   6 +-
+ dashboard-web/src/display.js        |  25 +++++++
+ dashboard-web/src/tabsA.jsx         | 108 +++++++++++++++++++++-------
+ dashboard-web/src/tabsB.jsx         |  16 ++---
+ dashboard-web/src/tabsC.jsx         |   6 +-
+ dashboard-web/src/tabsD.jsx         |   2 +-
+ dashboard-web/src/tabsE.jsx         |  29 +++++++-
+ dashboard-web/src/ui.jsx            |  11 +--
+ dashboard-web/tests/display.test.js |  41 ++++++++++-
+ db/schema.sql                       |  12 ++++
+ src/export_dashboard_data.py        |  25 +++++++
+ src/local_api.py                    | 108 +++++++++++++++++++++++++---
+ tests/test_local_api_watchlist.py   |  58 +++++++++++++++
+ tests/test_stock_note_history.py    |  70 ++++++++++++++++++
+ 16 files changed, 474 insertions(+), 59 deletions(-)
+ create mode 100644 tests/test_local_api_watchlist.py
+ create mode 100644 tests/test_stock_note_history.py
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 42da5e9..275dd48 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -101,6 +101,8 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
+ - **재무 시계열**(PR-2): `fundamentals.ocf/fcf`(영업/잉여 현금흐름)는 ingest_us 현금흐름표에서 수집(FCF=OCF+CapEx). 종목상세 "재무 추이" 카드(recharts)는 연간 매출·영업이익·순이익·영업이익률·OCF·FCF. KR 일부(삼성·하이닉스 등)는 DART 결측이라 **empty state**(빈 박스 금지). 컨센서스 전망은 기존 analyst(목표가·의견)·valuation(per_f) 재사용.
+ - **포트폴리오 전략 조언(`portfolio_advice.py`) = 투자 자문 절대 금지**: CoT 4단계(구성/리스크/레짐/종합)를 코드로 분리하고, **모든 단계 프롬프트에 `ABSOLUTE_RULES` 주입**(매수/매도/비중 지시 금지, 관찰·리스크 식별까지만, 면책·관찰형). 매 단계 `response_mime_type=json`+pydantic 검증. **키 없음/STEP1 LLM 실패 시 전체 규칙기반 단락**(불필요한 429 재시도 방지). LLM 호출은 `enrich_gemini._call_gemini_with_backoff` 경계 재사용(`_llm_call`로 감싸 테스트 격리). `cache_key`(보유·현금·레짐 시그니처)로 증분 캐시 — 매 조회마다 호출하지 말 것. 출력에 매매 단정 문구가 있으면 버그.
+ - **매력도 3축 = 절대 단일 점수로 합치지 마라**(확인편향 방지): 종목상세 `AxesCard`는 퀀트(composite)·컨센서스(상승여력)·내 판단(별점)을 **나란히** 보여주고 각 축에 출처 라벨을 단다. 평균/가중합으로 한 숫자를 만들지 않는다. 축이 엇갈리면(한 축 높음+다른 축 낮음) "확인 필요" 코멘트로 **괴리를 드러낸다**. 컨센서스 데이터 없으면 "컨센서스 없음", 별점 없으면 "내 판단 미입력"(0점 아님).
++- **내 판단은 누적 이력**: `stock_notes`는 3축용 최신 상태, `stock_note_history`는 명시적으로 제출한 판단의 불변 이력이다. 여러 줄 입력을 타임스탬프와 함께 최신순으로 보여주며 빈 판단은 저장하지 않는다.
++- **용어 한글화는 표시 레이어만**: 내부 `regime/sentiment/momentum/value/quality/growth`와 `m/v/q/g/s` 키는 유지하고 UI에서는 국면/심리/모멘텀/가치/우량성/성장으로 표시한다.
+ - **리서치 항목**(`research_items`): local_api `GET/POST/DELETE /api/research`로 종목상세에서 직접 추가·삭제(유형 youtube/article/report/quant/memo). 추가 후 `_patch_data_json_research`로 해당 종목 `researchItems`만 패치(전체 재생성 회피). 공용 `ResearchItemCard`/`toYtEmbed`는 **tabsA.jsx에 정의**(tabsB가 import — tabsB→tabsA 단방향, 순환 import 금지).
+ - **오버뷰 요약밴드**(`dailyBrief`, export `_build_daily_brief`): 주목/주의/3축괴리/시장 한줄을 **규칙 기반으로 합성**(키 없어도 동작). 시장 한 줄은 이미 생성된 Gemini 시황(`market_daily.summary`)을 재사용(ad-hoc 호출 금지). 전부 '관찰/정보'로 서술, 매수매도 단정·면책 유지. **괴리 종목은 주목에서 제외**(메시지 혼선 방지). 문장 한 줄은 `_short_line`으로 소수점에서 안 끊기게.
+ - **시장 매력도**(`market.kr/us.attractiveness`, export `_attach_market_attractiveness`): 진입 환경(우호/중립/비우호)을 레짐+시장폭(정배열율)+변동성(VIX)으로 평가하고 근거를 서술. **단일 점수로 강요 금지**(3축 원칙과 동일 — 환경 평가+근거).
+diff --git a/PRD.md b/PRD.md
+index 35df190..47311f5 100644
+--- a/PRD.md
++++ b/PRD.md
+@@ -5,7 +5,7 @@
+ 
+ | 항목 | 값 |
+ |---|---|
+-| 버전 | v3.1 |
++| 버전 | v3.2 |
+ | 작성일 | 2026-06-08 |
+ | PM | Claude (대화 세션) |
+ | 빌더 | Claude Code |
+@@ -251,6 +251,16 @@ CREATE TABLE runs (
+   finished_at TIMESTAMPTZ, status TEXT, errors JSONB
+ );
+ 
++-- 사용자의 최신 판단과 누적 이력
++CREATE TABLE stock_notes (
++  ticker TEXT PRIMARY KEY, horizon TEXT, attractiveness INT,
++  thesis TEXT, updated_at TIMESTAMPTZ DEFAULT now()
++);
++CREATE TABLE stock_note_history (
++  id BIGSERIAL PRIMARY KEY, ticker TEXT NOT NULL, horizon TEXT,
++  attractiveness INT, thesis TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now()
++);
++
+ -- 포트폴리오 전략 조언(CoT 결과 캐시). cache_key=보유·현금·레짐 시그니처 → 변경 시 stale.
+ CREATE TABLE portfolio_advice (
+   cache_key TEXT PRIMARY KEY, payload JSONB NOT NULL,
+@@ -664,6 +674,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
+ 
+ ### 안정화 (운영 중 발견·수정)
++- [x] **Wave 1 T2~T6 UX·라벨** (2026-06-19): 뉴스 종목별 심리를 점수 내림차순으로 정렬, 종목상세 티커/종목명·시장·섹터 즉시 필터, 관심종목 섹터 PATCH 편집, `stock_note_history` 기반 복수 판단 누적·최신순 표시, 8탭의 국면·심리·우량성·5팩터 한글 표시 통일. 내부 키와 매력도 3축 비합산 원칙 유지.
+ - [x] **Wave 1 T1 총자산 단일화** (2026-06-19): 오버뷰의 주식 평가액 표시와 포트폴리오의 주식+현금 표시 불일치를 제거. 종목별 최신 가격·동일 최신 환율로 계산한 `portfolio_snapshot.payload.asset_total`을 로컬 API와 두 탭이 공용 함수로 사용하고, 구형 데이터만 평가액+현금 폴백. Python·Node 회귀 테스트 추가.
+ - [x] **Decimal/DB 경계 버그**: psycopg3 NUMERIC→Decimal이 float·np.log·나눗셈에 섞여 indicators/quant 0건 → `db.get_conn` float 로더 + 읽기 경계 방어 캐스팅으로 수정
+ - [x] **저장 경로**: 단일 트랜잭션 1회 커밋 → 단계별 commit/rollback으로 전환(앞 단계 오류·연결 끊김이 저장 무효화하던 문제)
+@@ -684,6 +695,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+ 
+ ---
+ *변경 이력:*
++- *v3.2 (2026-06-19) Wave 1 T2~T6: 뉴스 심리 정렬, 종목상세 검색/시장/섹터 필터, 관심종목 섹터 편집, 판단 이력 누적, 표시 레이어 한글 라벨 통일 — Codex.*
+ - *v3.1 (2026-06-19) Wave 1 T1: 포트폴리오 총자산을 종목별 최신 평가액+KRW 환산 현금으로 단일화하고 오버뷰·포트폴리오 공용 표시 함수 및 로컬 요약 API 적용 — Codex.*
+ - *v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
+ - *v1.1 (2026-06-09) §F4 실제 구현 내용으로 전면 교체(레짐감지·사전필터·동적가중치·VCM·12-1M), §11 로드맵 Phase 1·2 완료 항목 표시 — PM(Claude).*
+diff --git a/dashboard-web/src/App.jsx b/dashboard-web/src/App.jsx
+index 5801d40..71211fc 100644
+--- a/dashboard-web/src/App.jsx
++++ b/dashboard-web/src/App.jsx
+@@ -62,12 +62,12 @@ export default function App() {
+ 
+           {/* center: regime + weights */}
+           <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}
+-               title="현재 시장 레짐에 따라 5개 팩터에 적용되는 가중치(%). 합 100%.">
++               title="현재 시장 국면에 따라 5개 팩터에 적용되는 가중치(%). 합 100%.">
+             <RegimeBadge regime={overall} regimes={D.regimes} />
+             <span style={{ width: 1, height: 18, background: C.line2 }}></span>
+-            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>레짐 가중치</MonoCaps>
++            <MonoCaps style={{ fontSize: 8.5 }} color={C.ink3}>국면 가중치</MonoCaps>
+             <span className="mono" style={{ fontSize: 10.5, color: C.ink2, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
+-              모멘텀 <b style={{ color: C.acc }}>{w.m}</b> · 가치 <b style={{ color: C.ink }}>{w.v}</b> · 퀄리티 <b style={{ color: C.ink }}>{w.q}</b> · 성장 <b style={{ color: C.ink }}>{w.g}</b> · 감성 <b style={{ color: C.acc }}>{w.s}</b>
++              모멘텀 <b style={{ color: C.acc }}>{w.m}</b> · 가치 <b style={{ color: C.ink }}>{w.v}</b> · 우량성 <b style={{ color: C.ink }}>{w.q}</b> · 성장 <b style={{ color: C.ink }}>{w.g}</b> · 심리 <b style={{ color: C.acc }}>{w.s}</b>
+             </span>
+           </div>
+ 
+diff --git a/dashboard-web/src/display.js b/dashboard-web/src/display.js
+index ff70b85..fe7be1d 100644
+--- a/dashboard-web/src/display.js
++++ b/dashboard-web/src/display.js
+@@ -9,3 +9,28 @@ export function portfolioAssetTotal(portfolio) {
+     ? evaluation + cash
+     : null;
+ }
++
++export function sortStocksBySentiment(stocks) {
++  return [...stocks].sort((a, b) => {
++    const scoreDiff = Number(b.sscore ?? b.s?.sscore ?? -Infinity) - Number(a.sscore ?? a.s?.sscore ?? -Infinity);
++    return scoreDiff || String(a.name ?? a.s?.name ?? a.t).localeCompare(String(b.name ?? b.s?.name ?? b.t), 'ko');
++  });
++}
++
++export function filterStocks(stocks, { query = '', market = 'all', sector = 'all' } = {}) {
++  const needle = query.trim().toLocaleLowerCase();
++  return stocks.filter((stock) => {
++    const matchesQuery = !needle
++      || String(stock.t ?? '').toLocaleLowerCase().includes(needle)
++      || String(stock.name ?? '').toLocaleLowerCase().includes(needle);
++    const matchesMarket = market === 'all' || stock.mk === market;
++    const matchesSector = sector === 'all' || stock.sec === sector;
++    return matchesQuery && matchesMarket && matchesSector;
++  });
++}
++
++const FACTOR_LABELS = { m: '모멘텀', v: '가치', q: '우량성', g: '성장', s: '심리' };
++const REGIME_LABELS = { bull: '강세', neutral: '중립', bear: '약세' };
++
++export const factorLabel = (key) => FACTOR_LABELS[key] ?? key;
++export const regimeLabel = (key) => REGIME_LABELS[key] ?? key;
+diff --git a/dashboard-web/src/tabsA.jsx b/dashboard-web/src/tabsA.jsx
+index cdc8d21..a2a0dd9 100644
+--- a/dashboard-web/src/tabsA.jsx
++++ b/dashboard-web/src/tabsA.jsx
+@@ -9,7 +9,7 @@ import {
+ import {
+   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+ } from 'recharts';
+-import { portfolioAssetTotal } from './display.js';
++import { filterStocks, portfolioAssetTotal, sortStocksBySentiment } from './display.js';
+ 
+ // PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
+ function fmtBig(v, cur) {
+@@ -316,17 +316,17 @@ export function Overview({ D, nav, goNews }) {
+         {/* 랭킹 테이블 */}
+         <Panel
+           title="관심종목 랭킹"
+-          sub={`COMPOSITE 내림차순 · ${rows.length}종목`}
++          sub={`종합 점수 내림차순 · ${rows.length}종목`}
+           right={<FilterTabs value={filter} onChange={setFilter} options={[{ k: "all", label: "전체" }, { k: "KR", label: "KR" }, { k: "US", label: "US" }, { k: "hold", label: "보유" }]} />}
+         >
+           <table style={{ width: "100%", borderCollapse: "collapse" }}>
+             <thead>
+               <tr style={{ borderBottom: `1px solid ${C.line2}` }}>
+-                {["", "종목", "현재가", "COMPOSITE", "M·V·Q·G·S", "RSI", "추세", "주요 플래그", "판단"].map((h, i) => {
++                {["", "종목", "현재가", "종합", "모멘텀·가치·우량성·성장·심리", "RSI", "추세", "주요 플래그", "판단"].map((h, i) => {
+                   // PR-5: 약어 헤더 툴팁
+                   const tip = {
+-                    "COMPOSITE": "5개 팩터를 레짐 가중치로 합산한 종합 점수(0~100)",
+-                    "M·V·Q·G·S": "모멘텀 · 가치 · 퀄리티 · 성장 · 감성 (5팩터 점수)",
++                    "종합": "5개 팩터를 국면 가중치로 합산한 종합 점수(0~100)",
++                    "모멘텀·가치·우량성·성장·심리": "모멘텀 · 가치 · 우량성 · 성장 · 심리 (5팩터 점수)",
+                     "RSI": "상대강도지수(14일) — 70↑ 과열, 30↓ 과매도",
+                     "추세": "이동평균선 정배열(20>60>120) 여부",
+                     "판단": "내 투자 판단(방향·매력도)",
+@@ -614,19 +614,27 @@ function _level(kind, v) {
+ 
+ function AxesCard({ s }) {
+   const [note, setNote] = useState(s.note || { horizon: null, attractiveness: null, thesis: "" });
++  const [history, setHistory] = useState(s.noteHistory || []);
+   const [saving, setSaving] = useState(false);
+   const [saved, setSaved] = useState(false);
+ 
+-  useEffect(() => { setNote(s.note || { horizon: null, attractiveness: null, thesis: "" }); setSaved(false); }, [s.t, s.note]);
++  useEffect(() => { setNote(s.note || { horizon: null, attractiveness: null, thesis: "" }); setHistory(s.noteHistory || []); setSaved(false); }, [s.t, s.note, s.noteHistory]);
+   useEffect(() => {
+-    fetch(`${API}/api/notes/${s.t}`).then((r) => r.json()).then((d) => { if (d) setNote(d); }).catch(() => {});
++    fetch(`${API}/api/notes/${s.t}`).then((r) => r.json()).then((d) => {
++      if (d) { setNote({ horizon: d.horizon, attractiveness: d.attractiveness, thesis: "" }); setHistory(d.history || []); }
++    }).catch(() => {});
+   }, [s.t]);
+ 
+-  const saveNote = async (next) => {
+-    setNote(next); setSaving(true);
++  const saveNote = async () => {
++    if (!(note.thesis || "").trim()) return;
++    setSaving(true);
+     try {
+-      await fetch(`${API}/api/notes/${s.t}`, { method: "PUT", headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ horizon: next.horizon, attractiveness: next.attractiveness, thesis: next.thesis }) });
++      const response = await fetch(`${API}/api/notes/${s.t}`, { method: "POST", headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ horizon: note.horizon, attractiveness: note.attractiveness, thesis: note.thesis }) });
++      if (!response.ok) throw new Error();
++      const data = await response.json();
++      setHistory(data.history || []);
++      setNote((current) => ({ ...current, thesis: "" }));
+       setSaved(true); setTimeout(() => setSaved(false), 1800);
+     } catch (_) {}
+     setSaving(false);
+@@ -657,14 +665,14 @@ function AxesCard({ s }) {
+       <div style={{ display: "flex", flexWrap: "wrap" }}>
+         {/* 축 1: 퀀트 */}
+         <div style={colStyle}>
+-          <AxisHead label="퀀트" src="데이터 기반 · COMPOSITE" col={C.acc} />
++          <AxisHead label="퀀트" src="데이터 기반 · 종합" col={C.acc} />
+           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+             <Num size={30} weight={800} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num>
+             <span style={{ fontSize: 11, color: C.ink3 }}>/100</span>
+             {qLevel && <span style={{ fontSize: 11, fontWeight: 700, color: qLevel === "높음" ? C.ok : qLevel === "낮음" ? C.bad : C.ink2 }}>{qLevel}</span>}
+           </div>
+           <div style={{ display: "flex", gap: 4, marginTop: 12, flexWrap: "wrap" }}>
+-            {[["모", s.f.m], ["가", s.f.v], ["퀄", s.f.q], ["성", s.f.g], ["감", s.f.s]].map(([k, v]) => (
++            {[["모멘텀", s.f.m], ["가치", s.f.v], ["우량성", s.f.q], ["성장", s.f.g], ["심리", s.f.s]].map(([k, v]) => (
+               <span key={k} style={{ fontSize: 10.5, color: C.ink2, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 5, padding: "3px 6px" }}>{k} <b style={{ color: C.ink }}>{v}</b></span>
+             ))}
+           </div>
+@@ -698,7 +706,7 @@ function AxesCard({ s }) {
+           {/* horizon */}
+           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+             {["short", "long", "watch"].map((h) => (
+-              <button key={h} onClick={() => saveNote({ ...note, horizon: note.horizon === h ? null : h })}
++              <button key={h} onClick={() => setNote((current) => ({ ...current, horizon: current.horizon === h ? null : h }))}
+                 style={{ border: `1px solid ${note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.line2}`,
+                   background: note.horizon === h ? (h === "short" ? C.accTint : h === "long" ? C.okBg : C.surface2) : C.surface,
+                   color: note.horizon === h ? (h === "short" ? C.acc : h === "long" ? C.ok : C.ink3) : C.ink2,
+@@ -710,19 +718,40 @@ function AxesCard({ s }) {
+           {/* attractiveness (별점) */}
+           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+             {[1, 2, 3, 4, 5].map((n) => (
+-              <button key={n} onClick={() => saveNote({ ...note, attractiveness: note.attractiveness === n ? null : n })}
++              <button key={n} onClick={() => setNote((current) => ({ ...current, attractiveness: current.attractiveness === n ? null : n }))}
+                 style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontSize: 22, lineHeight: 1, color: (note.attractiveness || 0) >= n ? "#F59E0B" : C.line2 }}>★</button>
+             ))}
+             <span style={{ fontSize: 11, color: C.ink3, marginLeft: 4 }}>{note.attractiveness != null ? `${note.attractiveness}/5` : "내 판단 미입력"}</span>
+           </div>
+           {/* thesis */}
+           <textarea value={note.thesis || ""} onChange={(e) => setNote((n) => ({ ...n, thesis: e.target.value }))}
+-            onBlur={() => saveNote(note)}
+-            placeholder="투자 논거를 기록하세요 (자동 저장)…"
+-            style={{ width: "100%", minHeight: 60, marginTop: 10, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, fontFamily: "var(--sans)", lineHeight: 1.55, color: C.ink, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
++            placeholder="현재 판단과 근거를 여러 줄로 기록하세요…"
++            style={{ width: "100%", minHeight: 110, marginTop: 10, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "9px 10px", fontSize: 12.5, fontFamily: "var(--sans)", lineHeight: 1.55, color: C.ink, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
++          <button onClick={saveNote} disabled={saving || !(note.thesis || "").trim()}
++            style={{ marginTop: 8, width: "100%", border: "none", borderRadius: 7, padding: "8px 10px", background: C.ink, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: saving || !(note.thesis || "").trim() ? 0.45 : 1 }}>
++            {saving ? "저장 중…" : "판단 추가"}
++          </button>
+         </div>
+       </div>
+ 
++      {history.length > 0 && (
++        <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 16px" }}>
++          <MonoCaps style={{ fontSize: 9 }} color={C.ink3}>판단 이력 · 최신순</MonoCaps>
++          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
++            {history.map((item) => (
++              <div key={item.id} style={{ padding: "9px 11px", border: `1px solid ${C.line}`, borderRadius: 7, background: C.surface2 }}>
++                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 5 }}>
++                  <span style={{ fontSize: 10.5, fontWeight: 700, color: C.ink2 }}>{item.horizon ? HORIZON_LABEL[item.horizon] : "기간 미지정"}</span>
++                  <span style={{ fontSize: 10.5, color: C.warn }}>{item.attractiveness ? `★ ${item.attractiveness}/5` : "별점 없음"}</span>
++                  <span className="mono" style={{ marginLeft: "auto", fontSize: 9.5, color: C.ink3 }}>{new Date(item.created_at).toLocaleString("ko-KR")}</span>
++                </div>
++                <div style={{ whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.55, color: C.ink }}>{item.thesis}</div>
++              </div>
++            ))}
++          </div>
++        </div>
++      )}
++
+       {/* 축 간 괴리 코멘트 */}
+       {diverge.length > 0 && (
+         <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.line}`, background: C.warnBg, display: "flex", alignItems: "center", gap: 8 }}>
+@@ -775,8 +804,19 @@ export function CuratedNews({ items }) {
+ }
+ 
+ export function StockDetail({ D, ticker, nav }) {
++  const [stockQuery, setStockQuery] = useState("");
++  const [marketFilter, setMarketFilter] = useState("all");
++  const [sectorFilter, setSectorFilter] = useState("all");
+   const sorted = useMemo(() => [...D.stocks].sort((a, b) => (b.comp ?? 0) - (a.comp ?? 0)), [D.stocks]);
+   const s = D.stocks.find((x) => x.t === ticker) || D.stocks[0];
++  const sectors = useMemo(
++    () => [...new Set(D.stocks.map((stock) => stock.sec).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko")),
++    [D.stocks],
++  );
++  const filteredStocks = useMemo(
++    () => filterStocks(sorted, { query: stockQuery, market: marketFilter, sector: sectorFilter }),
++    [sorted, stockQuery, marketFilter, sectorFilter],
++  );
+ 
+   // PR-1: 이전/다음 종목 (composite 내림차순 기준)
+   const curIdx = sorted.findIndex((x) => x.t === s.t);
+@@ -841,6 +881,23 @@ export function StockDetail({ D, ticker, nav }) {
+ 
+   return (
+     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
++      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10 }}>
++        <input value={stockQuery} onChange={(event) => setStockQuery(event.target.value)} placeholder="티커·종목명 검색"
++          style={{ minWidth: 220, flex: 1, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", fontSize: 12.5, color: C.ink, outline: "none" }} />
++        <select value={marketFilter} onChange={(event) => setMarketFilter(event.target.value)}
++          style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
++          <option value="all">전체 시장</option><option value="KR">한국</option><option value="US">미국</option>
++        </select>
++        <select value={sectorFilter} onChange={(event) => setSectorFilter(event.target.value)}
++          style={{ border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
++          <option value="all">전체 섹터</option>{sectors.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
++        </select>
++        <select value="" onChange={(event) => event.target.value && nav(event.target.value)} disabled={filteredStocks.length === 0}
++          style={{ minWidth: 190, border: `1px solid ${C.line2}`, borderRadius: 7, padding: "8px 10px", background: C.surface, color: C.ink }}>
++          <option value="">{filteredStocks.length ? `${filteredStocks.length}개 결과에서 선택` : "검색 결과 없음"}</option>
++          {filteredStocks.map((stock) => <option key={stock.t} value={stock.t}>{stock.name} · {stock.t}</option>)}
++        </select>
++      </div>
+       {/* 헤더 */}
+       <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "18px 22px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+@@ -974,7 +1031,7 @@ export function StockDetail({ D, ticker, nav }) {
+         <Panel title="팩터 점수" sub={sectorRankText}>
+           <div style={{ padding: "16px 18px", borderBottom: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 18 }}>
+             <div>
+-              <MonoCaps style={{ fontSize: 9 }}>COMPOSITE</MonoCaps>
++              <MonoCaps style={{ fontSize: 9 }}>종합</MonoCaps>
+               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                 <Num size={48} weight={800} color={compColor(s.comp ?? 0)}>{s.comp ?? "—"}</Num>
+                 <span style={{ fontSize: 13, color: C.ink3 }}>/ 100</span>
+@@ -1052,11 +1109,11 @@ export function StockDetail({ D, ticker, nav }) {
+ 
+       <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 16, alignItems: "start" }}>
+         {/* 캐털리스트 + 뉴스탭 링크 */}
+-        <Panel title="캐털리스트 & 뉴스" sub="GEMINI SENTIMENT" right={<SentBadge label={s.sent} score={s.sscore} />}>
++        <Panel title="주요 동인과 뉴스" sub="Gemini 심리 분석" right={<SentBadge label={s.sent} score={s.sscore} />}>
+           <div style={{ padding: "14px 18px" }}>
+             {(s.cat || []).length > 0 ? (
+               <>
+-                <MonoCaps style={{ fontSize: 9 }}>주요 캐털리스트</MonoCaps>
++                <MonoCaps style={{ fontSize: 9 }}>주요 동인</MonoCaps>
+                 <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+                   {(s.cat || []).map((c, i) => (
+                     <div key={i} style={{ display: "flex", gap: 12, alignItems: "center" }}>
+@@ -1067,14 +1124,14 @@ export function StockDetail({ D, ticker, nav }) {
+                 </div>
+               </>
+             ) : (
+-              <span style={{ fontSize: 12.5, color: C.ink3 }}>캐털리스트 정보 없음</span>
++              <span style={{ fontSize: 12.5, color: C.ink3 }}>주요 동인 정보 없음</span>
+             )}
+           </div>
+         </Panel>
+ 
+         <Panel title="점수 히스토리" sub="최근 16주 추이">
+           <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
+-            {[["COMPOSITE", s.compHist, C.acc, s.comp], ["모멘텀", s.momHist, C.ok, s.f.m]].filter(([, data]) => data).map(([lbl, data, col, cur]) => {
++            {[["종합", s.compHist, C.acc, s.comp], ["모멘텀", s.momHist, C.ok, s.f.m]].filter(([, data]) => data).map(([lbl, data, col, cur]) => {
+               const delta = data[data.length - 1] - data[0];
+               return (
+                 <div key={lbl}>
+@@ -1140,7 +1197,8 @@ export function NewsTab({ D, filterTicker, setFilterTicker, nav }) {
+       const neg = s.sent === "부정" ? 5 + (seed % 3) : s.sent === "중립" ? 2 : 1;
+       const neu = 2 + (seed % 3);
+       return { s, pos, neu, neg, total: pos + neu + neg };
+-    }).sort((a, b) => b.total - a.total);
++    });
++    return sortStocksBySentiment(rows);
+   }, [D.stocks]);
+ 
+   const feed = useMemo(() => {
+@@ -1234,7 +1292,7 @@ export function NewsTab({ D, filterTicker, setFilterTicker, nav }) {
+         )}
+       </Panel>
+ 
+-      <Panel title="종목별 감성" sub="최근 7일 · 클릭 시 필터">
++      <Panel title="종목별 심리" sub="최근 7일 · 클릭 시 필터">
+         <div style={{ padding: "6px 0" }}>
+           {sentCounts.map(({ s, pos, neu, neg }) => (
+             <div key={s.t} onClick={() => setFilterTicker(filterTicker === s.t ? null : s.t)} className="row-hover" style={{
+diff --git a/dashboard-web/src/tabsB.jsx b/dashboard-web/src/tabsB.jsx
+index ca80fb9..93ab76d 100644
+--- a/dashboard-web/src/tabsB.jsx
++++ b/dashboard-web/src/tabsB.jsx
+@@ -60,7 +60,7 @@ export function Screener({ D, nav }) {
+       <Panel title="모멘텀 픽" sub="타이밍 시그널" right={<MonoCaps style={{ fontSize: 9.5 }} color={C.acc}>모멘텀 내림차순</MonoCaps>}>
+         <table style={{ width: "100%", borderCollapse: "collapse" }}>
+           <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
+-            {["#", "종목", "모멘텀", "감성", "RSI"].map((h, i) => <th key={i} style={{ padding: "8px 12px", textAlign: i >= 2 ? "right" : "left" }}><MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps></th>)}
++            {["#", "종목", "모멘텀", "심리", "RSI"].map((h, i) => <th key={i} style={{ padding: "8px 12px", textAlign: i >= 2 ? "right" : "left" }}><MonoCaps style={{ fontSize: 9.5 }} color={C.ink3}>{h}</MonoCaps></th>)}
+           </tr></thead>
+           <tbody>
+             {momentum.map((s, i) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
+@@ -114,7 +114,7 @@ export function Screener({ D, nav }) {
+       right={<button onClick={() => setShowAll(!showAll)} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 5 }}>{showAll ? "접기 −" : "펼치기 +"}</button>}>
+       {showAll && <table style={{ width: "100%", borderCollapse: "collapse" }}>
+         <thead><tr style={{ borderBottom: `1px solid ${C.line2}` }}>
+-          <Th label="종목" /><Th k="comp" label="Composite" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="퀄리티" /><Th k="g" label="성장" /><Th k="s" label="감성" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
++          <Th label="종목" /><Th k="comp" label="종합" /><Th k="m" label="모멘텀" /><Th k="v" label="가치" /><Th k="q" label="우량성" /><Th k="g" label="성장" /><Th k="s" label="심리" /><Th k="rsi" label="RSI" /><Th k="fscore" label="F-Score" />
+         </tr></thead>
+         <tbody>
+           {unified.map((s) => <tr key={s.t} onClick={() => nav(s.t)} className="row-hover" style={{ borderBottom: `1px solid ${C.line}`, cursor: "pointer" }}>
+@@ -191,10 +191,10 @@ export function Market({ D }) {
+   const overall = D.market.overall;
+   const w = D.regimes[overall].w;
+   const interp = overall === "bull"
+-    ? "강세 국면 — 모멘텀 비중을 최대(45%)로 끌어올려 추세에 올라타되, 감성·과열 신호로 진입 타이밍을 조절합니다."
++    ? "강세 국면 — 모멘텀 비중을 최대(45%)로 끌어올려 추세에 올라타되, 심리·과열 신호로 진입 타이밍을 조절합니다."
+     : overall === "neutral"
+-      ? "중립 국면 — 모멘텀과 가치·퀄리티를 균형 있게 배분합니다. 추세에 일부 올라타되 펀더멘털이 받쳐주는 종목 위주로 선별합니다."
+-      : "약세 국면 — 퀄리티(45%)·가치(35%)에 무게를 실어 방어합니다. 모멘텀 비중을 최소화하고 재무 건전성 높은 종목으로 포트폴리오를 압축합니다.";
++      ? "중립 국면 — 모멘텀과 가치·우량성을 균형 있게 배분합니다. 추세에 일부 올라타되 펀더멘털이 받쳐주는 종목 위주로 선별합니다."
++      : "약세 국면 — 우량성(45%)·가치(35%)에 무게를 실어 방어합니다. 모멘텀 비중을 최소화하고 재무 건전성 높은 종목으로 포트폴리오를 압축합니다.";
+ 
+   return <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
+@@ -205,7 +205,7 @@ export function Market({ D }) {
+     <Panel title="현재 국면 → 전략 가중치" sub="동적 팩터 모델">
+       <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 0 }}>
+         <div style={{ padding: "20px 22px", borderRight: `1px solid ${C.line}` }}>
+-          <MonoCaps style={{ fontSize: 9.5 }}>종합 레짐</MonoCaps>
++          <MonoCaps style={{ fontSize: 9.5 }}>종합 국면</MonoCaps>
+           <div style={{ margin: "10px 0 14px" }}><RegimeBadge regime={overall} lg regimes={D.regimes} /></div>
+           <p style={{ fontSize: 13, color: C.ink2, lineHeight: 1.65, margin: 0 }}>{interp}</p>
+           <div style={{ marginTop: 16, display: "flex", gap: 14 }}>
+@@ -219,7 +219,7 @@ export function Market({ D }) {
+             {["bull", "neutral", "bear"].map((r) => <div key={r} style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${r === overall ? C.acc : C.line2}`, background: r === overall ? C.accTint : C.surface }}>
+               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><RegimeBadge regime={r} regimes={D.regimes} /></div>
+               <div className="mono" style={{ fontSize: 10.5, color: C.ink2, lineHeight: 1.7 }}>
+-                M {D.regimes[r].w.m} · V {D.regimes[r].w.v} · Q {D.regimes[r].w.q}<br />G {D.regimes[r].w.g} · S {D.regimes[r].w.s}
++                모멘텀 {D.regimes[r].w.m} · 가치 {D.regimes[r].w.v} · 우량성 {D.regimes[r].w.q}<br />성장 {D.regimes[r].w.g} · 심리 {D.regimes[r].w.s}
+               </div>
+             </div>)}
+           </div>
+@@ -269,7 +269,7 @@ export function Research({ D, nav }) {
+             </select>
+             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+               <Num size={18} weight={800} color={compColor(s?.comp ?? 0)}>{s?.comp ?? "—"}</Num>
+-              <span style={{ fontSize: 11, color: C.ink3 }}>COMPOSITE</span>
++              <span style={{ fontSize: 11, color: C.ink3 }}>종합</span>
+               <button onClick={() => nav(s.t)} style={{ ...btnGhost, marginLeft: "auto", fontSize: 11 }}>상세 →</button>
+             </div>
+           </div>
+diff --git a/dashboard-web/src/tabsC.jsx b/dashboard-web/src/tabsC.jsx
+index b884f59..5c9f928 100644
+--- a/dashboard-web/src/tabsC.jsx
++++ b/dashboard-web/src/tabsC.jsx
+@@ -406,7 +406,7 @@ function PortfolioAdvice({ D, hasHoldings }) {
+       }>
+       {!hasHoldings ? (
+         <div style={{ padding: "26px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+-          보유종목을 추가하면 포트폴리오 전략 조언(구성·리스크·레짐 정합성·종합 관찰)을 볼 수 있습니다.
++          보유종목을 추가하면 포트폴리오 전략 조언(구성·리스크·국면 정합성·종합 관찰)을 볼 수 있습니다.
+         </div>
+       ) : !advice || advice.empty ? (
+         <div style={{ padding: "26px 18px", textAlign: "center", color: C.ink3, fontSize: 12.5 }}>
+@@ -443,9 +443,9 @@ function PortfolioAdvice({ D, hasHoldings }) {
+           <AdviceSection label="② 리스크 식별" color={C.bad} open={open.s2} onToggle={() => setOpen((o) => ({ ...o, s2: !o.s2 }))}>
+             <Bullets items={advice.step2?.risks} color={C.bad} />
+           </AdviceSection>
+-          <AdviceSection label="③ 레짐 정합성" color={C.warn} open={open.s3} onToggle={() => setOpen((o) => ({ ...o, s3: !o.s3 }))}>
++          <AdviceSection label="③ 국면 정합성" color={C.warn} open={open.s3} onToggle={() => setOpen((o) => ({ ...o, s3: !o.s3 }))}>
+             <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.6 }}>
+-              <div>현재 레짐: <b style={{ color: C.ink }}>{advice.regime}</b></div>
++              <div>현재 국면: <b style={{ color: C.ink }}>{advice.regime}</b></div>
+               <div style={{ marginTop: 5 }}>{advice.step3?.tilt_note}</div>
+               <div style={{ marginTop: 5 }}>{advice.step3?.alignment_note}</div>
+             </div>
+diff --git a/dashboard-web/src/tabsD.jsx b/dashboard-web/src/tabsD.jsx
+index 03fbc42..2c3d9d1 100644
+--- a/dashboard-web/src/tabsD.jsx
++++ b/dashboard-web/src/tabsD.jsx
+@@ -16,7 +16,7 @@ const STRAT_META = {
+   equal_weight_benchmark: { label: "동일가중 (벤치마크)", color: C.ink2 },
+   buy_hold_benchmark:     { label: "Buy & Hold (벤치마크)", color: C.warn },
+ };
+-const FACTOR_LABEL = { momentum: "모멘텀", value: "가치", quality: "퀄리티", growth: "성장", composite: "종합(Composite)" };
++const FACTOR_LABEL = { momentum: "모멘텀", value: "가치", quality: "우량성", growth: "성장", composite: "종합" };
+ 
+ const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
+ const pctColor = (v) => (v == null ? C.ink3 : v >= 0 ? C.ok : C.bad);
+diff --git a/dashboard-web/src/tabsE.jsx b/dashboard-web/src/tabsE.jsx
+index 60b0f23..3b59d85 100644
+--- a/dashboard-web/src/tabsE.jsx
++++ b/dashboard-web/src/tabsE.jsx
+@@ -13,6 +13,8 @@ export function WatchlistAdmin({ D }) {
+   const [adding, setAdding] = useState(false);
+   const [msg, setMsg] = useState("");
+   const [collecting, setCollecting] = useState([]);  // 수집 중 티커
++  const [sectorDrafts, setSectorDrafts] = useState({});
++  const [sectorSaving, setSectorSaving] = useState("");
+ 
+   const load = useCallback(async () => {
+     try {
+@@ -47,6 +49,24 @@ export function WatchlistAdmin({ D }) {
+ 
+   const [toggleErr, setToggleErr] = useState("");
+ 
++  const saveSector = async (w) => {
++    const sector = sectorDrafts[w.ticker] ?? w.sector ?? "";
++    setToggleErr(""); setSectorSaving(w.ticker);
++    try {
++      const res = await fetch(`${API}/api/watchlist/${w.ticker}`, {
++        method: "PATCH", headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ sector }),
++      });
++      if (!res.ok) throw new Error();
++      await load();
++      setSectorDrafts((prev) => ({ ...prev, [w.ticker]: sector }));
++    } catch (_) {
++      setSectorDrafts((prev) => ({ ...prev, [w.ticker]: w.sector || "" }));
++      setToggleErr(`'${w.ticker}' 섹터 저장 실패 — 데이터 서버 연결을 확인하세요.`);
++    }
++    setSectorSaving("");
++  };
++
+   const toggleActive = async (ticker, next) => {
+     setToggleErr("");
+     // 낙관적 업데이트 — 새로고침 없이 즉시 화면 반영
+@@ -81,8 +101,15 @@ export function WatchlistAdmin({ D }) {
+       <HoldDot on={w.is_holding} />
+       <div style={{ flex: 1, minWidth: 0 }}>
+         <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{w.name}</span>
+-        <span className="mono" style={{ fontSize: 10, color: C.ink3, marginLeft: 7 }}>{w.ticker} · {w.market}{w.sector ? " · " + w.sector : ""}</span>
++        <span className="mono" style={{ fontSize: 10, color: C.ink3, marginLeft: 7 }}>{w.ticker} · {w.market}</span>
+       </div>
++      <input value={sectorDrafts[w.ticker] ?? w.sector ?? ""} placeholder="섹터"
++        onChange={(event) => setSectorDrafts((prev) => ({ ...prev, [w.ticker]: event.target.value }))}
++        style={{ width: 110, border: `1px solid ${C.line2}`, borderRadius: 6, padding: "6px 8px", fontSize: 11.5, color: C.ink }} />
++      <button onClick={() => saveSector(w)} disabled={sectorSaving === w.ticker}
++        style={{ border: `1px solid ${C.line2}`, background: C.surface, color: C.acc, borderRadius: 6, padding: "5px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
++        {sectorSaving === w.ticker ? "저장 중" : "저장"}
++      </button>
+       {collecting.includes(w.ticker) || !w.has_data ? (
+         <span style={{ fontSize: 10.5, fontWeight: 700, color: C.warn, background: C.warnBg, border: `1px solid ${C.warn}33`, borderRadius: 5, padding: "2px 8px" }}>데이터 수집 중</span>
+       ) : (
+diff --git a/dashboard-web/src/ui.jsx b/dashboard-web/src/ui.jsx
+index 0bec125..c013968 100644
+--- a/dashboard-web/src/ui.jsx
++++ b/dashboard-web/src/ui.jsx
+@@ -1,4 +1,6 @@
+ // ATLAS — shared UI primitives + SVG charts
++import { factorLabel, regimeLabel } from './display.js';
++
+ export const C = {
+   ink: "#0F1419", ink2: "#4A5568", ink3: "#94A3B8",
+   line: "#ECEEF1", line2: "#DDE1E6", lineStrong: "#C7CCD3",
+@@ -89,13 +91,12 @@ export function CompositeCell({ value, width = 110 }) {
+ }
+ 
+ export function MiniBars({ f, h = 26 }) {
+-  // PR-5: 약어 → 한글 툴팁
+-  const order = [["m", "M", "모멘텀"], ["v", "V", "가치"], ["q", "Q", "퀄리티"], ["g", "G", "성장"], ["s", "S", "감성"]];
++  const order = [["m", "모", factorLabel("m")], ["v", "가", factorLabel("v")], ["q", "우", factorLabel("q")], ["g", "성", factorLabel("g")], ["s", "심", factorLabel("s")]];
+   return <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: h }}>
+     {order.map(([k, lbl, ko]) => {
+       const v = f[k];
+       const col = v >= 70 ? C.ok : v >= 45 ? C.ink2 : C.ink3;
+-      return <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, cursor: "help" }} title={`${ko}(${lbl}) ${v}`}>
++      return <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, cursor: "help" }} title={`${ko} ${v}`}>
+         <div style={{ width: 7, height: h - 10, background: C.surface2, borderRadius: 2, display: "flex", alignItems: "flex-end", overflow: "hidden" }}>
+           <div style={{ width: "100%", height: (v / 100) * (h - 10), background: col, borderRadius: 2 }}></div>
+         </div>
+@@ -276,12 +277,12 @@ export function RegimeBadge({ regime, lg, regimes }) {
+     fontSize: lg ? 13 : 11.5, fontWeight: 700, letterSpacing: "-0.01em",
+   }}>
+     <span style={{ width: 7, height: 7, borderRadius: 999, background: col }}></span>
+-    {regime === "bull" ? "강세 (Bull)" : regime === "neutral" ? "중립 (Neutral)" : "약세 (Bear)"}
++    {regimeLabel(regime)}
+   </span>;
+ }
+ 
+ export function WeightBars({ w }) {
+-  const items = [["m", "모멘텀", "timing"], ["v", "가치", "mispricing"], ["q", "퀄리티", "mispricing"], ["g", "성장", "mispricing"], ["s", "감성", "timing"]];
++  const items = [["m", factorLabel("m"), "timing"], ["v", factorLabel("v"), "mispricing"], ["q", factorLabel("q"), "mispricing"], ["g", factorLabel("g"), "mispricing"], ["s", factorLabel("s"), "timing"]];
+   const maxW = Math.max(...items.map(([k]) => w[k]));
+   return <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+     {items.map(([k, ko, grp]) => {
+diff --git a/dashboard-web/tests/display.test.js b/dashboard-web/tests/display.test.js
+index 4360218..78dc08f 100644
+--- a/dashboard-web/tests/display.test.js
++++ b/dashboard-web/tests/display.test.js
+@@ -2,7 +2,13 @@ import test from 'node:test';
+ import assert from 'node:assert/strict';
+ import { readFileSync } from 'node:fs';
+ 
+-import { portfolioAssetTotal } from '../src/display.js';
++import {
++  filterStocks,
++  factorLabel,
++  portfolioAssetTotal,
++  regimeLabel,
++  sortStocksBySentiment,
++} from '../src/display.js';
+ 
+ 
+ test('prefers the canonical asset total', () => {
+@@ -26,3 +32,36 @@ test('overview and portfolio both call the shared total helper', () => {
+     assert.match(source, /portfolioAssetTotal\(/);
+   }
+ });
++
++
++test('sorts ticker sentiment descending with a deterministic name tie-break', () => {
++  const out = sortStocksBySentiment([
++    { name: 'B', sscore: 50 },
++    { name: 'A', sscore: 80 },
++    { name: 'C', sscore: 50 },
++  ]);
++  assert.deepEqual(out.map((stock) => stock.name), ['A', 'B', 'C']);
++});
++
++
++test('filters by ticker or name, market, and sector', () => {
++  const stocks = [
++    { t: 'AAPL', name: '애플', mk: 'US', sec: '기술' },
++    { t: '005930.KS', name: '삼성전자', mk: 'KR', sec: '반도체' },
++  ];
++  assert.deepEqual(
++    filterStocks(stocks, { query: '삼성', market: 'KR', sector: '반도체' }).map((stock) => stock.t),
++    ['005930.KS'],
++  );
++  assert.deepEqual(filterStocks(stocks, { query: 'aapl' }).map((stock) => stock.t), ['AAPL']);
++});
++
++
++test('maps internal factor and regime keys to Korean display labels', () => {
++  assert.equal(factorLabel('m'), '모멘텀');
++  assert.equal(factorLabel('v'), '가치');
++  assert.equal(factorLabel('q'), '우량성');
++  assert.equal(factorLabel('g'), '성장');
++  assert.equal(factorLabel('s'), '심리');
++  assert.equal(regimeLabel('bull'), '강세');
++});
+diff --git a/db/schema.sql b/db/schema.sql
+index 8500541..d43493a 100644
+--- a/db/schema.sql
++++ b/db/schema.sql
+@@ -262,6 +262,18 @@ CREATE TABLE IF NOT EXISTS stock_notes (
+     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+ );
+ 
++CREATE TABLE IF NOT EXISTS stock_note_history (
++    id              BIGSERIAL   PRIMARY KEY,
++    ticker          TEXT        NOT NULL,
++    horizon         TEXT        CHECK (horizon IN ('short', 'long', 'watch')),
++    attractiveness  INT         CHECK (attractiveness BETWEEN 1 AND 5),
++    thesis          TEXT        NOT NULL,
++    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
++);
++
++CREATE INDEX IF NOT EXISTS idx_stock_note_history_ticker
++    ON stock_note_history (ticker, created_at DESC, id DESC);
++
+ -- =============================================================
+ -- 포트폴리오 전략 조언 (CoT 결과 캐시) — cache_key = 보유·현금·레짐 시그니처
+ -- 투자 자문 아님 / 관찰·정보. 보유 변경 시 cache_key가 달라져 stale 판정.
+diff --git a/src/export_dashboard_data.py b/src/export_dashboard_data.py
+index 47d4b8a..7bfc6f4 100644
+--- a/src/export_dashboard_data.py
++++ b/src/export_dashboard_data.py
+@@ -476,6 +476,29 @@ def _load_stock_notes(conn) -> dict[str, dict]:
+     return {r["ticker"]: {"horizon": r["horizon"], "attractiveness": r["attractiveness"], "thesis": r["thesis"]} for r in cur.fetchall()}
+ 
+ 
++def _group_note_history(rows: list[dict]) -> dict[str, list[dict]]:
++    grouped: dict[str, list[dict]] = {}
++    for row in rows:
++        ticker = row["ticker"]
++        grouped.setdefault(ticker, []).append({
++            "id": row["id"],
++            "horizon": row["horizon"],
++            "attractiveness": row["attractiveness"],
++            "thesis": row["thesis"],
++            "created_at": str(row["created_at"]),
++        })
++    return grouped
++
++
++def _load_stock_note_history(conn) -> dict[str, list[dict]]:
++    cur = conn.cursor()
++    cur.execute(
++        "SELECT id, ticker, horizon, attractiveness, thesis, created_at "
++        "FROM stock_note_history ORDER BY ticker, created_at DESC, id DESC"
++    )
++    return _group_note_history([dict(row) for row in cur.fetchall()])
++
++
+ # ── PR-4: 리서치 항목 로드 ────────────────────────────────────────────
+ def _load_research_items(conn) -> dict[str, list[dict]]:
+     """research_items → {ticker: [item...]}."""
+@@ -895,6 +918,7 @@ def build_data() -> dict:
+ 
+         # PR-4(이번): stock_notes
+         notes_map = _load_stock_notes(conn)
++        note_history_map = _load_stock_note_history(conn)
+ 
+         # PR-7: 백테스트 / 회고
+         backtest_data = _load_backtest(conn)
+@@ -1084,6 +1108,7 @@ def build_data() -> dict:
+                 "researchItems": research_items_map.get(tk, []),
+                 # PR-4(이번): 투자 판단 메모
+                 "note": notes_map.get(tk),
++                "noteHistory": note_history_map.get(tk, []),
+             })
+ 
+         # PR-3: 액션 신호만 카운트
+diff --git a/src/local_api.py b/src/local_api.py
+index 5c6b320..0ab39d9 100644
+--- a/src/local_api.py
++++ b/src/local_api.py
+@@ -31,7 +31,7 @@ from typing import Optional
+ import uvicorn
+ from fastapi import BackgroundTasks, FastAPI, HTTPException
+ from fastapi.middleware.cors import CORSMiddleware
+-from pydantic import BaseModel, Field
++from pydantic import BaseModel, Field, model_validator
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -98,7 +98,14 @@ class WatchlistIn(BaseModel):
+ 
+ 
+ class WatchlistPatch(BaseModel):
+-    active: bool
++    active: Optional[bool] = None
++    sector: Optional[str] = None
++
++    @model_validator(mode="after")
++    def require_change(self) -> "WatchlistPatch":
++        if not ({"active", "sector"} & self.model_fields_set):
++            raise ValueError("active or sector is required")
++        return self
+ 
+ 
+ class ResearchIn(BaseModel):
+@@ -198,6 +205,7 @@ def _patch_data_json_note(ticker: str, note_data: dict) -> None:
+         for s in data.get("stocks", []):
+             if s["t"] == ticker:
+                 s["note"] = note_data
++                s["noteHistory"] = _fetch_note_history(ticker)
+                 break
+         with open(_DATA_JSON, "w", encoding="utf-8") as f:
+             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+@@ -205,6 +213,26 @@ def _patch_data_json_note(ticker: str, note_data: dict) -> None:
+         logger.warning("data.json note 갱신 실패: %s", exc)
+ 
+ 
++def _fetch_note_history(ticker: str) -> list[dict]:
++    with get_conn() as conn:
++        cursor = conn.cursor()
++        cursor.execute(
++            "SELECT id, horizon, attractiveness, thesis, created_at "
++            "FROM stock_note_history WHERE ticker=%s ORDER BY created_at DESC, id DESC",
++            (ticker,),
++        )
++        return [
++            {
++                "id": row["id"],
++                "horizon": row["horizon"],
++                "attractiveness": row["attractiveness"],
++                "thesis": row["thesis"],
++                "created_at": str(row["created_at"]),
++            }
++            for row in cursor.fetchall()
++        ]
++
++
+ def _fetch_research_items(ticker: str) -> list[dict]:
+     """해당 종목 research_items를 export(_load_research_items)와 동일 형태로 반환."""
+     with get_conn() as conn:
+@@ -356,14 +384,53 @@ def get_note(ticker: str):
+         c.execute("SELECT ticker, horizon, attractiveness, thesis, updated_at FROM stock_notes WHERE ticker=%s", (ticker,))
+         r = c.fetchone()
+     if not r:
+-        return None
+-    return {
++        return {"ticker": ticker, "horizon": None, "attractiveness": None, "thesis": "", "history": _fetch_note_history(ticker)}
++    result = {
+         "ticker":        r["ticker"],
+         "horizon":       r["horizon"],
+         "attractiveness": r["attractiveness"],
+         "thesis":        r["thesis"],
+         "updated_at":    str(r["updated_at"]),
+     }
++    result["history"] = _fetch_note_history(ticker)
++    return result
++
++
++def _append_note(conn, ticker: str, body: NoteIn) -> dict:
++    thesis = (body.thesis or "").strip()
++    if not thesis:
++        raise HTTPException(400, "thesis required")
++    if body.horizon and body.horizon not in ("short", "long", "watch"):
++        raise HTTPException(400, "horizon must be short|long|watch")
++    if body.attractiveness is not None and not (1 <= body.attractiveness <= 5):
++        raise HTTPException(400, "attractiveness must be 1~5")
++    cursor = conn.cursor()
++    try:
++        cursor.execute(
++            "INSERT INTO stock_note_history (ticker, horizon, attractiveness, thesis) VALUES (%s,%s,%s,%s)",
++            (ticker, body.horizon, body.attractiveness, thesis),
++        )
++        cursor.execute(
++            """INSERT INTO stock_notes (ticker, horizon, attractiveness, thesis, updated_at)
++               VALUES (%s,%s,%s,%s,now())
++               ON CONFLICT (ticker) DO UPDATE SET horizon=EXCLUDED.horizon,
++                 attractiveness=EXCLUDED.attractiveness, thesis=EXCLUDED.thesis, updated_at=now()""",
++            (ticker, body.horizon, body.attractiveness, thesis),
++        )
++        conn.commit()
++    except Exception:
++        conn.rollback()
++        raise
++    return {"horizon": body.horizon, "attractiveness": body.attractiveness, "thesis": thesis}
++
++
++@app.post("/api/notes/{ticker}", status_code=201)
++def append_note(ticker: str, body: NoteIn):
++    """새 판단을 이력에 추가하고 최신 3축 판단도 함께 갱신."""
++    with get_conn() as conn:
++        note_data = _append_note(conn, ticker, body)
++    _patch_data_json_note(ticker, note_data)
++    return {"ok": True, "ticker": ticker, "note": note_data, "history": _fetch_note_history(ticker)}
+ 
+ 
+ @app.put("/api/notes/{ticker}", status_code=200)
+@@ -497,6 +564,29 @@ def _backfill_and_export(ticker: str, market: str) -> None:
+     _regenerate_data_json()
+ 
+ 
++def _patch_watchlist_row(conn, ticker: str, body: WatchlistPatch) -> dict:
++    fields = body.model_fields_set
++    sector = (body.sector or "").strip() or None if "sector" in fields else None
++    cursor = conn.cursor()
++    try:
++        if fields == {"active"}:
++            cursor.execute("UPDATE watchlist SET active=%s WHERE ticker=%s", (body.active, ticker))
++        elif fields == {"sector"}:
++            cursor.execute("UPDATE watchlist SET sector=%s WHERE ticker=%s", (sector, ticker))
++        else:
++            cursor.execute(
++                "UPDATE watchlist SET active=%s, sector=%s WHERE ticker=%s",
++                (body.active, sector, ticker),
++            )
++        if cursor.rowcount == 0:
++            raise HTTPException(404, "ticker not found")
++        conn.commit()
++    except Exception:
++        conn.rollback()
++        raise
++    return {"active": body.active if "active" in fields else None, "sector": sector}
++
++
+ @app.get("/api/watchlist")
+ def get_watchlist():
+     """관심종목 전체(active 포함). 각 종목의 가격 데이터 유무(hasData)도 표시."""
+@@ -539,15 +629,11 @@ def add_watchlist(body: WatchlistIn, background: BackgroundTasks):
+ 
+ @app.patch("/api/watchlist/{ticker}", status_code=200)
+ def patch_watchlist(ticker: str, body: WatchlistPatch):
+-    """active 토글(관심 제외=active false, 데이터 보존). 변경 후 data.json 재생성."""
++    """active 또는 sector 변경 후 data.json 재생성."""
+     with get_conn() as conn:
+-        c = conn.cursor()
+-        c.execute("UPDATE watchlist SET active=%s WHERE ticker=%s", (body.active, ticker))
+-        if c.rowcount == 0:
+-            raise HTTPException(404, "ticker not found")
+-        conn.commit()
++        changed = _patch_watchlist_row(conn, ticker, body)
+     _regenerate_data_json()
+-    return {"ok": True, "ticker": ticker, "active": body.active}
++    return {"ok": True, "ticker": ticker, **changed}
+ 
+ 
+ # ── 실행 ──────────────────────────────────────────────────────────
+diff --git a/tests/test_local_api_watchlist.py b/tests/test_local_api_watchlist.py
+new file mode 100644
+index 0000000..786ac79
+--- /dev/null
++++ b/tests/test_local_api_watchlist.py
+@@ -0,0 +1,58 @@
++from __future__ import annotations
++
++import pytest
++from pydantic import ValidationError
++
++from src.local_api import WatchlistPatch
++
++
++class FakeCursor:
++    rowcount = 1
++
++    def __init__(self) -> None:
++        self.calls: list[tuple[str, tuple]] = []
++
++    def execute(self, sql: str, params: tuple) -> None:
++        self.calls.append((" ".join(sql.split()), params))
++
++
++class FakeConnection:
++    def __init__(self) -> None:
++        self.cur = FakeCursor()
++        self.commits = 0
++        self.rollbacks = 0
++
++    def cursor(self) -> FakeCursor:
++        return self.cur
++
++    def commit(self) -> None:
++        self.commits += 1
++
++    def rollback(self) -> None:
++        self.rollbacks += 1
++
++
++def test_watchlist_patch_requires_at_least_one_field() -> None:
++    with pytest.raises(ValidationError):
++        WatchlistPatch()
++
++
++def test_sector_only_patch_normalizes_empty_to_none() -> None:
++    from src.local_api import _patch_watchlist_row
++
++    conn = FakeConnection()
++    result = _patch_watchlist_row(conn, "AAPL", WatchlistPatch(sector="  "))
++
++    assert conn.cur.calls[-1][1] == (None, "AAPL")
++    assert result == {"active": None, "sector": None}
++    assert conn.commits == 1
++
++
++def test_active_and_sector_patch_updates_both() -> None:
++    from src.local_api import _patch_watchlist_row
++
++    conn = FakeConnection()
++    result = _patch_watchlist_row(conn, "AAPL", WatchlistPatch(active=False, sector="기술"))
++
++    assert conn.cur.calls[-1][1] == (False, "기술", "AAPL")
++    assert result == {"active": False, "sector": "기술"}
+diff --git a/tests/test_stock_note_history.py b/tests/test_stock_note_history.py
+new file mode 100644
+index 0000000..e4c7263
+--- /dev/null
++++ b/tests/test_stock_note_history.py
+@@ -0,0 +1,70 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++from fastapi import HTTPException
++
++from src.local_api import NoteIn
++
++
++class FakeCursor:
++    def __init__(self) -> None:
++        self.calls: list[tuple[str, tuple]] = []
++
++    def execute(self, sql: str, params: tuple) -> None:
++        self.calls.append((" ".join(sql.split()), params))
++
++
++class FakeConnection:
++    def __init__(self) -> None:
++        self.cur = FakeCursor()
++        self.commits = 0
++        self.rollbacks = 0
++
++    def cursor(self) -> FakeCursor:
++        return self.cur
++
++    def commit(self) -> None:
++        self.commits += 1
++
++    def rollback(self) -> None:
++        self.rollbacks += 1
++
++
++def test_schema_contains_append_only_note_history() -> None:
++    schema = Path("db/schema.sql").read_text(encoding="utf-8")
++    assert "CREATE TABLE IF NOT EXISTS stock_note_history" in schema
++    assert "created_at" in schema
++
++
++def test_append_note_inserts_history_and_updates_latest_once() -> None:
++    from src.local_api import _append_note
++
++    conn = FakeConnection()
++    _append_note(conn, "AAPL", NoteIn(horizon="long", attractiveness=4, thesis="현금흐름 개선"))
++
++    sql = [call[0] for call in conn.cur.calls]
++    assert "INSERT INTO stock_note_history" in sql[0]
++    assert "INSERT INTO stock_notes" in sql[1]
++    assert conn.commits == 1
++    assert conn.rollbacks == 0
++
++
++def test_append_note_rejects_blank_thesis() -> None:
++    from src.local_api import _append_note
++
++    with pytest.raises(HTTPException) as error:
++        _append_note(FakeConnection(), "AAPL", NoteIn(thesis="  "))
++    assert error.value.status_code == 400
++
++
++def test_export_note_history_is_grouped_newest_first() -> None:
++    from src.export_dashboard_data import _group_note_history
++
++    rows = [
++        {"id": 2, "ticker": "AAPL", "horizon": "long", "attractiveness": 4, "thesis": "둘", "created_at": "2026-06-19T02:00:00"},
++        {"id": 1, "ticker": "AAPL", "horizon": "watch", "attractiveness": 3, "thesis": "하나", "created_at": "2026-06-19T01:00:00"},
++    ]
++    grouped = _group_note_history(rows)
++    assert [item["id"] for item in grouped["AAPL"]] == [2, 1]
+-- 
+2.39.3 (Apple Git-146)
+

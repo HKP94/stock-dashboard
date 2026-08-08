@@ -103,3 +103,27 @@ export const regimeLabel = (key) => REGIME_LABELS[key] ?? key;
 export function isCompleteSignal(signal) {
   return Boolean(signal?.label && signal?.reason && Number.isFinite(Number(signal?.confidence)));
 }
+
+
+// ⑤ Phase 1: 내부 용어를 사용자 언어로 바꾼다.
+// CLAUDE.md — "UI 텍스트에 내부 용어 노출 금지". 실제로 '오늘의 알림'에 `fallback`,
+// `발행주식수 미수집(signal 7)` 같은 개발자 문자열이 그대로 떠 있었다.
+// ★값(DB·export)은 진단용으로 그대로 두고 **표시할 때만** 바꾼다.
+const FLAG_LABELS = [
+  [/^fallback$/i, "선별 기준 미달 — 종합점수는 참고용"],
+  [/사전필터 제외/, "선별 기준 미달"],
+  [/발행주식수 미수집.*signal ?7/i, "재무점수 일부 항목 미수집"],
+  [/^데이터 부족\(PER\)$/, "가치지표 미수집 (PER)"],
+  [/^데이터 부족\(F-Score\)$/, "재무점수 미수집 (F-Score)"],
+  [/^데이터 부족\((.+)\)$/, (m) => `지표 미수집 (${m[1]})`],
+  [/^데이터 없음$/, "수집 대기 중"],
+];
+
+export function userFlagLabel(flag) {
+  if (!flag) return "";
+  for (const [re, label] of FLAG_LABELS) {
+    const m = String(flag).match(re);
+    if (m) return typeof label === "function" ? label(m) : label;
+  }
+  return flag;   // 이미 사용자 언어인 플래그(과열·골든크로스·목표가 근접 등)는 그대로
+}

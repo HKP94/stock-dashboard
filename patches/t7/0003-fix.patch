@@ -1,0 +1,426 @@
+From 08df75f1ec6e08dee5a5ee09609c92123e0994cc Mon Sep 17 00:00:00 2001
+From: KYEONGPIL HEO <kyeongpilheo@KYEONGPILui-MacBookAir.local>
+Date: Fri, 19 Jun 2026 11:54:06 +0900
+Subject: [PATCH 3/5] =?UTF-8?q?fix:=20=EC=98=A4=EB=B2=84=EB=B7=B0=EC=99=80?=
+ =?UTF-8?q?=20=ED=8F=AC=ED=8A=B8=ED=8F=B4=EB=A6=AC=EC=98=A4=20=EC=B4=9D?=
+ =?UTF-8?q?=EC=9E=90=EC=82=B0=20=ED=86=B5=EC=9D=BC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ CLAUDE.md                           |  1 +
+ PRD.md                              |  4 +-
+ dashboard-web/package.json          |  1 +
+ dashboard-web/src/display.js        | 11 ++++
+ dashboard-web/src/tabsA.jsx         |  7 +--
+ dashboard-web/src/tabsC.jsx         |  8 ++-
+ dashboard-web/tests/display.test.js | 28 ++++++++++
+ src/compute_portfolio.py            |  2 +
+ src/local_api.py                    | 51 ++++++++++++------
+ tests/test_compute_portfolio.py     | 81 +++++++++++++++++++++++++++++
+ tests/test_local_api_cors.py        |  2 +-
+ tests/test_local_api_portfolio.py   | 24 +++++++++
+ 12 files changed, 199 insertions(+), 21 deletions(-)
+ create mode 100644 dashboard-web/src/display.js
+ create mode 100644 dashboard-web/tests/display.test.js
+ create mode 100644 tests/test_compute_portfolio.py
+ create mode 100644 tests/test_local_api_portfolio.py
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 821f679..42da5e9 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -92,6 +92,7 @@ GitHub Actions + Google Sheets 기반 기존 주식 분석 파이프라인(`main
+ - **US 뉴스 소스**: yfinance.news + **Yahoo Finance RSS**(`feeds.finance.yahoo.com`, 429 시 무재시도 스킵) + **Finnhub**(`FINNHUB_API_KEY` 있을 때만) + Google News RSS(영문 정식명+티커 복수쿼리). KR은 네이버 HTML + Google News RSS. 전부 url_hash dedupe·종목격리.
+ - **텔레그램은 보류(비활성)**. `TELEGRAM_ENABLED=false`(기본)면 `send_telegram.run_send`가 no-op 성공. 살리려면 PRD §F5 메모 참고(플래그 true + 워크플로 step 주석 해제).
+ - **포트폴리오 총자산 = 보유종목 평가액 + 현금**(둘 다 KRW 환산). 현금=`portfolio_cash`(통화별), `compute_portfolio`가 `cash_total`/`asset_total`을 snapshot payload에 저장.
++- **총자산 표시는 단일 경로**: 오버뷰·포트폴리오 모두 `portfolio_snapshot.payload.asset_total`을 공용 `portfolioAssetTotal`로 표시한다. 구형 export만 `total_eval + cash_total` 폴백을 허용한다.
+ - **관심종목 active 토글**: 제외는 하드딜리트가 아니라 `watchlist.active=false`(데이터 보존). export/quant/recompute는 **active=TRUE만** 대상. 신규 추가는 `backfill_single`로 그 종목만 가격+지표+퀀트 백필(local_api 백그라운드).
+ - **운영 모델 = CI가 DB, 집 PC가 화면**: GitHub Actions(auto_run 06시·news_refresh 18시)가 enrich 포함 **DB를 매일 자동 최신화**한다(Secrets: DB_PASSWORD·DART_API_KEY·GEMINI_API_KEY). **`data.json`은 CI 산출이 gitignore라 버려진다** — 화면 최신화는 집 PC의 `./start_dashboard.sh`(export→local_api+vite→브라우저)가 담당. 대시보드는 외부 접근/상시 서버 불필요(로컬 전용). 스크립트는 포트(8765·5173)가 떠 있으면 재사용하고, export 실패 시 DB접속/데이터부재를 구분해 에러를 낸다.
+ - **데이터 신선도 가드**: export는 `generatedAt`/`generatedAtLabel`을 data.json에 넣고, 헤더가 "데이터 생성: {시각}"을 표시. 생성 후 2일+이면 헤더에 옅은 경고(스크립트 재실행 권장). 사용자가 지금 보는 게 언제 것인지 항상 인지하게.
+diff --git a/PRD.md b/PRD.md
+index 1083517..35df190 100644
+--- a/PRD.md
++++ b/PRD.md
+@@ -5,7 +5,7 @@
+ 
+ | 항목 | 값 |
+ |---|---|
+-| 버전 | v3.0 |
++| 버전 | v3.1 |
+ | 작성일 | 2026-06-08 |
+ | PM | Claude (대화 세션) |
+ | 빌더 | Claude Code |
+@@ -664,6 +664,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+   - PR-4: 시장 KR/US 분리 시황(summary_kr_md/us_md, _MARKET_* 뉴스, Gemini 별도호출), 지수 등락 0.00% 근본수정(payload.changes 거래일 기준)
+ 
+ ### 안정화 (운영 중 발견·수정)
++- [x] **Wave 1 T1 총자산 단일화** (2026-06-19): 오버뷰의 주식 평가액 표시와 포트폴리오의 주식+현금 표시 불일치를 제거. 종목별 최신 가격·동일 최신 환율로 계산한 `portfolio_snapshot.payload.asset_total`을 로컬 API와 두 탭이 공용 함수로 사용하고, 구형 데이터만 평가액+현금 폴백. Python·Node 회귀 테스트 추가.
+ - [x] **Decimal/DB 경계 버그**: psycopg3 NUMERIC→Decimal이 float·np.log·나눗셈에 섞여 indicators/quant 0건 → `db.get_conn` float 로더 + 읽기 경계 방어 캐스팅으로 수정
+ - [x] **저장 경로**: 단일 트랜잭션 1회 커밋 → 단계별 commit/rollback으로 전환(앞 단계 오류·연결 끊김이 저장 무효화하던 문제)
+ - [x] **assemble 타임아웃**: 종목별 루프 쿼리 → 테이블별 bulk 쿼리(연결 점유 분→초)
+@@ -683,6 +684,7 @@ yfinance로 KOSPI(`^KS11`), S&P500(`^GSPC`), VIX(`^VIX`), USD/KRW(`KRW=X`) 약 5
+ 
+ ---
+ *변경 이력:*
++- *v3.1 (2026-06-19) Wave 1 T1: 포트폴리오 총자산을 종목별 최신 평가액+KRW 환산 현금으로 단일화하고 오버뷰·포트폴리오 공용 표시 함수 및 로컬 요약 API 적용 — Codex.*
+ - *v1.0 (2026-06-08) 초안 작성 — PM(Claude).*
+ - *v1.1 (2026-06-09) §F4 실제 구현 내용으로 전면 교체(레짐감지·사전필터·동적가중치·VCM·12-1M), §11 로드맵 Phase 1·2 완료 항목 표시 — PM(Claude).*
+ - *v1.2 (2026-06-11) §F6에 대시보드(Streamlit) 추가, §11에 Decimal 경계 수정·대시보드·recompute·안정화 항목 반영 — PM(Claude).*
+diff --git a/dashboard-web/package.json b/dashboard-web/package.json
+index 3c33d12..1bd866d 100644
+--- a/dashboard-web/package.json
++++ b/dashboard-web/package.json
+@@ -5,6 +5,7 @@
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
++    "test": "node --test tests/*.test.js",
+     "build": "vite build",
+     "lint": "eslint .",
+     "preview": "vite preview"
+diff --git a/dashboard-web/src/display.js b/dashboard-web/src/display.js
+new file mode 100644
+index 0000000..ff70b85
+--- /dev/null
++++ b/dashboard-web/src/display.js
+@@ -0,0 +1,11 @@
++export function portfolioAssetTotal(portfolio) {
++  if (!portfolio) return null;
++  const canonical = Number(portfolio.asset_total);
++  if (portfolio.asset_total !== null && portfolio.asset_total !== undefined && Number.isFinite(canonical)) return canonical;
++  const evaluation = Number(portfolio.total_eval);
++  const cash = Number(portfolio.cash_total ?? 0);
++  return portfolio.total_eval !== null && portfolio.total_eval !== undefined
++    && Number.isFinite(evaluation) && Number.isFinite(cash)
++    ? evaluation + cash
++    : null;
++}
+diff --git a/dashboard-web/src/tabsA.jsx b/dashboard-web/src/tabsA.jsx
+index 42fd03d..cdc8d21 100644
+--- a/dashboard-web/src/tabsA.jsx
++++ b/dashboard-web/src/tabsA.jsx
+@@ -9,6 +9,7 @@ import {
+ import {
+   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+ } from 'recharts';
++import { portfolioAssetTotal } from './display.js';
+ 
+ // PR-2: 큰 금액 포맷 (KR: 조/억, US: B/M)
+ function fmtBig(v, cur) {
+@@ -279,15 +280,15 @@ export function Overview({ D, nav, goNews }) {
+       )}
+ 
+       {/* PR-3: 포트폴리오 요약 카드 — ₩ 환산 전체 숫자 */}
+-      {D.portfolio && D.portfolio.total_eval != null && (
++      {portfolioAssetTotal(D.portfolio) != null && (
+         <div style={{ background: C.surface, border: `1px solid ${C.line2}`, borderRadius: 10, padding: "14px 20px", display: "flex", alignItems: "center", gap: 24 }}>
+           <div>
+             <MonoCaps style={{ fontSize: 9 }}>내 포트폴리오 (₩ 환산)</MonoCaps>
+             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
+               <Num size={22} weight={800} style={{ textDecoration: "none" }}>
+-                ₩{Math.round(D.portfolio.total_eval).toLocaleString("ko-KR")}
++                ₩{Math.round(portfolioAssetTotal(D.portfolio)).toLocaleString("ko-KR")}
+               </Num>
+-              <span style={{ fontSize: 12, color: C.ink3 }}>총평가</span>
++              <span style={{ fontSize: 12, color: C.ink3 }}>총자산</span>
+             </div>
+           </div>
+           <div style={{ width: 1, height: 36, background: C.line2 }}></div>
+diff --git a/dashboard-web/src/tabsC.jsx b/dashboard-web/src/tabsC.jsx
+index 3e16a3a..b884f59 100644
+--- a/dashboard-web/src/tabsC.jsx
++++ b/dashboard-web/src/tabsC.jsx
+@@ -5,6 +5,7 @@
+ import { useState, useEffect, useCallback } from 'react';
+ import { C, MonoCaps, Num, ChangePct, HoldDot, fmtPrice, btnGhost } from './ui.jsx';
+ import { Panel } from './tabsA.jsx';
++import { portfolioAssetTotal } from './display.js';
+ 
+ const API = "http://127.0.0.1:8765";
+ 
+@@ -49,6 +50,7 @@ export function Portfolio({ D, nav }) {
+   const [cashRows, setCashRows] = useState([]);
+   const [cashForm, setCashForm] = useState({ currency: "KRW", amount: "" });
+   const [cashSaving, setCashSaving] = useState(false);
++  const [summary, setSummary] = useState(D.portfolio || null);
+ 
+   const loadPortfolio = useCallback(async () => {
+     try {
+@@ -59,6 +61,10 @@ export function Portfolio({ D, nav }) {
+         const cr = await fetch(`${API}/api/cash`);
+         if (cr.ok) setCashRows(await cr.json());
+       } catch (_) {}
++      try {
++        const sr = await fetch(`${API}/api/portfolio/summary`);
++        if (sr.ok) setSummary(await sr.json());
++      } catch (_) {}
+       setApiOk(true);
+     } catch (e) {
+       setApiOk(false);
+@@ -133,7 +139,7 @@ export function Portfolio({ D, nav }) {
+     const k = toKrw(c.amount || 0, c.currency);
+     if (k != null) cashKrw += k;
+   });
+-  const assetTotalKrw = totalEvalKrw + cashKrw;
++  const assetTotalKrw = portfolioAssetTotal(summary) ?? (totalEvalKrw + cashKrw);
+   const hasAny = (rows && rows.length > 0) || cashKrw > 0;
+ 
+   if (!apiOk) return (
+diff --git a/dashboard-web/tests/display.test.js b/dashboard-web/tests/display.test.js
+new file mode 100644
+index 0000000..4360218
+--- /dev/null
++++ b/dashboard-web/tests/display.test.js
+@@ -0,0 +1,28 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++import { portfolioAssetTotal } from '../src/display.js';
++
++
++test('prefers the canonical asset total', () => {
++  assert.equal(portfolioAssetTotal({ asset_total: 130, total_eval: 100, cash_total: 20 }), 130);
++});
++
++
++test('falls back to evaluation plus cash for older exports', () => {
++  assert.equal(portfolioAssetTotal({ total_eval: 100, cash_total: 20 }), 120);
++});
++
++
++test('returns null when no evaluation total exists', () => {
++  assert.equal(portfolioAssetTotal({ cash_total: 20 }), null);
++});
++
++
++test('overview and portfolio both call the shared total helper', () => {
++  for (const file of ['src/tabsA.jsx', 'src/tabsC.jsx']) {
++    const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
++    assert.match(source, /portfolioAssetTotal\(/);
++  }
++});
+diff --git a/src/compute_portfolio.py b/src/compute_portfolio.py
+index 1be7baa..4c91768 100644
+--- a/src/compute_portfolio.py
++++ b/src/compute_portfolio.py
+@@ -210,6 +210,8 @@ def compute_portfolio(conn: psycopg.Connection, asof: Optional[date] = None) ->
+     return {
+         "n": n_ok,
+         "total_eval_krw": total_eval_krw,
++        "cash_total_krw": cash_total_krw,
++        "asset_total_krw": asset_total_krw,
+         "total_pnl_krw": total_pnl_krw,
+         "total_pnl_pct": total_pnl_pct,
+         "fx_rate": fx,
+diff --git a/src/local_api.py b/src/local_api.py
+index 9206056..5c6b320 100644
+--- a/src/local_api.py
++++ b/src/local_api.py
+@@ -121,6 +121,28 @@ def _latest_price(ticker: str) -> Optional[float]:
+     return float(r["close"]) if r else None
+ 
+ 
++def _as_float(value: object) -> Optional[float]:
++    return float(value) if value is not None else None
++
++
++def _portfolio_snapshot_payload(row: dict) -> dict:
++    payload = row.get("payload") or {}
++    return {
++        "total_eval": _as_float(row.get("total_value")),
++        "total_cost": _as_float(row.get("total_cost")),
++        "total_pnl": _as_float(row.get("total_pnl")),
++        "total_pnl_pct": _as_float(payload.get("pnl_pct")),
++        "n_holdings": payload.get("n_holdings"),
++        "currency": "KRW",
++        "fx_rate": _as_float(payload.get("fx_rate")),
++        "fx_missing": payload.get("fx_missing", False),
++        "by_currency": payload.get("by_currency", {}),
++        "cash_total": _as_float(payload.get("cash_total")) or 0.0,
++        "asset_total": _as_float(payload.get("asset_total")),
++        "cash_by_currency": payload.get("cash_by_currency", {}),
++    }
++
++
+ def _patch_data_json_portfolio() -> None:
+     """data.json의 portfolio 필드만 부분 갱신."""
+     if not _DATA_JSON.exists():
+@@ -134,21 +156,7 @@ def _patch_data_json_portfolio() -> None:
+             c.execute("SELECT total_value, total_cost, total_pnl, payload FROM portfolio_snapshot ORDER BY asof DESC LIMIT 1")
+             r = c.fetchone()
+             if r:
+-                payload = r["payload"] or {}
+-                data["portfolio"] = {
+-                    "total_eval":    float(r["total_value"]) if r["total_value"] else None,
+-                    "total_cost":    float(r["total_cost"])  if r["total_cost"]  else None,
+-                    "total_pnl":     float(r["total_pnl"])   if r["total_pnl"]   else None,
+-                    "total_pnl_pct": payload.get("pnl_pct"),
+-                    "n_holdings":    payload.get("n_holdings"),
+-                    "currency":      "KRW",
+-                    "fx_rate":       payload.get("fx_rate"),
+-                    "fx_missing":    payload.get("fx_missing", False),
+-                    "by_currency":   payload.get("by_currency", {}),
+-                    "cash_total":    payload.get("cash_total", 0),       # PR-2
+-                    "asset_total":   payload.get("asset_total"),         # PR-2
+-                    "cash_by_currency": payload.get("cash_by_currency", {}),
+-                }
++                data["portfolio"] = _portfolio_snapshot_payload(dict(r))
+             # holding 필드도 갱신
+             c.execute("SELECT ticker, qty, avg_price, currency FROM portfolio_holdings WHERE qty > 0")
+             holdings = {row["ticker"]: dict(row) for row in c.fetchall()}
+@@ -260,6 +268,19 @@ def get_portfolio():
+     return result
+ 
+ 
++@app.get("/api/portfolio/summary")
++def get_portfolio_summary():
++    """오버뷰와 포트폴리오가 공유하는 최신 KRW 환산 합계."""
++    with get_conn() as conn:
++        c = conn.cursor()
++        c.execute(
++            "SELECT total_value, total_cost, total_pnl, payload "
++            "FROM portfolio_snapshot ORDER BY asof DESC LIMIT 1"
++        )
++        row = c.fetchone()
++    return _portfolio_snapshot_payload(dict(row)) if row else None
++
++
+ @app.post("/api/portfolio", status_code=201)
+ def upsert_portfolio(body: PortfolioIn):
+     """보유종목 upsert → compute_portfolio → data.json 부분 갱신."""
+diff --git a/tests/test_compute_portfolio.py b/tests/test_compute_portfolio.py
+new file mode 100644
+index 0000000..eb708fa
+--- /dev/null
++++ b/tests/test_compute_portfolio.py
+@@ -0,0 +1,81 @@
++from __future__ import annotations
++
++from datetime import date
++from decimal import Decimal
++
++from src import compute_portfolio as module
++
++
++class FakeCursor:
++    def __init__(self, conn: "FakeConnection") -> None:
++        self.conn = conn
++        self.rows: list[dict] = []
++
++    def __enter__(self) -> "FakeCursor":
++        return self
++
++    def __exit__(self, *args: object) -> None:
++        return None
++
++    def execute(self, sql: str, params: tuple | None = None) -> None:
++        normalized = " ".join(sql.split())
++        self.conn.executed.append((normalized, params))
++        if "FROM portfolio_holdings" in normalized:
++            self.rows = list(self.conn.holdings)
++        elif "FROM portfolio_cash" in normalized:
++            self.rows = list(self.conn.cash)
++        elif "FROM market_daily" in normalized:
++            self.rows = [{"usdkrw": Decimal("1400")}]
++        elif "FROM prices_daily" in normalized:
++            ticker = params[0] if params else ""
++            self.rows = [{"close": self.conn.prices[ticker]}]
++        else:
++            self.rows = []
++
++    def fetchone(self) -> dict | None:
++        return self.rows[0] if self.rows else None
++
++    def fetchall(self) -> list[dict]:
++        return list(self.rows)
++
++
++class FakeConnection:
++    def __init__(self) -> None:
++        self.holdings = [
++            {"ticker": "AAPL", "qty": Decimal("2"), "avg_price": Decimal("100"), "currency": "USD"},
++            {"ticker": "005930.KS", "qty": Decimal("1"), "avg_price": Decimal("70000"), "currency": "KRW"},
++        ]
++        self.cash = [
++            {"currency": "USD", "amount": Decimal("10")},
++            {"currency": "KRW", "amount": Decimal("1000")},
++        ]
++        self.prices = {"AAPL": Decimal("120"), "005930.KS": Decimal("75000")}
++        self.executed: list[tuple[str, tuple | None]] = []
++        self.commit_count = 0
++
++    def cursor(self) -> FakeCursor:
++        return FakeCursor(self)
++
++    def commit(self) -> None:
++        self.commit_count += 1
++
++
++def test_compute_portfolio_returns_canonical_asset_total() -> None:
++    conn = FakeConnection()
++
++    result = module.compute_portfolio(conn, date(2026, 6, 19))
++
++    assert result["total_eval_krw"] == 411_000.0
++    assert result["cash_total_krw"] == 15_000.0
++    assert result["asset_total_krw"] == 426_000.0
++    assert conn.commit_count == 1
++
++
++def test_compute_portfolio_queries_latest_price_per_ticker() -> None:
++    conn = FakeConnection()
++
++    module.compute_portfolio(conn, date(2026, 6, 19))
++
++    price_params = [params for sql, params in conn.executed if "FROM prices_daily" in sql]
++    assert price_params == [("AAPL",), ("005930.KS",)]
++    assert all("ORDER BY date DESC LIMIT 1" in sql for sql, _ in conn.executed if "FROM prices_daily" in sql)
+diff --git a/tests/test_local_api_cors.py b/tests/test_local_api_cors.py
+index 3ec6b97..e80cb25 100644
+--- a/tests/test_local_api_cors.py
++++ b/tests/test_local_api_cors.py
+@@ -26,7 +26,7 @@ def test_cors_allows_patch():
+ 
+ def test_cors_allows_core_methods():
+     methods = set(_cors_options().get("allow_methods", []))
+-    assert {"GET", "POST", "PUT", "DELETE"}.issubset(methods)
++    assert {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}.issubset(methods)
+ 
+ 
+ def test_cors_origin_is_vite_dev():
+diff --git a/tests/test_local_api_portfolio.py b/tests/test_local_api_portfolio.py
+new file mode 100644
+index 0000000..7d1776e
+--- /dev/null
++++ b/tests/test_local_api_portfolio.py
+@@ -0,0 +1,24 @@
++from __future__ import annotations
++
++from decimal import Decimal
++
++
++def test_portfolio_snapshot_payload_converts_numeric_and_includes_cash() -> None:
++    from src.local_api import _portfolio_snapshot_payload
++
++    result = _portfolio_snapshot_payload({
++        "total_value": Decimal("100"),
++        "total_cost": Decimal("80"),
++        "total_pnl": Decimal("20"),
++        "payload": {
++            "pnl_pct": Decimal("25"),
++            "cash_total": Decimal("30"),
++            "asset_total": Decimal("130"),
++            "fx_rate": Decimal("1400"),
++        },
++    })
++
++    assert result["total_eval"] == 100.0
++    assert result["cash_total"] == 30.0
++    assert result["asset_total"] == 130.0
++    assert result["fx_rate"] == 1400.0
+-- 
+2.39.3 (Apple Git-146)
+

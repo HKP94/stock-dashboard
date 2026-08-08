@@ -129,7 +129,7 @@ export default function StyleGuide() {
         </Section>
 
         <Section title="상태색 — 등락과 분리된 축"
-          note="현행은 C.ok/C.bad 두 색이 '등락'과 '심리·신호'를 겸했다(실측: 등락 19줄 + 상태 12줄). 등락을 한국 관례로 바꾸면 '긍정 심리'까지 빨강이 되므로 축을 갈랐다. Phase 1 전환은 각 사용처를 두 축 중 하나로 분류하는 작업이다.">
+          note="예전엔 한 쌍의 색이 '등락'과 '심리·신호'를 겸했다(실측: 등락 19줄 + 상태 12줄, 총 200회). 등락만 한국 관례로 바꾸면 '긍정 심리'까지 빨강이 되므로 축을 갈랐다. Phase 1에서 전 사용처를 두 축 중 하나로 분류 완료.">
           <div style={grid(200)}>{STATE.map(n => <Swatch key={n} name={n} />)}</div>
           <div style={{ display: 'flex', gap: 'var(--sp-2)', marginTop: 'var(--sp-4)', flexWrap: 'wrap' }}>
             {[['긍정', '--state-positive'], ['관망', '--state-warn'], ['부정', '--state-negative'], ['중립', '--state-neutral']].map(([t, v]) => (

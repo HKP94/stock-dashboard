@@ -1,0 +1,159 @@
+From 8c6ff804aba6bd815c4fa489cc5be061c436a894 Mon Sep 17 00:00:00 2001
+From: KYEONGPIL HEO <kyeongpilheo@KYEONGPILui-MacBookAir.local>
+Date: Fri, 19 Jun 2026 11:44:21 +0900
+Subject: [PATCH 1/3] =?UTF-8?q?docs:=20Wave=201=20UX=20=EB=B0=8F=20?=
+ =?UTF-8?q?=EC=8B=A0=ED=98=B8=20=EC=84=A4=EA=B3=84=20=ED=99=95=EC=A0=95?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ .../2026-06-19-wave1-ux-signals-design.md     | 136 ++++++++++++++++++
+ 1 file changed, 136 insertions(+)
+ create mode 100644 docs/superpowers/specs/2026-06-19-wave1-ux-signals-design.md
+
+diff --git a/docs/superpowers/specs/2026-06-19-wave1-ux-signals-design.md b/docs/superpowers/specs/2026-06-19-wave1-ux-signals-design.md
+new file mode 100644
+index 0000000..add81fb
+--- /dev/null
++++ b/docs/superpowers/specs/2026-06-19-wave1-ux-signals-design.md
+@@ -0,0 +1,136 @@
++# ATLAS Wave 1 UX·신호 설계
++
++## 목표
++
++총자산 불일치와 소규모 UX 결함을 수정하고, 사용자 판단 이력과 표시용 매매신호를 추가한다. 시크릿 금지, 자동 주문 실행 금지, 종목별 최신 데이터 조회, 매력도 3축 비합산 원칙은 유지한다.
++
++## 변경 단위
++
++### PR 1 — 총자산 단일화(T1)
++
++오버뷰와 포트폴리오 탭이 동일한 `portfolioAssetTotal(portfolio)` 표시 함수를 사용한다. 총자산은 KRW로 환산된 보유종목 평가액과 현금의 합이며, `asset_total`을 우선 사용하고 구형 데이터에는 `total_eval + cash_total`로 폴백한다.
++
++백엔드에서는 다음 조건을 회귀 테스트로 고정한다.
++
++- 포트폴리오 평가는 종목별 최신 가격을 사용한다.
++- USD 보유종목과 USD 현금은 동일한 최신 USD/KRW 환율을 사용한다.
++- 총자산에는 현금을 포함한다.
++- 매입금액이 아닌 평가금액을 사용한다.
++- 두 탭의 총자산 표시값이 정확히 같다.
++
++### PR 2 — UX·편집·표시 라벨(T2~T6)
++
++#### 뉴스 심리 정렬
++
++뉴스 탭의 종목별 심리 목록은 `sscore` 내림차순을 기본값으로 사용한다. 같은 점수는 종목명 오름차순으로 정렬해 결과를 결정론적으로 유지한다.
++
++#### 종목상세 탐색
++
++종목상세 상단에 티커·종목명 즉시 검색, 시장(KR/US), 섹터 필터를 둔다. 필터 결과에서 종목을 고르면 기존 전역 `ticker`를 갱신해 다른 탭과 선택 상태가 이어진다. 결과가 없으면 사용자 친화적인 빈 상태를 표시한다.
++
++#### 관심종목 섹터 편집
++
++`PATCH /api/watchlist/{ticker}` 요청 모델은 `active`와 `sector`를 모두 선택 필드로 받는다. 둘 중 하나 이상이 있어야 하며, 섹터의 빈 문자열은 `NULL`로 정규화한다. DB 저장 직후 커밋하고 실패 시 롤백한다. CORS 허용 메서드는 `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`를 유지한다.
++
++관심종목 화면은 행 단위 섹터 편집과 저장 상태를 제공한다. 성공 시 서버 값을 다시 읽고, 실패 시 기존 값으로 되돌린 뒤 오류를 표시한다.
++
++#### 내 판단 이력
++
++기존 `stock_notes`는 매력도 3축의 최신 상태로 유지한다. 새 `stock_note_history` 테이블은 판단 제출 건을 누적한다.
++
++```text
++stock_note_history
++- id BIGSERIAL PRIMARY KEY
++- ticker TEXT NOT NULL
++- horizon TEXT NULL
++- attractiveness INT NULL
++- thesis TEXT NOT NULL
++- created_at TIMESTAMPTZ NOT NULL DEFAULT now()
++```
++
++새 판단은 명시적인 제출 동작으로 저장한다. 한 트랜잭션 안에서 이력 행을 추가하고 `stock_notes` 최신 상태를 갱신한 뒤 커밋한다. 실패하면 전체를 롤백한다. API 응답과 export 데이터는 최신 판단과 최신순 이력을 함께 제공한다.
++
++UI는 여러 줄 입력란, `판단 추가` 버튼, 최신순 이력 목록을 제공한다. 빈 판단은 저장하지 않는다. 별점과 투자기간은 각 이력 시점의 값으로 함께 보존하며, 매력도 3축은 최신 값만 사용하므로 세 축을 합산하지 않는다.
++
++#### 표시 라벨 한글화
++
++공용 표시 라벨 맵을 두고 내부 키·DB 컬럼·Python/JavaScript 변수는 변경하지 않는다.
++
++| 내부 표현 | 사용자 표시 |
++|---|---|
++| regime | 국면 |
++| sentiment / Sentiment | 심리 |
++| momentum / M | 모멘텀 |
++| value / V | 가치 |
++| quality / Q | 우량성 |
++| growth / G | 성장 |
++| sentiment factor / S | 심리 |
++| composite | 종합 |
++| bull / neutral / bear | 강세 / 중립 / 약세 |
++
++RSI, PER, PBR, ROE, VIX처럼 일반적인 금융 지표명은 유지한다. 8개 탭을 검색해 위 내부 표현과 M/V/Q/G/S 단독 약자가 사용자에게 노출되지 않도록 검증한다.
++
++### PR 3 — 정책 변경과 표시용 매매신호(T7)
++
++#### 정책
++
++`AGENTS.md`, `CLAUDE.md`, `PRD.md`에서 면책 필수 규칙을 제거한다. UI, 텔레그램 템플릿·출력, Gemini 프롬프트와 런타임 출력에서도 `투자 자문 아님`, `본 정보는 투자자문이 아닙니다`, `원금 손실 가능` 계열 보일러플레이트를 제거한다.
++
++매매신호는 근거와 신뢰도를 동반한 표시 정보로 허용한다. 자동 주문·체결·이체 코드와 외부 주문 API 호출은 계속 금지한다.
++
++#### 신호 계약
++
++종목 일일 레코드의 `quant`에 다음 구조를 추가한다.
++
++```json
++{
++  "signal": {
++    "label": "매수|관망|축소",
++    "percentile": 82.0,
++    "reason": "퀀트 종합 백분위 82위(상위 18%), 강점 팩터는 모멘텀 78점",
++    "confidence": 70
++  }
++}
++```
++
++신호는 활성 종목 중 `composite`가 있는 종목의 횡단면 백분위로 결정한다.
++
++- 백분위 70 이상: `매수`
++- 백분위 30 이하: `축소`
++- 그 사이: `관망`
++
++동점은 같은 백분위를 부여한다. 근거에는 종합 백분위, 상·하위 위치, 가장 높은 팩터와 그 점수를 포함한다. 팩터가 모두 없으면 종합 백분위만 사용한다.
++
++신뢰도는 임시 규칙의 경계 여유를 50~100으로 정규화한다.
++
++- 매수: `50 + (percentile - 70) / 30 * 50`
++- 축소: `50 + (30 - percentile) / 30 * 50`
++- 관망: `50 + (20 - abs(percentile - 50)) / 20 * 50`
++
++결과는 반올림하고 50~100으로 제한한다. `composite`가 없으면 신호 전체를 `null`로 둔다.
++
++신호 계산은 LLM을 호출하지 않는 순수 Python 함수로 구현한다. assemble 계약과 대시보드 export가 같은 함수를 사용해 계약과 UI가 어긋나지 않게 한다.
++
++#### UI
++
++종목별 신호는 라벨만 단독으로 표시하지 않는다. 종목상세와 종목 비교가 가능한 주요 목록에서 라벨, 근거 한 줄, 신뢰도를 한 묶음으로 표시한다. 신호가 없으면 `신호 산정 데이터 없음`으로 표시한다.
++
++## 오류 처리와 데이터 일관성
++
++- 모든 DB NUMERIC은 읽기 경계에서 `float`로 변환한다.
++- 쓰기 엔드포인트는 단계별 커밋과 예외 시 롤백을 적용한다.
++- UI의 낙관적 갱신은 실패 시 원래 상태로 되돌리고 오류를 노출한다.
++- export 쿼리는 종목별 최신 조회만 사용하며 글로벌 `max(asof)`를 새로 도입하지 않는다.
++- T7은 신호 표시만 추가하며 주문 실행 경로를 만들지 않는다.
++
++## 검증
++
++- Python: 포트폴리오 최신 가격·환율·현금 합산, 섹터 PATCH, 판단 이력 누적·최신순, 신호 경계·동점·결측 테스트.
++- React: 순수 헬퍼 테스트를 추가해 총자산 동일값, 심리 정렬, 검색·시장·섹터 필터, 라벨 매핑을 검증한다.
++- API: CORS 프리플라이트에 PATCH·DELETE·OPTIONS가 유지되는지 검증한다.
++- 정적 감사: 8개 탭의 금지 라벨, 면책 보일러플레이트, 사용자 노출 내부 파일명·경로를 검색한다.
++- 전체 검증: Python 전체 테스트, React lint/build, 로컬 API와 대시보드의 핵심 사용자 흐름을 확인한다.
++
++## 문서와 전달
++
++각 PR은 `PRD.md` §11과 변경 이력을 갱신하고 `CLAUDE.md`의 지속 규칙을 동기화한다. PR 본문에는 무엇을 바꿨는지, 왜 바꿨는지, 어떤 명령과 사용자 흐름으로 검증했는지를 기록한다. 각 PR은 독립 브랜치에서 커밋·푸시하고 검토 가능한 PR로 제출한다.
+-- 
+2.39.3 (Apple Git-146)
+

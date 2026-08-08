@@ -27,7 +27,7 @@ function WatchlistRow({ w, sectorValue, sectorSaving, collecting, hasData,
         {collecting.includes(w.ticker) || !hasData ? (
           <span style={{ fontSize: 10.5, fontWeight: 700, color: C.warn, background: C.warnBg, border: `1px solid ${C.warn}33`, borderRadius: 5, padding: "2px 8px" }}>데이터 수집 중</span>
         ) : (
-          <span style={{ fontSize: 10.5, fontWeight: 600, color: C.ok }}>준비됨</span>
+          <span style={{ fontSize: 10.5, fontWeight: 600, color: C.pos }}>준비됨</span>
         )}
         <button onClick={() => onCorrectToggle(w)} title="티커/국가 오타 정정"
           style={{ border: `1px solid ${correctOpen ? C.acc : C.line2}`, background: C.surface, color: correctOpen ? C.acc : C.ink2, borderRadius: 6, padding: "5px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
@@ -37,7 +37,7 @@ function WatchlistRow({ w, sectorValue, sectorSaving, collecting, hasData,
           title={w.active ? "관심 제외(데이터 보존)" : "관심 추가"}
           style={{ width: 44, height: 24, borderRadius: 999, border: "none", cursor: "pointer", position: "relative",
             background: w.active ? C.acc : C.line2, transition: "background .15s" }}>
-          <span style={{ position: "absolute", top: 3, left: w.active ? 23 : 3, width: 18, height: 18, borderRadius: 999, background: "#fff", transition: "left .15s" }}></span>
+          <span style={{ position: "absolute", top: 3, left: w.active ? 23 : 3, width: 18, height: 18, borderRadius: 999, background: C.onAcc, transition: "left .15s" }}></span>
         </button>
       </div>
       {correctOpen && (
@@ -52,7 +52,7 @@ function WatchlistRow({ w, sectorValue, sectorSaving, collecting, hasData,
             <option value="KR">KR</option>
           </select>
           <button onClick={() => onCorrectSave(w)} disabled={correctSaving === w.ticker || !correctDraft.ticker.trim()}
-            style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 600,
+            style={{ background: C.acc, color: C.onAcc, border: "none", borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 600,
               cursor: (correctSaving === w.ticker || !correctDraft.ticker.trim()) ? "default" : "pointer",
               opacity: (correctSaving === w.ticker || !correctDraft.ticker.trim()) ? 0.45 : 1 }}>
             {correctSaving === w.ticker ? "정정 중…" : "정정 저장"}
@@ -242,7 +242,7 @@ export function WatchlistAdmin({ D }) {
             </select>
           </div>
           <button onClick={handleAdd} disabled={adding || !form.ticker.trim() || !form.name.trim()}
-            style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600,
+            style={{ background: C.acc, color: C.onAcc, border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600,
               cursor: (adding || !form.ticker.trim() || !form.name.trim()) ? "default" : "pointer", opacity: (adding || !form.ticker.trim() || !form.name.trim()) ? 0.45 : 1 }}>
             {adding ? "추가 중…" : "추가"}
           </button>

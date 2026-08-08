@@ -23,7 +23,7 @@ function fmtKrwFull(v) {
 function PnlCell({ pnl, pnl_pct, currency }) {
   if (pnl == null) return <span style={{ color: C.ink3 }}>—</span>;
   const pos = pnl >= 0;
-  const col = pos ? C.ok : C.bad;
+  const col = pos ? C.up : C.down;   // 등락축(평가손익)
   return (
     <div>
       <div style={{ fontSize: 14, fontWeight: 700, color: col }}>
@@ -180,11 +180,11 @@ export function Portfolio({ D, nav }) {
             <div>
               <MonoCaps style={{ fontSize: 9 }}>주식 손익 (₩)</MonoCaps>
               <div style={{ marginTop: 4 }}>
-                <Num size={18} weight={800} color={totalPnlKrw >= 0 ? C.ok : C.bad} style={{ textDecoration: "none" }}>
+                <Num size={18} weight={800} color={totalPnlKrw >= 0 ? C.up : C.down} style={{ textDecoration: "none" }}>
                   {totalPnlKrw >= 0 ? "+" : ""}{fmtKrwFull(totalPnlKrw)}
                 </Num>
                 {totalPnlPct != null && (
-                  <span style={{ marginLeft: 8, fontSize: 12.5, fontWeight: 700, color: totalPnlKrw >= 0 ? C.ok : C.bad }}>
+                  <span style={{ marginLeft: 8, fontSize: 12.5, fontWeight: 700, color: totalPnlKrw >= 0 ? C.up : C.down }}>
                     ({totalPnlPct >= 0 ? "+" : ""}{totalPnlPct.toFixed(2)}%)
                   </span>
                 )}
@@ -237,7 +237,7 @@ export function Portfolio({ D, nav }) {
                     <td style={{ padding: "11px 14px" }}><Num size={13} weight={600} style={{ textDecoration: "none" }}>{fmtMoney(r.eval_amount, r.currency)}</Num></td>
                     <td style={{ padding: "11px 14px" }}><PnlCell pnl={r.pnl} pnl_pct={r.pnl_pct} currency={r.currency} /></td>
                     <td style={{ padding: "11px 14px" }}>
-                      <button onClick={() => handleDelete(r.ticker)} style={{ border: `1px solid ${C.line2}`, background: C.surface, color: C.bad, borderRadius: 6, padding: "4px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}>삭제</button>
+                      <button onClick={() => handleDelete(r.ticker)} style={{ border: `1px solid ${C.line2}`, background: C.surface, color: C.neg, borderRadius: 6, padding: "4px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}>삭제</button>
                     </td>
                   </tr>
                 );
@@ -285,7 +285,7 @@ export function Portfolio({ D, nav }) {
           <button
             onClick={handleSave}
             disabled={saving || !formValid}
-            style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600, cursor: (saving || !formValid) ? "default" : "pointer", opacity: (saving || !formValid) ? 0.45 : 1 }}
+            style={{ background: C.acc, color: C.onAcc, border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600, cursor: (saving || !formValid) ? "default" : "pointer", opacity: (saving || !formValid) ? 0.45 : 1 }}
           >
             {saving ? "저장 중…" : "저장"}
           </button>
@@ -327,7 +327,7 @@ export function Portfolio({ D, nav }) {
             <button
               onClick={handleSaveCash}
               disabled={cashSaving || cashForm.amount === ""}
-              style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600, cursor: (cashSaving || cashForm.amount === "") ? "default" : "pointer", opacity: (cashSaving || cashForm.amount === "") ? 0.45 : 1 }}
+              style={{ background: C.acc, color: C.onAcc, border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600, cursor: (cashSaving || cashForm.amount === "") ? "default" : "pointer", opacity: (cashSaving || cashForm.amount === "") ? 0.45 : 1 }}
             >
               {cashSaving ? "저장 중…" : "현금 저장"}
             </button>
@@ -439,8 +439,8 @@ function PortfolioAdvice({ D, hasHoldings }) {
               {cleanDisplayText(advice.step1?.concentration_note)} {cleanDisplayText(advice.step1?.allocation_note)} {cleanDisplayText(advice.step1?.cash_note)}
             </div>
           </AdviceSection>
-          <AdviceSection label="② 리스크 식별" color={C.bad} open={open.s2} onToggle={() => setOpen((o) => ({ ...o, s2: !o.s2 }))}>
-            <Bullets items={advice.step2?.risks} color={C.bad} />
+          <AdviceSection label="② 리스크 식별" color={C.neg} open={open.s2} onToggle={() => setOpen((o) => ({ ...o, s2: !o.s2 }))}>
+            <Bullets items={advice.step2?.risks} color={C.neg} />
           </AdviceSection>
           <AdviceSection label="③ 국면 정합성" color={C.warn} open={open.s3} onToggle={() => setOpen((o) => ({ ...o, s3: !o.s3 }))}>
             <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.6 }}>

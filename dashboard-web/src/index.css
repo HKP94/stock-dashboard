@@ -10,7 +10,6 @@
   --sans: "Pretendard Variable", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
   --serif: "Instrument Serif", Georgia, serif;
-  --surface2: #F4F6F8;
 }
 
 * { box-sizing: border-box; }
@@ -18,8 +17,8 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: #FAFBFC;
-  color: #0F1419;
+  background: var(--bg-app);
+  color: var(--text-1);
   font-family: var(--sans);
   font-size: 15px;
   line-height: 1.55;
@@ -31,21 +30,25 @@ html, body {
 .mono { font-family: var(--mono); }
 .tnum { font-feature-settings: "tnum", "lnum"; font-variant-numeric: tabular-nums; }
 
-::selection { background: rgba(42,91,255,0.12); }
+::selection { background: var(--accent-tint); }
 
 .row-hover { transition: background .13s; }
-.row-hover:hover { background: var(--surface2); }
-.chip-hover:hover { border-color: #2A5BFF !important; color: #2A5BFF !important; }
+.row-hover:hover { background: var(--bg-input); }
+.chip-hover:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
 
 table { font-variant-numeric: tabular-nums; }
 button { font-family: var(--sans); }
 input, textarea, select { font-family: var(--sans); }
 input:focus, textarea:focus, select:focus {
-  border-color: #2A5BFF !important;
-  box-shadow: 0 0 0 3px rgba(42,91,255,0.08);
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: #DDE1E6; border-radius: 999px; border: 2px solid #FAFBFC; }
-::-webkit-scrollbar-thumb:hover { background: #C7CCD3; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-pill); border: 2px solid var(--bg-app); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* Phase 1: 폼 요소도 테마를 따르게(다크에서 흰 입력창이 튀지 않도록) */
+input, textarea, select, button { color: var(--text-1); }
+input, textarea, select { background: var(--bg-input); border-color: var(--border); }

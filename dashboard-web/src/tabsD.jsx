@@ -13,13 +13,13 @@ const SERIES_COLOR = {
   strategy: C.acc,
   "^KS11": C.warn,
   "^GSPC": C.ink2,
-  "^IXIC": C.bad,
+  "^IXIC": C.neg,
 };
 
 const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
-const pctColor = (v) => (v == null ? C.ink3 : v >= 0 ? C.ok : C.bad);
+const pctColor = (v) => (v == null ? C.ink3 : v >= 0 ? C.up : C.down);   // 등락축(수익률·MDD)
 
-const DIR_COLOR = { "강세": C.ok, "중립": C.warn, "약세": C.bad };
+const DIR_COLOR = { "강세": C.pos, "중립": C.warn, "약세": C.neg };
 const AXIS_LABEL = { momentum: "모멘텀", value: "가치", quality: "우량성", growth: "성장", composite: "종합" };
 const REGION_LABEL = { kr: "한국 (KR)", us: "미국 (US)" };
 
@@ -146,7 +146,7 @@ function MetricsTable({ strategies }) {
                 return [
                   <td key={`${s.name}-${h}-cum`} style={{ padding: "11px 10px", textAlign: "right" }}><Num size={12} weight={700} color={pctColor(m.cumReturn)} style={{ textDecoration: "none" }}>{pct(m.cumReturn)}</Num></td>,
                   <td key={`${s.name}-${h}-cagr`} style={{ padding: "11px 10px", textAlign: "right" }}><Num size={12} weight={600} color={pctColor(m.cagr)} style={{ textDecoration: "none" }}>{pct(m.cagr)}</Num></td>,
-                  <td key={`${s.name}-${h}-mdd`} style={{ padding: "11px 10px", textAlign: "right" }}><Num size={12} weight={600} color={C.bad} style={{ textDecoration: "none" }}>{pct(m.mdd)}</Num></td>,
+                  <td key={`${s.name}-${h}-mdd`} style={{ padding: "11px 10px", textAlign: "right" }}><Num size={12} weight={600} color={C.neg} style={{ textDecoration: "none" }}>{pct(m.mdd)}</Num></td>,
                   <td key={`${s.name}-${h}-sharpe`} style={{ padding: "11px 10px", textAlign: "right" }}><Num size={12} weight={600} color={C.ink} style={{ textDecoration: "none" }}>{m.sharpe == null ? "—" : m.sharpe.toFixed(2)}</Num></td>,
                 ];
               })}
@@ -176,8 +176,8 @@ function StrategyExplorer({ title, badge, badgeColor, badgeBg, strategies, warni
       </div>
 
       {warning ? (
-        <div style={{ background: C.badBg, border: `1px solid ${C.bad}33`, borderRadius: 10, padding: "13px 18px", fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
-          <div style={{ fontSize: 12.5, color: C.bad, fontWeight: 700, marginBottom: 4 }}>⚠️ 선택편향 경고</div>
+        <div style={{ background: C.negBg, border: `1px solid ${C.neg}33`, borderRadius: 10, padding: "13px 18px", fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 12.5, color: C.neg, fontWeight: 700, marginBottom: 4 }}>⚠️ 선택편향 경고</div>
           {warning}
         </div>
       ) : null}
@@ -284,8 +284,8 @@ export function Strategy({ D }) {
       <StrategyExplorer
         title="진짜 백테스트"
         badge="실제 백테스트"
-        badgeColor={C.ok}
-        badgeBg={C.okBg}
+        badgeColor={C.pos}
+        badgeBg={C.posBg}
         strategies={trueTrack.strategies || []}
         constituents={bt.constituents}
       />
