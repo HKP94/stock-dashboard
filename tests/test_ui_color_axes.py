@@ -48,7 +48,9 @@ def test_price_axis_uses_korean_convention():
 def test_price_direction_sites_use_price_axis():
     """가격·손익 방향 표시는 상태축(pos/neg)이 아니라 등락축(up/down)을 써야 한다."""
     checks = [
-        ("tabsC.jsx", r"totalPnlKrw >= 0 \? C\.up : C\.down"),
+        # Phase 3에서 수식이 summary 단일 소스로 바뀌며 변수명이 totalPnlKrw → eq.pnl 이 됐다.
+        # 규율(손익 방향은 등락축)은 그대로이므로 이름에 덜 묶이게 패턴만 갱신한다.
+        ("tabsC.jsx", r"pnl >= 0 \? C\.up : C\.down"),
         ("tabsD.jsx", r"pctColor = .*C\.up : C\.down"),
         ("tabsB.jsx", r"ix\.chg > 0 \? C\.up"),
         ("tabsA.jsx", r"total_pnl >= 0 \? C\.up : C\.down"),

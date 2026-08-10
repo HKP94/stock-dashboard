@@ -238,11 +238,76 @@ function fmtLevel(v, s) {
   return s?.cur === "₩" ? `₩${Math.round(v).toLocaleString("ko-KR")}` : `$${Number(v).toFixed(2)}`;
 }
 
+// ============================================================
+// 포트폴리오 — 총자산 수식 (Phase 3, P① 구조 수정)
+// ============================================================
+
+/** 결측을 0으로 흘리지 않는 숫자 변환.
+ *  ★`Number(null) === 0`·`Number("") === 0`이라 `Number.isFinite(Number(v))`만으로는
+ *  결측이 0으로 새어나간다. 이 프로젝트에서 세 번 재발했다 —
+ *  fmtEok가 결측을 '+0.0억'으로 표시, 비중이 결측을 '0%'로 표시(둘 다 "실제 0"과 구분 불가).
+ *  돈·비중 화면에서 0은 "없음"이 아니라 "정말 0"이라는 뜻이므로 반드시 구분한다. */
+function num(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 「주식 + 현금 = 총자산」 세 항을 **한 소스**(/api/portfolio/summary 또는 data.json
+ *  portfolio)에서 함께 읽는다.
+ *
+ *  P① 원인: 종전엔 주식=rows·현금=cashRows·총자산=summary로 소스가 3개였고
+ *  순차 await라 도착 시점이 달랐다. rows만 먼저 반영된 ~1초 동안 화면이
+ *  「주식 4,025,881 + 현금 ₩0 = 총자산 8,784,009」이라는 자기모순을 보여줬다(실측).
+ *  한 객체에서 세 항을 꺼내면 시점에서 갈릴 구조 자체가 없어진다.
+ *
+ *  ★결측이면 null을 돌려준다(0 금지) — 돈 화면에서 ₩0은 "없음"으로 읽히므로,
+ *  호출부는 null일 때 수식을 렌더하지 않아야 한다. */
+export function assetEquation(summary) {
+  if (!summary) return null;
+  const stock = num(summary.total_eval);
+  const cash = num(summary.cash_total);
+  // 총자산은 반드시 공용 헬퍼를 거친다 — "총자산 표시는 단일 경로"(CLAUDE.md).
+  // 여기서 asset_total을 직접 읽으면 오버뷰와 계산 경로가 갈린다.
+  const asset = num(portfolioAssetTotal(summary));
+  if (stock === null || cash === null || asset === null) return null;
+  return {
+    stock, cash, asset,
+    pnl: num(summary.total_pnl),
+    pnlPct: num(summary.total_pnl_pct),
+    fxRate: num(summary.fx_rate),
+    fxMissing: Boolean(summary.fx_missing),
+    nHoldings: num(summary.n_holdings),
+    // 세 항이 한 소스라 어긋날 일이 없지만, 어긋나면 그건 서버 계산 버그다 — 표면화한다.
+    balanced: Math.abs(stock + cash - asset) <= 1,
+  };
+}
+
+/** 보유 비중(%) — 분모는 **총자산(현금 포함)**. 분모가 바뀌면 숫자가 두 배 달라지므로
+ *  표시할 때 분모를 반드시 함께 쓴다. 사실 표시 전용(§2) — 목표 비중·리밸런싱 지시 아님. */
+export function holdingWeightPct(evalKrw, assetTotal) {
+  const e = num(evalKrw), a = num(assetTotal);
+  if (e === null || a === null || a <= 0) return null;
+  return (e / a) * 100;
+}
+
+/** 자산흐름 차트용 — n_holdings가 바뀐 지점(계단의 원인)을 마커로 뽑는다.
+ *  이 시계열은 매매·입출금이 섞인 잔고 추이이지 수익률이 아니다. */
+export function holdingChangePoints(history) {
+  const out = [];
+  for (let i = 1; i < (history || []).length; i++) {
+    const prev = history[i - 1].nHoldings, cur = history[i].nHoldings;
+    if (prev != null && cur != null && prev !== cur) {
+      out.push({ asof: history[i].asof, from: prev, to: cur, asset: history[i].asset });
+    }
+  }
+  return out;
+}
+
 /** 원 단위 순매수 → 억원 표기. 수급은 억 단위로 읽는 게 관례다. */
 export function fmtEok(won) {
-  if (won === null || won === undefined || won === "") return "—";   // Number(null)===0 — 결측이 '0억'으로 새면 안 된다
-  const n = Number(won);
-  if (!Number.isFinite(n)) return "—";
+  const n = num(won);            // 결측이 '0억'으로 새면 안 된다 — num() 주석 참고
+  if (n === null) return "—";
   const eok = n / 1e8;
   return `${eok >= 0 ? "+" : "−"}${Math.abs(eok).toFixed(Math.abs(eok) >= 100 ? 0 : 1)}억`;
 }

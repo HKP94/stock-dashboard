@@ -986,6 +986,46 @@ def _load_portfolio_snapshot(conn) -> dict:
     }
 
 
+# Phase 3: 자산흐름 차트용 시계열 상한. 이력이 수년치가 돼도 data.json이 비대해지지 않게
+# 코드에 상한을 박는다(무제한 SELECT 금지 — PM 조건).
+PORTFOLIO_HISTORY_MAX_ROWS = 400
+
+
+def _load_portfolio_history(conn, limit: int = PORTFOLIO_HISTORY_MAX_ROWS) -> list[dict]:
+    """portfolio_snapshot 시계열 → 자산흐름 차트 (Phase 3).
+
+    ★이 시계열은 **성과 곡선이 아니다**. 매매로 n_holdings가 바뀌면 주식 평가액이
+    계단으로 꺾이고, 현금이 KPH 수동 입력이라 매도대금 반영 시점이 어긋나면 총자산도
+    튄다(실측 07-31: 주식 −4,402,942 / 현금 +5,158,816 → 총자산 +755,874).
+    표시 레이어가 반드시 "수익률 아님"을 명시하고 n_holdings 변화를 마커로 드러낸다.
+    TWR 등 성과지표는 입출금 기록이 없어 정직하게 계산할 수 없으므로 만들지 않는다.
+
+    읽기 전용·계산 신설 0. 최신 `limit`행을 오래된 순으로 돌려준다(차트 x축 순서).
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT asof, total_value, total_cost, total_pnl, payload
+        FROM portfolio_snapshot ORDER BY asof DESC LIMIT %s
+        """,
+        (limit,),
+    )
+    rows = list(cur.fetchall())
+    out: list[dict] = []
+    for r in reversed(rows):                      # DESC로 잘라내고 화면용은 시간순
+        payload = r["payload"] or {}
+        asof = r["asof"]
+        out.append({
+            "asof":       asof.date().isoformat() if hasattr(asof, "date") else str(asof)[:10],
+            "eval":       _f(r["total_value"]),
+            "pnl":        _f(r["total_pnl"]),
+            "cash":       _f(payload.get("cash_total")),
+            "asset":      _f(payload.get("asset_total")),
+            "nHoldings":  payload.get("n_holdings"),
+        })
+    return out
+
+
 # ── PR-7: 백테스트 / 회고 로드 ────────────────────────────────────────
 def _load_backtest(conn) -> dict:
     """backtest_results → separated true/retrospective strategy payload."""
@@ -2262,6 +2302,7 @@ def build_data() -> dict:
         # PR-2: 보유종목 평가
         holdings_map = _load_portfolio(conn)
         portfolio_snapshot = _load_portfolio_snapshot(conn)
+        portfolio_history = _load_portfolio_history(conn)   # Phase 3: 자산흐름 차트(읽기 전용)
         # 포트폴리오 전략 조언(CoT) 최근 캐시 — 없으면 None. 호출은 하지 않음(읽기만).
         try:
             from src.portfolio_advice import load_latest as _load_advice
@@ -2658,6 +2699,7 @@ def build_data() -> dict:
             "news":       news_feed,
             "curatedFeed": curated_feed,         # PR-2: 중요 뉴스(영향도순) — 뉴스 탭 정렬옵션
             "portfolio":  portfolio_snapshot,   # PR-2: 전체 포트폴리오 요약
+            "portfolioHistory": portfolio_history,  # Phase 3: 자산흐름 시계열(성과 곡선 아님)
             "portfolioAdvice": portfolio_advice,  # 전략 조언(CoT) 최근 캐시(+stale)
             "backtest":   backtest_data,        # PR-7: 백테스트 + 회고
             "strategyGuidance": strategy_guidance,
